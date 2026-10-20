@@ -1,0 +1,735 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="color-scheme" content="dark">
+  <title>TradeJournal — дневник трейдера</title>
+  <meta name="description" content="Личный дневник трейдера: сделки, статистика, календарь прибыли, аналитика и риск-менеджмент.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230b1118'/%3E%3Cpath d='M6 22l6-6 4 3 9-10' stroke='%2334e3ac' stroke-width='2.6' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M19 9h6v6' stroke='%2334e3ac' stroke-width='2.6' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar" id="sidebar">
+    <div class="brand">
+      <div class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 17.5 8.5 12l4 3L21 6"/><path d="M15 6h6v6"/>
+        </svg>
+      </div>
+      <div class="brand-text">
+        <strong>Trade<span>Journal</span></strong>
+        <small>Дневник трейдера</small>
+      </div>
+    </div>
+
+    <nav class="nav" id="mainNav" aria-label="Основная навигация">
+      <p class="nav-label">Рабочий стол</p>
+      <button class="nav-item active" data-view="dashboard">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9" rx="1.6"/><rect x="14" y="3" width="7" height="5" rx="1.6"/><rect x="14" y="12" width="7" height="9" rx="1.6"/><rect x="3" y="16" width="7" height="5" rx="1.6"/></svg>
+        <span>Обзор</span>
+      </button>
+      <button class="nav-item" data-view="trades">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6h13M8 12h13M8 18h13"/><path d="M3.5 6h.01M3.5 12h.01M3.5 18h.01"/></svg>
+        <span>Сделки</span>
+        <span class="nav-badge" id="navTradesCount">0</span>
+      </button>
+      <button class="nav-item" data-view="calendar">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4.5" width="18" height="16.5" rx="2"/><path d="M16 2.5v4M8 2.5v4M3 10h18"/></svg>
+        <span>Календарь</span>
+      </button>
+      <button class="nav-item" data-view="analytics">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7.5 15.5l4-4.2 3 2.8 5-6.1"/></svg>
+        <span>Аналитика</span>
+      </button>
+      <p class="nav-label">Практика</p>
+      <button class="nav-item" data-view="journal">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/><path d="M8 7h8M8 11h5"/></svg>
+        <span>Журнал</span>
+      </button>
+      <button class="nav-item" data-view="calculator">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="2.5" width="16" height="19" rx="2"/><path d="M8 6.5h8"/><path d="M8 11h.01M12 11h.01M16 11h.01M8 14.5h.01M12 14.5h.01M16 14.5h.01M8 18h.01M12 18h.01M16 18h.01"/></svg>
+        <span>Калькулятор</span>
+      </button>
+    </nav>
+
+    <div class="sidebar-bottom">
+      <div class="balance-card">
+        <span class="balance-label">Баланс счёта</span>
+        <strong id="sidebarBalance">$10 000.00</strong>
+        <div class="balance-meta">
+          <span class="balance-delta" id="sidebarDelta">0,0%</span>
+          <span id="sidebarToday">сегодня $0.00</span>
+        </div>
+      </div>
+      <button class="nav-item" data-view="settings" id="settingsNav">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        <span>Настройки</span>
+      </button>
+    </div>
+  </aside>
+
+  <div class="sidebar-overlay" id="sidebarOverlay"></div>
+
+  <main class="main">
+    <header class="topbar">
+      <button class="icon-btn menu-btn" id="menuBtn" aria-label="Открыть меню">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+      </button>
+      <div class="page-heading">
+        <h1 id="pageTitle">Обзор</h1>
+        <p id="pageSubtitle">Статистика счёта и последние результаты</p>
+      </div>
+      <div class="topbar-actions">
+        <label class="select-wrap period-wrap" id="periodWrap">
+          <select id="periodSelect" aria-label="Период статистики">
+            <option value="all">Всё время</option>
+            <option value="30">30 дней</option>
+            <option value="90">90 дней</option>
+            <option value="month">Этот месяц</option>
+            <option value="year">Этот год</option>
+          </select>
+        </label>
+        <button class="avatar" id="avatarBtn" title="Профиль и настройки">
+          <span id="avatarInitials">T</span>
+        </button>
+        <button class="btn btn-primary" id="newTradeBtn">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+          <span>Новая сделка</span>
+        </button>
+      </div>
+    </header>
+
+    <div class="content" id="content">
+
+      <!-- ================= DASHBOARD ================= -->
+      <section class="view active" data-panel="dashboard">
+        <div class="welcome" id="welcomeBanner" hidden>
+          <div class="welcome-icon" aria-hidden="true">✨</div>
+          <div class="welcome-text">
+            <strong>Это демо-режим</strong>
+            <p>В журнале уже есть примеры сделок и записей. Осмотритесь, а затем начните вести собственный дневник — данные хранятся только в вашем браузере.</p>
+          </div>
+          <div class="welcome-actions">
+            <button class="btn btn-ghost btn-sm" id="keepDemoBtn">Оставить демо</button>
+            <button class="btn btn-primary btn-sm" id="clearDemoBtn">Начать с нуля</button>
+          </div>
+        </div>
+
+        <div class="kpi-grid" id="kpiGrid"></div>
+
+        <div class="grid">
+          <article class="card span-8">
+            <header class="card-head">
+              <div class="card-title">
+                <h2>Кривая капитала</h2>
+                <p>Динамика баланса по закрытым сделкам</p>
+              </div>
+              <span class="chip" id="equityChip">—</span>
+            </header>
+            <div class="chart-wrap chart-260">
+              <canvas id="equityChart"></canvas>
+              <div class="chart-tooltip" id="equityTip"></div>
+            </div>
+          </article>
+
+          <article class="card span-4">
+            <header class="card-head">
+              <div class="card-title">
+                <h2>Результат</h2>
+                <p>Соотношение закрытых сделок</p>
+              </div>
+            </header>
+            <div class="donut-box">
+              <canvas id="donutChart"></canvas>
+              <div class="donut-center">
+                <strong id="donutRate">0%</strong>
+                <span>винрейт</span>
+              </div>
+            </div>
+            <div class="legend" id="donutLegend"></div>
+          </article>
+
+          <article class="card span-8">
+            <header class="card-head">
+              <div class="card-title">
+                <h2>P&L по дням</h2>
+                <p>Результат последних торговых дней</p>
+              </div>
+              <span class="chip" id="dailyChip">—</span>
+            </header>
+            <div class="chart-wrap chart-220">
+              <canvas id="dailyChart"></canvas>
+              <div class="chart-tooltip" id="dailyTip"></div>
+            </div>
+          </article>
+
+          <article class="card span-4">
+            <header class="card-head">
+              <div class="card-title">
+                <h2>Дисциплина дня</h2>
+                <p id="todayDate">Сегодня</p>
+              </div>
+            </header>
+            <div id="disciplineBody"></div>
+          </article>
+
+          <article class="card span-8">
+            <header class="card-head">
+              <div class="card-title">
+                <h2>Последние сделки</h2>
+                <p>Свежие записи журнала</p>
+              </div>
+              <button class="link-btn" data-goto="trades">Все сделки →</button>
+            </header>
+            <div class="mini-list" id="recentTrades"></div>
+          </article>
+
+          <article class="card span-4">
+            <header class="card-head">
+              <div class="card-title">
+                <h2>Топ инструментов</h2>
+                <p>По чистому P&L за период</p>
+              </div>
+            </header>
+            <div class="hbar-list" id="topSymbols"></div>
+          </article>
+        </div>
+      </section>
+
+      <!-- ================= TRADES ================= -->
+      <section class="view" data-panel="trades">
+        <div class="card trades-card">
+          <div class="trades-toolbar">
+            <label class="search">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.2-3.2"/></svg>
+              <input type="search" id="tradeSearch" placeholder="Поиск: символ, сетап, тег…" autocomplete="off">
+            </label>
+            <label class="select-wrap"><select id="filterSide" aria-label="Направление"><option value="all">Все стороны</option><option value="long">Long</option><option value="short">Short</option></select></label>
+            <label class="select-wrap"><select id="filterResult" aria-label="Результат"><option value="all">Все результаты</option><option value="win">Прибыльные</option><option value="loss">Убыточные</option><option value="be">Безубыток</option><option value="open">Открытые</option></select></label>
+            <label class="select-wrap"><select id="filterSetup" aria-label="Сетап"><option value="all">Все сетапы</option></select></label>
+            <button class="btn btn-ghost btn-sm" id="clearFilters">Сбросить</button>
+            <div class="toolbar-spacer"></div>
+            <span class="muted" id="tradesCountLabel"></span>
+            <button class="btn btn-ghost btn-sm" id="exportCsvBtn" title="Скачать таблицу в CSV">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M4 20h16"/></svg>
+              CSV
+            </button>
+          </div>
+
+          <div class="table-wrap">
+            <table class="data-table" id="tradesTable">
+              <thead>
+                <tr>
+                  <th data-sort="date">Дата</th>
+                  <th data-sort="symbol">Инструмент</th>
+                  <th class="num" data-sort="entry">Вход</th>
+                  <th class="num" data-sort="exit">Выход</th>
+                  <th class="num" data-sort="pnl">P&L</th>
+                  <th class="num" data-sort="r">R</th>
+                  <th data-sort="setup">Сетап</th>
+                  <th>Эмоция</th>
+                  <th class="th-end"></th>
+                </tr>
+              </thead>
+              <tbody id="tradesTbody"></tbody>
+            </table>
+            <div class="empty-state" id="tradesEmpty" hidden>
+              <div class="empty-icon">📈</div>
+              <h3 id="emptyTitle">Пока нет сделок</h3>
+              <p id="emptyText">Добавьте первую сделку — статистика, графики и аналитика появятся автоматически.</p>
+              <div class="empty-actions">
+                <button class="btn btn-primary" id="emptyNewTrade">Добавить сделку</button>
+                <button class="btn btn-ghost" id="emptyDemo">Загрузить демо-данные</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="table-footer" id="tradesFooter"></div>
+        </div>
+      </section>
+
+      <!-- ================= CALENDAR ================= -->
+      <section class="view" data-panel="calendar">
+        <div class="calendar-bar card">
+          <div class="cal-title-row">
+            <button class="icon-btn cal-arrow" id="calPrev" aria-label="Предыдущий месяц">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>
+            </button>
+            <h2 id="calTitle">Октябрь 2026</h2>
+            <button class="icon-btn cal-arrow" id="calNext" aria-label="Следующий месяц">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
+            </button>
+            <button class="btn btn-ghost btn-sm" id="calToday">Сегодня</button>
+          </div>
+          <div class="cal-summary" id="calSummary"></div>
+        </div>
+
+        <div class="calendar-layout">
+          <article class="card cal-card">
+            <div class="cal-weekdays" id="calWeekdays"></div>
+            <div class="cal-grid" id="calGrid"></div>
+            <div class="cal-scale">
+              <span>убыток</span>
+              <div class="cal-scale-bar" aria-hidden="true"></div>
+              <span>прибыль</span>
+            </div>
+          </article>
+          <aside class="card day-card" id="dayCard"></aside>
+        </div>
+      </section>
+
+      <!-- ================= ANALYTICS ================= -->
+      <section class="view" data-panel="analytics">
+        <div class="insights" id="insights"></div>
+        <div class="kpi-grid kpi-small" id="analyticsKpis"></div>
+
+        <div class="grid">
+          <article class="card span-8">
+            <header class="card-head">
+              <div class="card-title">
+                <h2>Распределение R</h2>
+                <p>Сколько сделок попадает в каждый диапазон риска</p>
+              </div>
+            </header>
+            <div class="histogram" id="rHistogram"></div>
+          </article>
+
+          <article class="card span-4">
+            <header class="card-head">
+              <div class="card-title">
+                <h2>Направление</h2>
+                <p>Long против Short</p>
+              </div>
+            </header>
+            <div id="sideBreakdown"></div>
+          </article>
+
+          <article class="card span-4">
+            <header class="card-head"><div class="card-title"><h2>Инструменты</h2><p>Чистый P&L</p></div></header>
+            <div class="hbar-list" id="symbolBreakdown"></div>
+          </article>
+
+          <article class="card span-4">
+            <header class="card-head"><div class="card-title"><h2>Сетапы</h2><p>Чистый P&L</p></div></header>
+            <div class="hbar-list" id="setupBreakdown"></div>
+          </article>
+
+          <article class="card span-4">
+            <header class="card-head"><div class="card-title"><h2>Дни недели</h2><p>Чистый P&L</p></div></header>
+            <div class="hbar-list" id="weekdayBreakdown"></div>
+          </article>
+
+          <article class="card span-4">
+            <header class="card-head"><div class="card-title"><h2>Эмоции</h2><p>Чистый P&L</p></div></header>
+            <div class="hbar-list" id="emotionBreakdown"></div>
+          </article>
+
+          <article class="card span-4">
+            <header class="card-head"><div class="card-title"><h2>Время входа</h2><p>По торговым сессиям</p></div></header>
+            <div class="hbar-list" id="sessionBreakdown"></div>
+          </article>
+
+          <article class="card span-4">
+            <header class="card-head"><div class="card-title"><h2>Качество сделок</h2><p>Дополнительные метрики</p></div></header>
+            <div id="qualityBlock"></div>
+          </article>
+
+          <article class="card span-12">
+            <header class="card-head">
+              <div class="card-title"><h2>Эффективность сетапов</h2><p>Подробная статистика по каждому сетапу</p></div>
+            </header>
+            <div class="table-wrap">
+              <table class="data-table setup-table">
+                <thead><tr><th>Сетап</th><th class="num">Сделок</th><th class="num">Винрейт</th><th class="num">Средний R</th><th class="num">P&L</th><th class="num">Профит-фактор</th></tr></thead>
+                <tbody id="setupTableBody"></tbody>
+              </table>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <!-- ================= JOURNAL ================= -->
+      <section class="view" data-panel="journal">
+        <div class="journal-header card">
+          <div>
+            <h2>Дневник наблюдений</h2>
+            <p>Фиксируйте мысли, ошибки и выводы. Регулярность важнее объёма.</p>
+          </div>
+          <button class="btn btn-primary" id="newNoteBtn">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+            <span>Новая запись</span>
+          </button>
+        </div>
+
+        <div class="journal-stats" id="journalStats"></div>
+        <div class="journal-list" id="journalList"></div>
+      </section>
+
+      <!-- ================= CALCULATOR ================= -->
+      <section class="view" data-panel="calculator">
+        <div class="grid">
+          <article class="card span-7">
+            <header class="card-head">
+              <div class="card-title">
+                <h2>Калькулятор позиции</h2>
+                <p>Посчитайте размер позиции до входа в рынок</p>
+              </div>
+              <button class="btn btn-ghost btn-sm" id="calcReset">Сбросить</button>
+            </header>
+            <form class="calc-form" id="calcForm" autocomplete="off">
+              <label class="field">
+                <span>Баланс счёта</span>
+                <input type="number" id="calcBalance" step="any" min="0" inputmode="decimal">
+              </label>
+              <label class="field">
+                <span>Риск на сделку, %</span>
+                <input type="number" id="calcRisk" step="0.1" min="0" max="100" inputmode="decimal">
+              </label>
+              <label class="field">
+                <span>Цена входа</span>
+                <input type="number" id="calcEntry" step="any" inputmode="decimal" placeholder="1.08500">
+              </label>
+              <label class="field">
+                <span>Стоп-лосс</span>
+                <input type="number" id="calcStop" step="any" inputmode="decimal" placeholder="1.08150">
+              </label>
+              <label class="field">
+                <span>Тейк-профит <em>необязательно</em></span>
+                <input type="number" id="calcTarget" step="any" inputmode="decimal" placeholder="1.09200">
+              </label>
+              <label class="field">
+                <span>Стоимость 1 пункта</span>
+                <input type="number" id="calcPointValue" step="any" min="0" inputmode="decimal" value="1">
+                <small class="field-hint">Для акций обычно 1, для фьючерсов — стоимость тика</small>
+              </label>
+            </form>
+          </article>
+
+          <article class="card span-5">
+            <header class="card-head"><div class="card-title"><h2>Расчёт</h2><p>Параметры вашей сделки</p></div></header>
+            <div class="calc-result">
+              <span class="calc-result-label">Размер позиции</span>
+              <strong class="calc-result-value" id="calcQtyValue">—</strong>
+              <span class="calc-result-sub" id="calcNotional">Номинал: —</span>
+            </div>
+            <div class="calc-grid">
+              <div><span>Риск</span><strong id="calcRiskAmount">—</strong></div>
+              <div><span>Убыток по стопу</span><strong class="neg" id="calcLoss">—</strong></div>
+              <div><span>Прибыль по тейку</span><strong class="pos" id="calcProfit">—</strong></div>
+              <div><span>Соотношение</span><strong id="calcRR">—</strong></div>
+            </div>
+            <div class="rr-visual" id="rrVisual" hidden>
+              <div class="rr-risk" id="rrRisk"><span>Риск</span></div>
+              <div class="rr-reward" id="rrReward"><span>Прибыль</span></div>
+            </div>
+            <p class="calc-hint" id="calcHint">Заполните вход и стоп, чтобы увидеть размер позиции.</p>
+            <p class="form-error" id="calcError" hidden></p>
+          </article>
+
+          <article class="card span-12">
+            <header class="card-head"><div class="card-title"><h2>Правила риска</h2><p>Простая рамка, которая защищает счёт</p></div></header>
+            <div class="rules-grid">
+              <div class="rule-tile"><span class="rule-num">1%</span><h3>Один риск на сделку</h3><p>Теряйте не больше 1–2% счёта на одну сделку. Серия из десяти убытков не должна быть фатальной.</p></div>
+              <div class="rule-tile"><span class="rule-num">3R</span><h3>Думайте в R</h3><p>Прибыль измеряется в единицах риска. Сделка с потенциалом 1:3 окупает три убытка.</p></div>
+              <div class="rule-tile"><span class="rule-num">3</span><h3>Дневной стоп</h3><p>После лимита убытка или количества сделок закройте терминал. Лучшая сделка — та, что не сделана в тильте.</p></div>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <!-- ================= SETTINGS ================= -->
+      <section class="view" data-panel="settings">
+        <div class="grid">
+          <article class="card span-7">
+            <header class="card-head">
+              <div class="card-title"><h2>Профиль и риск-менеджмент</h2><p>Эти значения используются в статистике и калькуляторе</p></div>
+            </header>
+            <form id="settingsForm" class="form-grid settings-form" autocomplete="off">
+              <label class="field">
+                <span>Имя трейдера</span>
+                <input type="text" id="settingName" maxlength="40" placeholder="Например, Артём">
+              </label>
+              <label class="field">
+                <span>Валюта</span>
+                <select id="settingCurrency">
+                  <option value="$">$ — доллар</option>
+                  <option value="€">€ — евро</option>
+                  <option value="₽">₽ — рубль</option>
+                  <option value="£">£ — фунт</option>
+                  <option value="¥">¥ — йена</option>
+                  <option value="₸">₸ — тенге</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Стартовый баланс</span>
+                <input type="number" id="settingBalance" step="any" min="0" inputmode="decimal">
+              </label>
+              <label class="field">
+                <span>Риск на сделку, %</span>
+                <input type="number" id="settingRisk" step="0.1" min="0" max="100" inputmode="decimal">
+              </label>
+              <label class="field">
+                <span>Дневной лимит убытка, %</span>
+                <input type="number" id="settingDailyLimit" step="0.1" min="0" max="100" inputmode="decimal">
+              </label>
+              <label class="field">
+                <span>Максимум сделок в день</span>
+                <input type="number" id="settingMaxTrades" step="1" min="0" max="100" inputmode="numeric">
+              </label>
+              <div class="form-actions span-2">
+                <button type="submit" class="btn btn-primary">Сохранить настройки</button>
+                <span class="muted" id="settingsSavedAt"></span>
+              </div>
+            </form>
+          </article>
+
+          <article class="card span-5">
+            <header class="card-head">
+              <div class="card-title"><h2>Данные журнала</h2><p>Резервная копия и перенос между браузерами</p></div>
+            </header>
+            <div class="data-actions">
+              <button class="btn btn-ghost" id="exportJsonBtn">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V3"/><path d="m7 8 5-5 5 5"/><path d="M4 20h16"/></svg>
+                Экспорт JSON
+              </button>
+              <button class="btn btn-ghost" id="exportCsvBtn2">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M4 20h16"/></svg>
+                Экспорт CSV
+              </button>
+              <button class="btn btn-ghost" id="importJsonBtn">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 6 5-5 5 5"/><path d="M4 20h16"/></svg>
+                Импорт JSON
+              </button>
+              <input type="file" id="importFile" accept=".json,application/json" hidden>
+            </div>
+
+            <div class="storage-block">
+              <div class="storage-head"><span>Использование хранилища</span><strong id="storageText">—</strong></div>
+              <div class="storage-meter"><i id="storageBar"></i></div>
+              <p class="muted small">Все данные лежат локально в localStorage браузера. Очистка кэша удалит журнал — держите резервную копию.</p>
+            </div>
+
+            <div class="danger-zone">
+              <span class="danger-label">Опасная зона</span>
+              <button class="btn btn-ghost" id="loadDemoBtn">Перезагрузить демо-данные</button>
+              <button class="btn btn-danger-ghost" id="resetAllBtn">Очистить все данные</button>
+            </div>
+          </article>
+
+          <article class="card span-12 about-card">
+            <div class="about-logo" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17.5 8.5 12l4 3L21 6"/><path d="M15 6h6v6"/></svg>
+            </div>
+            <div>
+              <h3>TradeJournal <span class="version">v1.0</span></h3>
+              <p>Локальный дневник трейдера без серверов и регистрации. Сделки, календарь P&L, аналитика по сетапам и эмоциям, журнал наблюдений и калькулятор риска — всё в одном файле проекта. <span class="kbd">N</span> — новая сделка, <span class="kbd">Esc</span> — закрыть окно.</p>
+            </div>
+          </article>
+        </div>
+      </section>
+
+    </div>
+  </main>
+</div>
+
+<!-- ================= TRADE MODAL ================= -->
+<div class="modal" id="tradeModal" hidden>
+  <div class="modal-backdrop" data-close="tradeModal"></div>
+  <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="tradeModalTitle">
+    <header class="modal-head">
+      <div>
+        <h2 id="tradeModalTitle">Новая сделка</h2>
+        <p>Заполните данные — статистика обновится автоматически</p>
+      </div>
+      <button type="button" class="icon-btn" data-close="tradeModal" aria-label="Закрыть">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>
+      </button>
+    </header>
+    <form id="tradeForm" novalidate>
+      <div class="modal-body">
+        <div class="form-grid">
+          <label class="field">
+            <span>Дата *</span>
+            <input type="date" id="tradeDate" required>
+          </label>
+          <label class="field">
+            <span>Время</span>
+            <input type="time" id="tradeTime">
+          </label>
+          <label class="field">
+            <span>Инструмент *</span>
+            <input type="text" id="tradeSymbol" list="symbolList" placeholder="EURUSD" autocomplete="off" required>
+            <datalist id="symbolList"></datalist>
+          </label>
+          <div class="field">
+            <span>Направление</span>
+            <div class="segmented" id="sideSegmented">
+              <button type="button" data-side="long" class="active">Long</button>
+              <button type="button" data-side="short">Short</button>
+            </div>
+            <input type="hidden" id="tradeSide" value="long">
+          </div>
+          <label class="field">
+            <span>Цена входа *</span>
+            <input type="number" id="tradeEntry" step="any" inputmode="decimal" placeholder="0.00000" required>
+          </label>
+          <label class="field">
+            <span>Цена выхода</span>
+            <input type="number" id="tradeExit" step="any" inputmode="decimal" placeholder="Пусто — сделка открыта">
+          </label>
+          <label class="field">
+            <span>Стоп-лосс</span>
+            <input type="number" id="tradeStop" step="any" inputmode="decimal" placeholder="Для расчёта R">
+          </label>
+          <label class="field">
+            <span>Тейк-профит</span>
+            <input type="number" id="tradeTarget" step="any" inputmode="decimal" placeholder="Для планового R:R">
+          </label>
+          <label class="field">
+            <span>Количество *</span>
+            <input type="number" id="tradeQty" step="any" min="0" inputmode="decimal" placeholder="100" required>
+          </label>
+          <label class="field">
+            <span>Комиссия</span>
+            <input type="number" id="tradeFees" step="any" min="0" inputmode="decimal" placeholder="0">
+          </label>
+          <label class="field">
+            <span>Сетап</span>
+            <input type="text" id="tradeSetup" list="setupList" placeholder="Пробой уровня" autocomplete="off">
+            <datalist id="setupList"></datalist>
+          </label>
+          <label class="field">
+            <span>Эмоция</span>
+            <select id="tradeEmotion"></select>
+          </label>
+          <div class="field span-2">
+            <span>Дисциплина</span>
+            <div class="stars" id="disciplineStars" role="group" aria-label="Оценка дисциплины">
+              <button type="button" class="star" data-star="1" title="1 — хаос">★</button>
+              <button type="button" class="star" data-star="2" title="2 — слабо">★</button>
+              <button type="button" class="star" data-star="3" title="3 — нормально">★</button>
+              <button type="button" class="star" data-star="4" title="4 — хорошо">★</button>
+              <button type="button" class="star" data-star="5" title="5 — идеально">★</button>
+              <span class="stars-label" id="disciplineLabel">не оценено</span>
+            </div>
+            <input type="hidden" id="tradeDiscipline" value="0">
+          </div>
+          <label class="field span-2">
+            <span>Теги</span>
+            <input type="text" id="tradeTags" placeholder="лондон, тренд, план" autocomplete="off">
+          </label>
+          <label class="field span-2">
+            <span>Заметка</span>
+            <textarea id="tradeNotes" rows="3" placeholder="Что сработало? Что можно было сделать лучше?"></textarea>
+          </label>
+        </div>
+
+        <div class="shot-field">
+          <div class="shot-head">
+            <span>Скриншот графика</span>
+            <label class="btn btn-ghost btn-sm" for="tradeShot">Загрузить</label>
+            <input type="file" id="tradeShot" accept="image/*" hidden>
+            <button type="button" class="link-btn hidden" id="removeShot">Удалить</button>
+          </div>
+          <div class="shot-preview" id="shotPreview"></div>
+        </div>
+
+        <div class="calc-strip">
+          <div class="cs-item"><span>P&L</span><strong id="previewPnl">—</strong></div>
+          <div class="cs-item"><span>Результат в R</span><strong id="previewR">—</strong></div>
+          <div class="cs-item"><span>Плановый R:R</span><strong id="previewRR">—</strong></div>
+        </div>
+        <p class="form-error" id="tradeError" hidden></p>
+      </div>
+      <footer class="modal-foot">
+        <button type="button" class="btn btn-danger-ghost hidden" id="deleteTradeBtn">Удалить</button>
+        <div class="spacer"></div>
+        <button type="button" class="btn btn-ghost" data-close="tradeModal">Отмена</button>
+        <button type="submit" class="btn btn-primary" id="saveTradeBtn">Сохранить</button>
+      </footer>
+    </form>
+  </div>
+</div>
+
+<!-- ================= NOTE MODAL ================= -->
+<div class="modal" id="noteModal" hidden>
+  <div class="modal-backdrop" data-close="noteModal"></div>
+  <div class="modal-panel modal-600" role="dialog" aria-modal="true" aria-labelledby="noteModalTitle">
+    <header class="modal-head">
+      <div>
+        <h2 id="noteModalTitle">Новая запись</h2>
+        <p>Опишите день, эмоции и выводы</p>
+      </div>
+      <button type="button" class="icon-btn" data-close="noteModal" aria-label="Закрыть">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>
+      </button>
+    </header>
+    <form id="noteForm" novalidate>
+      <div class="modal-body">
+        <div class="form-grid">
+          <label class="field">
+            <span>Дата *</span>
+            <input type="date" id="noteDate" required>
+          </label>
+          <label class="field">
+            <span>Настроение</span>
+            <div class="mood-picker" id="moodPicker"></div>
+            <input type="hidden" id="noteMood" value="neutral">
+          </label>
+          <label class="field span-2">
+            <span>Заголовок</span>
+            <input type="text" id="noteTitle" maxlength="90" placeholder="Например: держал план, но срезал прибыль">
+          </label>
+          <label class="field span-2">
+            <span>Запись *</span>
+            <textarea id="noteText" rows="7" placeholder="Что произошло? Что почувствовали? Что сделаете иначе в следующий раз?" required></textarea>
+          </label>
+          <label class="field span-2">
+            <span>Теги</span>
+            <input type="text" id="noteTags" placeholder="ошибки, риск, психология" autocomplete="off">
+          </label>
+        </div>
+        <p class="form-error" id="noteError" hidden></p>
+      </div>
+      <footer class="modal-foot">
+        <button type="button" class="btn btn-danger-ghost hidden" id="deleteNoteBtn">Удалить</button>
+        <div class="spacer"></div>
+        <button type="button" class="btn btn-ghost" data-close="noteModal">Отмена</button>
+        <button type="submit" class="btn btn-primary" id="saveNoteBtn">Сохранить</button>
+      </footer>
+    </form>
+  </div>
+</div>
+
+<!-- ================= CONFIRM MODAL ================= -->
+<div class="modal" id="confirmModal" hidden>
+  <div class="modal-backdrop" data-close="confirmModal"></div>
+  <div class="modal-panel modal-sm" role="alertdialog" aria-modal="true" aria-labelledby="confirmTitle">
+    <header class="modal-head">
+      <div><h2 id="confirmTitle">Подтвердите действие</h2></div>
+      <button type="button" class="icon-btn" data-close="confirmModal" aria-label="Закрыть">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>
+      </button>
+    </header>
+    <div class="modal-body">
+      <p class="confirm-text" id="confirmText"></p>
+    </div>
+    <footer class="modal-foot">
+      <div class="spacer"></div>
+      <button type="button" class="btn btn-ghost" id="confirmCancel">Отмена</button>
+      <button type="button" class="btn btn-danger" id="confirmOk">Удалить</button>
+    </footer>
+  </div>
+</div>
+
+<div class="toasts" id="toasts" aria-live="polite"></div>
+
+<script src="js/utils.js"></script>
+<script src="js/store.js"></script>
+<script src="js/sample.js"></script>
+<script src="js/charts.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
