@@ -2,31 +2,34 @@
 
 Локальный дневник трейдера в двух вариантах:
 
-- **Windows-приложение** — обычный установленный `.exe` с текущим интерфейсом и файловым хранением данных.
+- **Windows-приложение** — лёгкий установщик на Tauri 2 и Rust с текущим интерфейсом и файловым хранением данных.
 - **Веб-версия** — статическая страница без сервера, которую можно открыть в браузере или опубликовать на GitHub Pages.
+
+[Скачать последнюю версию](https://github.com/FamaSALO/tradejournal/releases/latest)
 
 ![Обзор TradeJournal](assets/preview.png)
 
 ## Технологии и архитектура
 
-Приложение не использует UI-фреймворки и сборщик: интерфейс написан на HTML5, CSS3 и чистом JavaScript. Одни и те же файлы `index.html`, `css/` и `js/` работают как обычная веб-страница и загружаются внутри Windows-приложения.
+Приложение не использует UI-фреймворки и сборщик интерфейса: один и тот же интерфейс написан на HTML5, CSS3 и чистом JavaScript. Файлы `index.html`, `css/` и `js/` работают как обычная веб-страница и загружаются внутри Windows-приложения.
 
-- **Windows-оболочка** — Electron 45 на Node.js. Главный процесс `electron/main.js` управляет окном, файловым хранилищем и резервными копиями.
-- **Связь интерфейса с системой** — IPC через `contextBridge`. Renderer не имеет доступа к Node.js и может вызывать только разрешённые методы `window.tradeJournalDesktop`.
-- **Защита окна** — `contextIsolation: true`, `nodeIntegration: false`, `sandbox: true`, Content Security Policy и запрет переходов внутри окна. Внешние ссылки открываются в системном браузере.
+- **Windows-оболочка** — Tauri 2 и Rust. Окно, файловое хранилище, резервные копии и системные диалоги находятся в `src-tauri/src/lib.rs`.
+- **WebView2** — приложение использует системный компонент Microsoft Edge WebView2, а не встроенный браузер. Поэтому установщик и папка установки остаются компактными.
+- **Связь интерфейса с системой** — Tauri `invoke` через `js/desktop-bridge.js`. Интерфейс не имеет доступа к Node.js и может вызывать только команды, зарегистрированные в Rust.
+- **Безопасность** — Content Security Policy, разрешения Tauri в `src-tauri/capabilities/default.json`, отсутствие загрузки удалённого контента, атомарная запись файлов.
 - **Графики** — собственная отрисовка на Canvas 2D без сторонних библиотек.
 - **Хранение** — JSON-файлы в `%APPDATA%\TradeJournal`: атомарная запись, `journal.previous.json`, автоматические и ручные резервные копии. В веб-версии используется `localStorage`.
-- **Сборка** — electron-builder 26.15.3, NSIS-установщик и portable-сборка для Windows x64. Для сборки нужны Node.js 22.12+ и npm.
+- **Сборка** — Tauri CLI 2.12, Rust stable и NSIS-установщик для Windows x64. CI-сборка выполняется в GitHub Actions на `windows-latest`.
 - **Публикация** — GitHub Pages для веб-версии и GitHub Releases для Windows-сборок.
 
 ```text
-index.html + css/ + js/          интерфейс (renderer)
+index.html + css/ + js/          интерфейс
             │
             │ window.tradeJournalDesktop
             ▼
-electron/preload.js              contextBridge + IPC
+js/desktop-bridge.js             Tauri invoke + очередь сохранений
             ▼
-electron/main.js                 Electron + Node.js + fs
+src-tauri/src/lib.rs             Rust: окно, файлы, копии, диалоги
             ▼
 %APPDATA%\TradeJournal\          journal.json, backups/
 ```
@@ -49,14 +52,17 @@ electron/main.js                 Electron + Node.js + fs
 
 ### Установка
 
-В папке `release/` после сборки появляются два файла:
+В GitHub Release публикуются:
 
-- `TradeJournal-Setup-1.0.0.exe` — установщик с ярлыками и возможностью выбрать папку установки.
-- `TradeJournal-Portable-1.0.0.exe` — портативная версия, которая запускается без установки.
+- `TradeJournal_2.0.0_x64-setup.exe` — установщик NSIS для текущего пользователя, без прав администратора.
+- `TradeJournal-portable-2.0.0-x64.zip` — портативная версия, которая запускается без установки.
+- `SHA256SUMS.txt` — контрольные суммы файлов.
 
-Установщик не подписан сертификатом. При первом запуске Windows SmartScreen может показать предупреждение: выберите **Подробнее → Выполнить всё равно**. Это ожидаемо для локальной сборки без платной подписи кода.
+Установщик не подписан сертификатом. При первом запуске Windows SmartScreen может показать предупреждение: выберите **Подробнее → Выполнить всё равно**. Это ожидаемо для сборки без платной подписи кода.
 
-При первом запуске приложение показывает демо-журнал. Данные из веб-версии можно перенести через **Настройки → Экспорт JSON** в браузере, а затем **Настройки → Импорт JSON** в Windows-приложении.
+Если WebView2 отсутствует в системе, установщик скачает и установит его. Портативной версии нужен уже установленный WebView2 — на Windows 10 и 11 он обычно присутствует вместе с Microsoft Edge.
+
+При первом запуске приложение показывает демо-журнал. Данные из веб-версии или старой Electron-версии можно перенести через **Настройки → Экспорт JSON**, а затем **Настройки → Импорт JSON**. Если файл `%APPDATA%\TradeJournal\journal.json` уже существует, приложение продолжит работать с ним без преобразований.
 
 ### Где хранятся данные
 
@@ -66,8 +72,7 @@ Windows-приложение не использует `localStorage` брауз
 %APPDATA%\TradeJournal\
 ├── journal.json            основной файл журнала
 ├── journal.previous.json   предыдущая версия файла
-├── backups\                резервные копии
-└── session\                служебный кэш Chromium
+└── backups\                резервные копии
 ```
 
 - Путь и кнопки **Открыть папку данных**, **Создать резервную копию** и **Восстановить** находятся в **Настройки → Приложение и локальные файлы**.
@@ -75,36 +80,40 @@ Windows-приложение не использует `localStorage` брауз
 - Хранятся последние 20 автоматических и ручных копий. Перед восстановлением текущее состояние также сохраняется в отдельную копию.
 - Удаление приложения не удаляет журнал и резервные копии. Данные остаются в `%APPDATA%\TradeJournal`.
 - Папку `TradeJournal` можно скопировать целиком на другой компьютер, чтобы перенести журнал вместе с историей копий.
+- Служебный кэш WebView2 хранится отдельно в `%LOCALAPPDATA%\com.famasalo.tradejournal` и не содержит данных журнала.
 
 ### Сборка
 
-Требуется Node.js 22.12+ и npm. В Windows используйте `npm.cmd`, если PowerShell блокирует `npm.ps1`.
+Требуется:
+
+- Node.js 22.12+ и npm;
+- Rust stable с MSVC-тулчейном (`rustup default stable-x86_64-pc-windows-msvc`);
+- Visual Studio Build Tools с компонентом **Desktop development with C++** и Windows SDK;
+- Microsoft Edge WebView2 Runtime для запуска.
+
+В Windows используйте `npm.cmd`, если PowerShell блокирует `npm.ps1`.
 
 ```powershell
 npm.cmd install
-npm.cmd start
+npm.cmd run dev
 ```
 
-Проверка приложения без ручного открытия окна:
+Сборка установщика:
 
 ```powershell
-npm.cmd run smoke
+npm.cmd run build
 ```
 
-Сборка установщика и портативной версии:
+Готовый установщик и исполняемый файл появляются здесь:
 
-```powershell
-npm.cmd run dist
+```text
+src-tauri\target\release\TradeJournal.exe
+src-tauri\target\release\bundle\nsis\TradeJournal_2.0.0_x64-setup.exe
 ```
 
-Готовые файлы появляются в `release/`. Если загрузка Electron или инструментов сборки блокируется сетью, можно использовать зеркало:
+Портативную сборку можно получить, упаковав `TradeJournal.exe` в ZIP. Именно это делает CI-сборка в `.github/workflows/tauri.yml`.
 
-```powershell
-$env:ELECTRON_MIRROR="https://npmmirror.com/mirrors/electron/"
-$env:ELECTRON_BUILDER_BINARIES_MIRROR="https://npmmirror.com/mirrors/electron-builder-binaries/"
-node node_modules/electron/install.js
-npm.cmd run dist
-```
+Если локально не установлены MSVC Build Tools, используйте готовую CI-сборку: отправьте изменения в ветку `tauri-v2`, дождитесь завершения workflow **Build Tauri app** и скачайте артефакт.
 
 ## Веб-версия
 
@@ -126,18 +135,23 @@ npm.cmd run dist
 ## Структура
 
 ```text
-index.html              Разметка приложения и модальные окна
-css/styles.css          Стили и адаптивная вёрстка
-js/utils.js             Форматирование, справочники, работа с датами
-js/store.js             Хранилище, модель данных и расчёт метрик
-js/sample.js            Генератор демо-данных
-js/charts.js            Графики на canvas
-js/app.js               Логика интерфейса и маршрутизация
-electron/main.js        Главный процесс Electron и файловое хранилище
-electron/preload.js     Безопасный IPC-мост для renderer
-electron-builder.yml    Конфигурация установщика и portable-сборки
-build/icon.ico          Иконка приложения
-assets/preview.png      Превью для README
+index.html                  Разметка приложения и модальные окна
+css/styles.css              Стили и адаптивная вёрстка
+js/utils.js                 Форматирование, справочники, работа с датами
+js/store.js                 Хранилище, модель данных и расчёт метрик
+js/desktop-bridge.js        Мост между интерфейсом и Tauri
+js/sample.js                Генератор демо-данных
+js/charts.js                Графики на canvas
+js/app.js                   Логика интерфейса и маршрутизация
+src-tauri/src/lib.rs        Rust-команды, файловое хранилище и копии
+src-tauri/src/main.rs       Точка входа Windows-приложения
+src-tauri/tauri.conf.json   Окно, CSP, NSIS и WebView2
+src-tauri/Cargo.toml        Rust-зависимости и оптимизация релиза
+src-tauri/capabilities/     Разрешения Tauri
+scripts/build-web.mjs       Подготовка dist/ для Tauri
+.github/workflows/tauri.yml CI-сборка Windows-артефактов
+build/icon.ico              Иконка приложения
+assets/preview.png          Превью для README
 ```
 
 ## Публикация веб-версии на GitHub Pages
@@ -147,7 +161,7 @@ assets/preview.png      Превью для README
 3. В разделе **Build and deployment** выберите **Deploy from a branch**, ветку `main` и папку `/ (root)`.
 4. Сохраните настройки — сайт будет доступен по адресу `https://<username>.github.io/<repository>/`.
 
-Файлы Windows-сборки в `release/` не публикуются на GitHub Pages и не коммитятся в репозиторий.
+Файлы Windows-сборки не публикуются на GitHub Pages и не коммитятся в репозиторий.
 
 ## Лицензия
 

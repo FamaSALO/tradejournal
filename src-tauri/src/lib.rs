@@ -494,7 +494,11 @@ fn open_data_folder(state: State<'_, AppState>) -> Result<OkResult, String> {
 }
 
 #[tauri::command]
-fn save_download(filename: String, content: String) -> Result<SaveDownloadResult, String> {
+fn save_download(
+    app: tauri::AppHandle,
+    filename: String,
+    content: String,
+) -> Result<SaveDownloadResult, String> {
     let file_name = Path::new(&filename)
         .file_name()
         .and_then(|name| name.to_str())
@@ -507,6 +511,9 @@ fn save_download(filename: String, content: String) -> Result<SaveDownloadResult
         .to_ascii_lowercase();
 
     let mut dialog = rfd::FileDialog::new().set_file_name(file_name);
+    if let Ok(download_dir) = app.path().download_dir() {
+        dialog = dialog.set_directory(download_dir);
+    }
     if extension == "json" {
         dialog = dialog.add_filter("JSON", &["json"]);
     } else if extension == "csv" {
