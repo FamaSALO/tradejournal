@@ -908,6 +908,54 @@ svg { display: block; }
 .danger-zone { display: flex; flex-direction: column; gap: 7px; margin-top: 18px; padding-top: 15px; border-top: 1px solid rgba(255, 107, 129, 0.14); }
 .danger-label { font-size: 9px; font-weight: 600; letter-spacing: 0.11em; text-transform: uppercase; color: rgba(255, 107, 129, 0.7); }
 .danger-zone .btn { justify-content: flex-start; }
+.desktop-data-card { border-color: rgba(49, 227, 170, 0.18); }
+.desktop-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 9px;
+  border: 1px solid rgba(49, 227, 170, 0.22);
+  border-radius: 20px;
+  background: rgba(49, 227, 170, 0.07);
+  color: #8df5d4;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.desktop-data-grid { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 18px; align-items: start; }
+.desktop-label { display: block; font-size: 10px; font-weight: 500; color: var(--muted); }
+.desktop-path-wrap code {
+  display: block;
+  margin-top: 7px;
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #0a1017;
+  color: #c4d1e1;
+  font-size: 10.5px;
+  white-space: nowrap;
+  overflow-x: auto;
+}
+.desktop-path-wrap p { margin-top: 8px; line-height: 1.55; }
+.desktop-path-wrap p b { color: #b9c6d7; font-weight: 600; }
+.desktop-actions { display: flex; flex-wrap: wrap; gap: 7px; justify-content: flex-end; }
+.desktop-transfer-note { margin-top: 12px; }
+.desktop-backups { margin-top: 18px; padding-top: 15px; border-top: 1px solid var(--border); }
+.desktop-backups .storage-head { align-items: center; }
+.backups-list { display: grid; gap: 6px; margin-top: 10px; }
+.backup-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.017);
+}
+.backup-meta { flex: 1; min-width: 0; }
+.backup-meta strong { display: block; font-size: 10.5px; font-weight: 600; color: #cfdae8; }
+.backup-meta span { display: block; margin-top: 2px; font-size: 9.5px; color: var(--muted-2); }
+.backup-row .btn { flex-shrink: 0; }
 .about-card { display: flex; align-items: flex-start; gap: 15px; padding: 18px 20px; }
 .about-logo { width: 42px; height: 42px; flex-shrink: 0; display: grid; place-items: center; border-radius: 11px; background: var(--green-soft); color: var(--green); }
 .about-logo svg { width: 24px; height: 24px; }
@@ -1274,6 +1322,9 @@ svg { display: block; }
   .hist-label b { font-size: 9px; }
   .cal-title-row h2 { min-width: 120px; font-size: 14px; }
   .cal-summary .chip { font-size: 9px; padding: 3px 7px; }
+  .desktop-data-grid { grid-template-columns: 1fr; }
+  .desktop-actions { justify-content: flex-start; }
+  .backup-row { flex-wrap: wrap; }
 }
 @media (max-width: 420px) {
   .topbar-actions .btn-primary span { display: none; }

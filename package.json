@@ -1,0 +1,21 @@
+{
+  "name": "tradejournal",
+  "version": "1.0.0",
+  "private": true,
+  "description": "TradeJournal — локальный дневник трейдера для Windows",
+  "author": "FamaSALO",
+  "license": "MIT",
+  "main": "electron/main.js",
+  "scripts": {
+    "start": "electron .",
+    "smoke": "electron . --smoke-test",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder --win nsis portable",
+    "dist:nsis": "electron-builder --win nsis",
+    "dist:portable": "electron-builder --win portable"
+  },
+  "devDependencies": {
+    "electron": "45.0.0",
+    "electron-builder": "26.15.3"
+  }
+}

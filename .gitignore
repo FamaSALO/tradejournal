@@ -1,3 +1,9 @@
+node_modules/
+release/
+dist/
+.electron/
+*.log
+
 Thumbs.db
 desktop.ini
 .DS_Store

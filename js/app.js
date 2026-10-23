@@ -3,6 +3,7 @@
   const NS = window.TJ;
   const U = NS.utils;
   const store = NS.store;
+  const desktop = window.tradeJournalDesktop || null;
 
   const $ = function (selector, root) { return (root || document).querySelector(selector); };
   const $$ = function (selector, root) { return Array.prototype.slice.call((root || document).querySelectorAll(selector)); };
@@ -53,6 +54,7 @@
     buildEmotionSelect();
     refreshDatalists();
     bindEvents();
+    initDesktopUi();
 
     const hashView = String(location.hash || '').replace('#', '');
     const initialView = VIEW_META[hashView] ? hashView : 'dashboard';
@@ -67,7 +69,7 @@
       '<div class="recovery-card">' +
         '<div class="recovery-badge" aria-hidden="true">!</div>' +
         '<h1>Не удалось прочитать журнал</h1>' +
-        '<p>Данные в хранилище браузера повреждены или имеют неожиданный формат. Приложение остановлено, чтобы не перезаписать их.</p>' +
+        '<p>Локальные данные повреждены или имеют неожиданный формат. Приложение остановлено, чтобы не перезаписать их.</p>' +
         '<p class="recovery-note">Сначала скачайте файл с исходными данными — его можно попробовать восстановить вручную или отправить на анализ.</p>' +
         '<div class="recovery-actions">' +
           '<button type="button" class="btn btn-primary" id="recoveryDownload">Скачать данные</button>' +
@@ -208,7 +210,12 @@
 
   function persist() {
     const ok = store.save();
-    if (!ok) toast('Не удалось сохранить: хранилище браузера заполнено. Удалите скриншоты или экспортируйте журнал.', 'error');
+    if (!ok) {
+      toast(desktop
+        ? 'Не удалось сохранить файл журнала. Проверьте свободное место и папку данных.'
+        : 'Не удалось сохранить: хранилище браузера заполнено. Удалите скриншоты или экспортируйте журнал.',
+      'error');
+    }
     return ok;
   }
 
@@ -1360,9 +1367,150 @@
     $('#settingsSavedAt').textContent = '';
 
     const size = store.storageSize();
-    const pct = Math.min(100, size / (5 * 1024 * 1024) * 100);
+    const storageLimit = desktop ? 100 * 1024 * 1024 : 5 * 1024 * 1024;
+    const pct = Math.min(100, size / storageLimit * 100);
     $('#storageText').textContent = U.bytes(size) + ' · ' + pct.toFixed(1).replace('.', ',') + '%';
     $('#storageBar').style.width = Math.max(pct > 0 ? 2 : 0, pct) + '%';
+
+    if (desktop) refreshDesktopBackups();
+  }
+
+  function desktopReasonLabel(reason) {
+    return {
+      auto: 'Автоматическая копия',
+      manual: 'Ручная копия',
+      'before-restore': 'Перед восстановлением',
+      removed: 'Перед сбросом',
+      smoke: 'Тестовая копия',
+      backup: 'Резервная копия'
+    }[reason] || 'Резервная копия';
+  }
+
+  function formatBackupDate(timestamp) {
+    const date = new Date(timestamp);
+    if (Number.isNaN(date.getTime())) return '—';
+    return date.toLocaleString('ru-RU', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+  }
+
+  function initDesktopUi() {
+    if (!desktop) return;
+    const card = $('#desktopDataCard');
+    if (!card) return;
+    card.hidden = false;
+    loadDesktopDataInfo();
+    refreshDesktopBackups();
+    $('#openDataFolderBtn').addEventListener('click', openDesktopDataFolder);
+    $('#backupNowBtn').addEventListener('click', createDesktopBackup);
+    $('#refreshBackupsBtn').addEventListener('click', refreshDesktopBackups);
+    $('#desktopBackupsList').addEventListener('click', function (event) {
+      const button = event.target.closest('button[data-backup]');
+      if (!button) return;
+      restoreDesktopBackup(button.dataset.backup);
+    });
+  }
+
+  async function loadDesktopDataInfo() {
+    if (!desktop) return;
+    try {
+      const info = await desktop.getDataInfo();
+      const path = info && (info.journalPath || info.dataDir);
+      if (path) {
+        $('#desktopDataPath').textContent = path;
+        $('#desktopDataPath').title = path;
+      }
+    } catch (err) {
+      $('#desktopDataPath').textContent = 'Не удалось получить путь к данным';
+    }
+  }
+
+  async function refreshDesktopBackups() {
+    if (!desktop) return;
+    const list = $('#desktopBackupsList');
+    if (!list) return;
+    try {
+      const backups = await desktop.listBackups();
+      if (!backups.length) {
+        list.innerHTML = '<p class="muted small">Резервных копий пока нет. Они создаются автоматически при сохранении журнала и вручную по кнопке выше.</p>';
+        return;
+      }
+      const visible = backups.slice(0, 8);
+      list.innerHTML = visible.map(function (backup) {
+        return '<div class="backup-row">' +
+          '<div class="backup-meta">' +
+            '<strong>' + U.escapeHtml(desktopReasonLabel(backup.reason)) + '</strong>' +
+            '<span>' + U.escapeHtml(formatBackupDate(backup.mtime)) + ' · ' + U.escapeHtml(U.bytes(backup.size)) + '</span>' +
+          '</div>' +
+          '<button type="button" class="btn btn-ghost btn-sm" data-backup="' + U.escapeHtml(backup.name) + '">Восстановить</button>' +
+        '</div>';
+      }).join('') + (backups.length > visible.length
+        ? '<p class="muted small">Показаны последние ' + visible.length + ' из ' + backups.length + ' копий. Остальные лежат в папке backups.</p>'
+        : '');
+    } catch (err) {
+      list.innerHTML = '<p class="muted small">Не удалось прочитать список резервных копий. Откройте папку данных вручную.</p>';
+    }
+  }
+
+  async function createDesktopBackup() {
+    if (!desktop) return;
+    try {
+      const result = await desktop.backup();
+      if (!result || !result.ok) {
+        toast(result && result.error ? result.error : 'Не удалось создать резервную копию.', 'error');
+        return;
+      }
+      refreshDesktopBackups();
+      toast('Резервная копия создана');
+    } catch (err) {
+      toast('Не удалось создать резервную копию: ' + (err && err.message ? err.message : err), 'error');
+    }
+  }
+
+  async function openDesktopDataFolder() {
+    if (!desktop) return;
+    try {
+      const result = await desktop.openDataFolder();
+      if (!result || !result.ok) {
+        toast(result && result.error ? result.error : 'Не удалось открыть папку данных.', 'error');
+      }
+    } catch (err) {
+      toast('Не удалось открыть папку данных: ' + (err && err.message ? err.message : err), 'error');
+    }
+  }
+
+  function restoreDesktopBackup(name) {
+    if (!desktop) return;
+    askConfirm({
+      title: 'Восстановить резервную копию?',
+      text: 'Текущий журнал будет заменён выбранной копией. Перед заменой приложение сохранит текущее состояние ещё одной резервной копией.',
+      okLabel: 'Восстановить'
+    }).then(async function (confirmed) {
+      if (!confirmed) return;
+      try {
+        const result = await desktop.restoreBackup(name);
+        if (!result || !result.ok) {
+          toast(result && result.error ? result.error : 'Не удалось восстановить копию.', 'error');
+          return;
+        }
+        if (!store.load()) {
+          toast('Копия записана в файл, но приложение не смогло её перечитать. Перезапустите приложение.', 'error');
+          return;
+        }
+        applyCurrency();
+        state.calCursor = monthStart(new Date());
+        state.selectedDay = U.todayISO();
+        renderAll();
+        refreshDesktopBackups();
+        toast('Резервная копия восстановлена');
+      } catch (err) {
+        toast('Не удалось восстановить копию: ' + (err && err.message ? err.message : err), 'error');
+      }
+    });
   }
 
   function saveSettings(event) {
@@ -1489,7 +1637,7 @@
           store.replaceData(before);
           applyCurrency();
           renderAll();
-          toast('Импорт не сохранён: браузер не смог записать данные. Журнал оставлен прежним.', 'error');
+          toast('Импорт не сохранён: не удалось записать данные. Журнал оставлен прежним.', 'error');
           return;
         }
         applyCurrency();
@@ -1525,7 +1673,7 @@
       if (!ok) {
         store.replaceData(before);
         renderAll();
-        toast('Демо не сохранено: браузер не смог записать данные. Журнал оставлен прежним.', 'error');
+        toast('Демо не сохранено: не удалось записать данные. Журнал оставлен прежним.', 'error');
         return;
       }
       applyCurrency();
@@ -1558,7 +1706,7 @@
       if (!ok) {
         store.replaceData(before);
         renderAll();
-        toast('Очистка не сохранена: браузер не смог записать данные. Журнал оставлен прежним.', 'error');
+        toast('Очистка не сохранена: не удалось записать данные. Журнал оставлен прежним.', 'error');
         return;
       }
       applyCurrency();
@@ -1796,7 +1944,7 @@
     const ok = persist();
     if (!ok) {
       $('#tradeError').hidden = false;
-      $('#tradeError').textContent = 'Сделка добавлена в текущую сессию, но сохранить её не удалось: хранилище переполнено. Удалите скриншот или очистите старые данные.';
+      $('#tradeError').textContent = 'Сделка добавлена в текущую сессию, но сохранить её не удалось. Проверьте свободное место и папку данных, затем попробуйте ещё раз.';
       return;
     }
     closeModal('tradeModal');
@@ -1914,7 +2062,7 @@
     const ok = persist();
     if (!ok) {
       $('#noteError').hidden = false;
-      $('#noteError').textContent = 'Запись сохранена в текущей сессии, но хранилище переполнено. Сделайте резервную копию и очистите данные.';
+      $('#noteError').textContent = 'Запись сохранена в текущей сессии, но сохранить её не удалось. Проверьте свободное место и папку данных.';
       return;
     }
     closeModal('noteModal');

@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="color-scheme" content="dark">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self' blob: data:; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
   <title>TradeJournal — дневник трейдера</title>
   <meta name="description" content="Личный дневник трейдера: сделки, статистика, календарь прибыли, аналитика и риск-менеджмент.">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230b1118'/%3E%3Cpath d='M6 22l6-6 4 3 9-10' stroke='%2334e3ac' stroke-width='2.6' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M19 9h6v6' stroke='%2334e3ac' stroke-width='2.6' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
@@ -487,7 +488,7 @@
 
           <article class="card span-5">
             <header class="card-head">
-              <div class="card-title"><h2>Данные журнала</h2><p>Резервная копия и перенос между браузерами</p></div>
+              <div class="card-title"><h2>Данные журнала</h2><p>Резервная копия и перенос между устройствами</p></div>
             </header>
             <div class="data-actions">
               <button class="btn btn-ghost" id="exportJsonBtn">
@@ -508,7 +509,7 @@
             <div class="storage-block">
               <div class="storage-head"><span>Использование хранилища</span><strong id="storageText">—</strong></div>
               <div class="storage-meter"><i id="storageBar"></i></div>
-              <p class="muted small">Все данные лежат локально в localStorage браузера. Очистка кэша удалит журнал — держите резервную копию.</p>
+              <p class="muted small">В веб-версии данные лежат в localStorage браузера, в Windows-приложении — в локальных файлах. Очистка кэша браузера удалит журнал — держите резервную копию.</p>
             </div>
 
             <div class="danger-zone">
@@ -518,13 +519,51 @@
             </div>
           </article>
 
+          <article class="card span-12 desktop-data-card" id="desktopDataCard" hidden>
+            <header class="card-head">
+              <div class="card-title">
+                <h2>Приложение и локальные файлы</h2>
+                <p>Журнал сохраняется на этом компьютере и не зависит от кэша браузера</p>
+              </div>
+              <span class="desktop-badge">Windows</span>
+            </header>
+
+            <div class="desktop-data-grid">
+              <div class="desktop-path-wrap">
+                <span class="desktop-label">Файл журнала</span>
+                <code id="desktopDataPath">…</code>
+                <p class="muted small">Основной файл — <b>journal.json</b>. Резервные копии находятся в папке <b>backups</b>.</p>
+              </div>
+              <div class="desktop-actions">
+                <button class="btn btn-ghost" id="openDataFolderBtn">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.5A1.5 1.5 0 0 1 4.5 6H9l2 2h8.5A1.5 1.5 0 0 1 21 9.5v8A1.5 1.5 0 0 1 19.5 19h-15A1.5 1.5 0 0 1 3 17.5z"/></svg>
+                  Открыть папку данных
+                </button>
+                <button class="btn btn-ghost" id="backupNowBtn">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 7v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7"/><path d="M8 3h8l4 4H4z"/><path d="M9 13h6"/></svg>
+                  Создать резервную копию
+                </button>
+              </div>
+            </div>
+
+            <p class="muted small desktop-transfer-note">Перенос из веб-версии: сделайте «Экспорт JSON» в браузере и выберите «Импорт JSON» здесь.</p>
+
+            <div class="desktop-backups">
+              <div class="storage-head">
+                <span>Последние резервные копии</span>
+                <button type="button" class="btn btn-ghost btn-sm" id="refreshBackupsBtn">Обновить</button>
+              </div>
+              <div class="backups-list" id="desktopBackupsList"><p class="muted small">Загрузка…</p></div>
+            </div>
+          </article>
+
           <article class="card span-12 about-card">
             <div class="about-logo" aria-hidden="true">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17.5 8.5 12l4 3L21 6"/><path d="M15 6h6v6"/></svg>
             </div>
             <div>
               <h3>TradeJournal <span class="version">v1.0</span></h3>
-              <p>Локальный дневник трейдера без серверов и регистрации. Сделки, календарь P&L, аналитика по сетапам и эмоциям, журнал наблюдений и калькулятор риска — всё в одном файле проекта. <span class="kbd">N</span> — новая сделка, <span class="kbd">Esc</span> — закрыть окно.</p>
+              <p>Локальный дневник трейдера без серверов и регистрации. Сделки, календарь P&L, аналитика по сетапам и эмоциям, журнал наблюдений и калькулятор риска — всё в одном приложении. <span class="kbd">N</span> — новая сделка, <span class="kbd">Esc</span> — закрыть окно.</p>
             </div>
           </article>
         </div>

@@ -1,0 +1,48 @@
+appId: com.famasalo.tradejournal
+productName: TradeJournal
+copyright: Copyright © 2026 FamaSALO
+
+directories:
+  output: release
+  buildResources: build
+
+files:
+  - index.html
+  - css/**/*
+  - js/**/*
+  - assets/**/*
+  - electron/**/*
+  - build/icon.ico
+  - package.json
+  - README.md
+  - "!assets/Thumbs.db"
+  - "!assets/desktop.ini"
+  - "!assets/.DS_Store"
+
+asar: true
+compression: normal
+npmRebuild: false
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+    - target: portable
+      arch:
+        - x64
+  icon: build/icon.ico
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowElevation: true
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: TradeJournal
+  deleteAppDataOnUninstall: false
+  artifactName: "${productName}-Setup-${version}.${ext}"
+
+portable:
+  artifactName: "${productName}-Portable-${version}.${ext}"

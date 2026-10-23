@@ -2,6 +2,7 @@
   'use strict';
   const NS = window.TJ;
   const U = NS.utils;
+  const desktop = window.tradeJournalDesktop || null;
 
   const KEY = 'tradejournal.v1';
   const MAX_SCREENSHOT_LENGTH = 3000000;
@@ -29,6 +30,14 @@
   }
 
   function hasStored() {
+    if (desktop) {
+      try { return desktop.hasData(); } catch (err) {
+        // If the file cannot be checked, report that data may exist so the app
+        // does not silently replace it with demo data.
+        console.warn('TradeJournal: не удалось проверить файл журнала', err);
+        return true;
+      }
+    }
     try { return localStorage.getItem(KEY) !== null; } catch (err) { return false; }
   }
 
@@ -144,7 +153,7 @@
 
   function load() {
     try {
-      const raw = localStorage.getItem(KEY);
+      const raw = desktop ? desktop.load() : localStorage.getItem(KEY);
       if (raw === null) return false;
       const parsed = JSON.parse(raw);
       if (!isJournalData(parsed)) throw new Error('Неожиданная структура журнала');
@@ -159,15 +168,22 @@
   }
 
   function getRaw() {
+    if (desktop) {
+      try { return desktop.load(); } catch (err) { return null; }
+    }
     try { return localStorage.getItem(KEY); } catch (err) { return null; }
   }
 
   function clearRaw() {
+    if (desktop) {
+      try { return desktop.clear(); } catch (err) { return false; }
+    }
     try { localStorage.removeItem(KEY); return true; } catch (err) { return false; }
   }
 
   function save() {
     try {
+      if (desktop) return desktop.save(JSON.stringify(state));
       localStorage.setItem(KEY, JSON.stringify(state));
       return true;
     } catch (err) {
