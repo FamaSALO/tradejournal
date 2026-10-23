@@ -1097,9 +1097,72 @@ svg { display: block; }
 .toast .toast-dot { width: 7px; height: 7px; margin-top: 4px; flex-shrink: 0; border-radius: 50%; background: var(--green); box-shadow: 0 0 10px rgba(49, 227, 170, 0.6); }
 .toast.error .toast-dot { background: var(--red); box-shadow: 0 0 10px rgba(255, 107, 129, 0.6); }
 .toast.warn .toast-dot { background: var(--amber); box-shadow: 0 0 10px rgba(245, 181, 68, 0.6); }
+.toast .toast-message { flex: 1; }
+.toast .toast-action { flex-shrink: 0; margin-left: 4px; padding: 0; border: 0; background: none; color: var(--green); font-size: 11px; font-weight: 650; white-space: nowrap; }
+.toast .toast-action:hover { text-decoration: underline; }
+.toast.error .toast-action { color: var(--red); }
 .toast.out { animation: toastOut 0.2s ease forwards; }
 @keyframes toastIn { from { opacity: 0; transform: translateY(8px); } }
 @keyframes toastOut { to { opacity: 0; transform: translateX(16px); } }
+
+/* ============================ Storage recovery ============================ */
+.recovery-mode { overflow: hidden; }
+.recovery-mode .app { visibility: hidden; }
+.recovery-mode .toasts { z-index: 1100; }
+.recovery-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  overflow-y: auto;
+  background:
+    radial-gradient(700px 420px at 50% 0%, rgba(255, 107, 129, 0.08), transparent 65%),
+    rgba(5, 8, 12, 0.94);
+}
+.recovery-card {
+  width: min(560px, 100%);
+  margin: auto;
+  padding: 38px 36px 32px;
+  border: 1px solid var(--border-strong);
+  border-radius: 22px;
+  background: linear-gradient(180deg, #121b26, #0b1118);
+  box-shadow: 0 30px 100px rgba(0, 0, 0, 0.65);
+  text-align: center;
+}
+.recovery-badge {
+  display: grid;
+  place-items: center;
+  width: 52px;
+  height: 52px;
+  margin: 0 auto;
+  border: 1px solid rgba(255, 107, 129, 0.3);
+  border-radius: 16px;
+  background: var(--red-soft);
+  color: var(--red);
+  font-size: 27px;
+  font-weight: 700;
+}
+.recovery-card h1 { margin: 18px 0 10px; font-size: 24px; letter-spacing: -0.02em; }
+.recovery-card p { color: var(--muted); font-size: 13px; line-height: 1.65; }
+.recovery-note {
+  margin-top: 15px;
+  padding: 12px 14px;
+  border: 1px solid rgba(245, 181, 68, 0.22);
+  border-radius: 10px;
+  background: var(--amber-soft);
+  color: #ddc38d !important;
+}
+.recovery-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; margin-top: 22px; }
+.recovery-hint { margin-top: 16px !important; color: var(--muted-2) !important; font-size: 11px !important; }
+.recovery-card .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+@media (max-width: 480px) {
+  .recovery-card { padding: 28px 20px 24px; }
+  .recovery-card h1 { font-size: 20px; }
+  .recovery-actions { flex-direction: column; }
+  .recovery-actions .btn { width: 100%; justify-content: center; }
+}
 
 /* ============================ Responsive ============================ */
 @media (max-width: 1240px) {

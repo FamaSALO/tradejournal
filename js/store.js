@@ -4,6 +4,8 @@
   const U = NS.utils;
 
   const KEY = 'tradejournal.v1';
+  const MAX_SCREENSHOT_LENGTH = 3000000;
+  const SAFE_SCREENSHOT_RE = /^data:image\/(?:png|jpe?g|webp);base64,[a-z0-9+/=]+$/i;
   const DEFAULT_SETTINGS = {
     name: '',
     currency: '$',
@@ -14,6 +16,7 @@
   };
 
   let state = blankState(DEFAULT_SETTINGS);
+  let loadError = null;
 
   function blankState(settings) {
     return {
@@ -49,7 +52,9 @@
     const side = raw.side === 'short' ? 'short' : 'long';
     const discipline = U.clamp(Math.round(U.parseNum(raw.discipline) || 0), 0, 5);
     const time = typeof raw.time === 'string' && /^\d{2}:\d{2}/.test(raw.time) ? raw.time.slice(0, 5) : '';
-    const shot = typeof raw.screenshot === 'string' && raw.screenshot.indexOf('data:image/') === 0 ? raw.screenshot : '';
+    const shot = typeof raw.screenshot === 'string'
+      && raw.screenshot.length <= MAX_SCREENSHOT_LENGTH
+      && SAFE_SCREENSHOT_RE.test(raw.screenshot) ? raw.screenshot : '';
     return {
       id: raw.id ? String(raw.id) : U.uid(),
       date: date,
@@ -59,6 +64,7 @@
       entry: U.parseNum(raw.entry),
       exit: U.parseNum(raw.exit),
       stop: U.parseNum(raw.stop),
+      currentStop: U.parseNum(raw.currentStop),
       target: U.parseNum(raw.target),
       qty: U.parseNum(raw.qty),
       fees: U.parseNum(raw.fees) || 0,
@@ -107,6 +113,11 @@
     };
   }
 
+  function isJournalData(raw) {
+    return !!raw && typeof raw === 'object' && !Array.isArray(raw)
+      && Array.isArray(raw.trades) && Array.isArray(raw.notes);
+  }
+
   function normalizeData(raw) {
     raw = raw || {};
     const settings = normalizeSettings(raw.settings);
@@ -135,12 +146,24 @@
     try {
       const raw = localStorage.getItem(KEY);
       if (raw === null) return false;
-      state = normalizeData(JSON.parse(raw));
+      const parsed = JSON.parse(raw);
+      if (!isJournalData(parsed)) throw new Error('Неожиданная структура журнала');
+      state = normalizeData(parsed);
+      loadError = null;
       return true;
     } catch (err) {
+      loadError = err;
       console.warn('TradeJournal: не удалось прочитать данные', err);
       return false;
     }
+  }
+
+  function getRaw() {
+    try { return localStorage.getItem(KEY); } catch (err) { return null; }
+  }
+
+  function clearRaw() {
+    try { localStorage.removeItem(KEY); return true; } catch (err) { return false; }
   }
 
   function save() {
@@ -154,6 +177,7 @@
   }
 
   function replaceData(raw) {
+    if (!isJournalData(raw)) return false;
     state = normalizeData(raw);
     return save();
   }
@@ -296,6 +320,7 @@
       expectancy: count ? net / count : 0,
       avgR: rCount ? rSum / rCount : 0,
       totalR: rSum,
+      rCount: rCount,
       fees: fees,
       maxDD: maxDD,
       maxDDPct: maxDDPct,
@@ -337,6 +362,7 @@
         be: group.be,
         winRate: group.count ? (group.wins / group.count) * 100 : 0,
         avgR: group.rCount ? group.rSum / group.rCount : 0,
+        rCount: group.rCount,
         grossProfit: group.grossProfit,
         grossLoss: group.grossLoss,
         profitFactor: group.grossLoss < -0.0001 ? group.grossProfit / Math.abs(group.grossLoss) : (group.grossProfit > 0.0001 ? Infinity : 0)
@@ -361,8 +387,12 @@
     KEY: KEY,
     DEFAULT_SETTINGS: DEFAULT_SETTINGS,
     get state() { return state; },
+    get loadError() { return loadError; },
     hasStored: hasStored,
+    isJournalData: isJournalData,
     load: load,
+    getRaw: getRaw,
+    clearRaw: clearRaw,
     save: save,
     replaceData: replaceData,
     setDemo: setDemo,

@@ -41,7 +41,10 @@
   function init() {
     const hadStored = store.hasStored();
     if (hadStored) {
-      store.load();
+      if (!store.load()) {
+        showRecoveryScreen(store.getRaw());
+        return;
+      }
     } else {
       store.setDemo(NS.sample.generate());
     }
@@ -54,6 +57,45 @@
     const hashView = String(location.hash || '').replace('#', '');
     const initialView = VIEW_META[hashView] ? hashView : 'dashboard';
     navigate(initialView, { push: false, scroll: false });
+  }
+
+  function showRecoveryScreen(rawData) {
+    document.body.classList.add('recovery-mode');
+    const screen = document.createElement('div');
+    screen.className = 'recovery-screen';
+    screen.innerHTML =
+      '<div class="recovery-card">' +
+        '<div class="recovery-badge" aria-hidden="true">!</div>' +
+        '<h1>Не удалось прочитать журнал</h1>' +
+        '<p>Данные в хранилище браузера повреждены или имеют неожиданный формат. Приложение остановлено, чтобы не перезаписать их.</p>' +
+        '<p class="recovery-note">Сначала скачайте файл с исходными данными — его можно попробовать восстановить вручную или отправить на анализ.</p>' +
+        '<div class="recovery-actions">' +
+          '<button type="button" class="btn btn-primary" id="recoveryDownload">Скачать данные</button>' +
+          '<button type="button" class="btn btn-ghost" id="recoveryReload">Попробовать снова</button>' +
+          '<button type="button" class="btn btn-danger-ghost" id="recoveryReset">Сбросить журнал</button>' +
+        '</div>' +
+        '<p class="recovery-hint">Сброс удалит повреждённые данные и загрузит демо-журнал.</p>' +
+      '</div>';
+    document.body.appendChild(screen);
+
+    const downloadBtn = $('#recoveryDownload');
+    if (!rawData) {
+      downloadBtn.disabled = true;
+      downloadBtn.textContent = 'Данные недоступны';
+    } else {
+      downloadBtn.addEventListener('click', function () {
+        U.download('tradejournal-corrupt-' + U.todayISO() + '.json', rawData, 'application/json');
+        downloadBtn.textContent = 'Файл скачан';
+        toast('Повреждённые данные скачаны. Теперь можно сбросить журнал.', 'success');
+      });
+    }
+
+    $('#recoveryReload').addEventListener('click', function () { location.reload(); });
+    $('#recoveryReset').addEventListener('click', function () {
+      if (!window.confirm('Удалить повреждённые данные и загрузить демо-журнал? Убедитесь, что файл уже скачан.')) return;
+      store.clearRaw();
+      location.reload();
+    });
   }
 
   function applyCurrency() {
@@ -170,13 +212,21 @@
     return ok;
   }
 
-  function toast(message, type) {
+  function toast(message, type, action) {
     const box = document.createElement('div');
     box.className = 'toast ' + (type || 'success');
-    box.innerHTML = '<span class="toast-dot"></span><span>' + U.escapeHtml(message) + '</span>';
+    box.innerHTML = '<span class="toast-dot"></span><span class="toast-message">' + U.escapeHtml(message) + '</span>' +
+      (action && action.label ? '<button type="button" class="toast-action">' + U.escapeHtml(action.label) + '</button>' : '');
     $('#toasts').appendChild(box);
-    setTimeout(function () { box.classList.add('out'); }, 3400);
-    setTimeout(function () { box.remove(); }, 3650);
+    const life = action ? 8500 : 3400;
+    setTimeout(function () { box.classList.add('out'); }, life);
+    setTimeout(function () { box.remove(); }, life + 250);
+    if (action) {
+      box.querySelector('.toast-action').addEventListener('click', function () {
+        box.remove();
+        action.onClick();
+      });
+    }
   }
 
   function refreshDatalists() {
@@ -285,9 +335,11 @@
 
     const daily = dailySeries(data.filtered, 30);
     NS.charts.bars($('#dailyChart'), daily, { emptyText: 'За этот период сделок не было' });
+    const dailyNet = daily.reduce(function (sum, point) { return sum + point.value; }, 0);
     const dailyChip = $('#dailyChip');
-    dailyChip.textContent = m.count ? U.money(m.net, { sign: true }) : '—';
-    dailyChip.className = 'chip ' + toneClass(m.net);
+    dailyChip.textContent = daily.length ? U.money(dailyNet, { sign: true }) : '—';
+    dailyChip.className = 'chip ' + toneClass(dailyNet);
+    dailyChip.title = 'Сумма P&L по показанным торговым дням';
 
     renderDiscipline();
     renderRecentTrades();
@@ -299,6 +351,7 @@
   function renderKpis(m, base) {
     const roi = base > 0 ? (m.net / base) * 100 : 0;
     const pf = m.profitFactor === Infinity ? '∞' : m.profitFactor.toFixed(2).replace('.', ',');
+    const hasR = m.rCount > 0;
     const streak = m.currentStreak
       ? m.currentStreak.n + (m.currentStreak.type === 'win' ? 'W' : 'L')
       : '—';
@@ -324,9 +377,9 @@
       },
       {
         label: 'Средний R',
-        value: m.count ? U.rfmt(m.avgR, { sign: true }) : '—',
-        tone: m.count ? toneClass(m.avgR) : '',
-        sub: m.count ? 'Итого ' + U.rfmt(m.totalR, { sign: true }) : 'Добавьте стоп-лосс к сделкам'
+        value: hasR ? U.rfmt(m.avgR, { sign: true }) : '—',
+        tone: hasR ? toneClass(m.avgR) : '',
+        sub: hasR ? 'Итого ' + U.rfmt(m.totalR, { sign: true }) + ' · ' + m.rCount + ' с R' : 'Добавьте стоп при входе к сделкам'
       },
       {
         label: 'Макс. просадка',
@@ -403,7 +456,8 @@
     });
 
     const balance = store.balanceAll();
-    const lossLimit = Math.max(0, (U.parseNum(settings.dailyLossLimit) || 0) / 100 * balance);
+    const startOfDayBalance = Math.max(0, balance - dayPnl);
+    const lossLimit = Math.max(0, (U.parseNum(settings.dailyLossLimit) || 0) / 100 * startOfDayBalance);
     const maxTrades = U.parseNum(settings.maxTradesPerDay) || 0;
     const lossUsed = dayPnl < 0 ? Math.min(-dayPnl, lossLimit) : 0;
     const lossPct = lossLimit > 0 ? Math.min(100, (lossUsed / lossLimit) * 100) : 0;
@@ -830,6 +884,7 @@
     const data = buildPeriodMetrics();
     const m = data.m;
     const rows = m.rows;
+    const hasR = m.rCount > 0;
 
     $('#insights').innerHTML = buildInsights(m).map(function (insight) {
       return '<div class="insight ' + (insight.tone || '') + '"><span class="insight-ico">' + insight.icon + '</span><span>' + insight.text + '</span></div>';
@@ -844,9 +899,9 @@
       },
       {
         label: 'Средний R',
-        value: m.count ? U.rfmt(m.avgR, { sign: true }) : '—',
-        tone: toneClass(m.avgR),
-        sub: m.count ? 'Всего ' + U.rfmt(m.totalR, { sign: true }) : 'Нужны стоп-лоссы'
+        value: hasR ? U.rfmt(m.avgR, { sign: true }) : '—',
+        tone: hasR ? toneClass(m.avgR) : '',
+        sub: hasR ? 'Всего ' + U.rfmt(m.totalR, { sign: true }) + ' · ' + m.rCount + ' с R' : 'Нужны стопы при входе'
       },
       {
         label: 'Винрейт',
@@ -1096,8 +1151,9 @@
   function renderQuality(m) {
     const withR = m.rows.filter(function (row) { return row.r !== null; }).length;
     const discipline = m.avgDiscipline > 0 ? m.avgDiscipline.toFixed(1).replace('.', ',') + ' / 5' : '—';
+    const totalR = withR ? U.rfmt(m.totalR, { sign: true }) : '—';
     $('#qualityBlock').innerHTML =
-      '<div class="quality-row"><span>Всего R</span><b class="' + toneClass(m.totalR) + '">' + U.escapeHtml(U.rfmt(m.totalR, { sign: true })) + '</b></div>' +
+      '<div class="quality-row"><span>Всего R</span><b class="' + (withR ? toneClass(m.totalR) : '') + '">' + U.escapeHtml(totalR) + '</b></div>' +
       '<div class="quality-row"><span>Сделок с рассчитанным R</span><b>' + withR + ' из ' + m.count + '</b></div>' +
       '<div class="quality-row"><span>Средняя дисциплина</span><b>' + discipline + '</b></div>' +
       '<div class="quality-row"><span>Комиссии и издержки</span><b class="neg">' + U.escapeHtml(U.money(-m.fees)) + '</b></div>' +
@@ -1117,10 +1173,11 @@
     }
     tbody.innerHTML = groups.map(function (group) {
       const pf = group.profitFactor === Infinity ? '∞' : group.profitFactor.toFixed(2).replace('.', ',');
+      const hasR = group.rCount > 0;
       return '<tr><td>' + U.escapeHtml(group.key) + '</td>' +
         '<td class="num">' + group.count + '</td>' +
         '<td class="num">' + U.percent(group.winRate, 0) + '</td>' +
-        '<td class="num ' + toneClass(group.avgR) + '">' + U.escapeHtml(U.rfmt(group.avgR, { sign: true })) + '</td>' +
+        '<td class="num ' + (hasR ? toneClass(group.avgR) : '') + '">' + (hasR ? U.escapeHtml(U.rfmt(group.avgR, { sign: true })) : '—') + '</td>' +
         '<td class="num ' + toneClass(group.pnl) + '">' + U.escapeHtml(U.money(group.pnl, { sign: true })) + '</td>' +
         '<td class="num">' + pf + '</td></tr>';
     }).join('');
@@ -1359,6 +1416,12 @@
     return '"' + String(value === null || value === undefined ? '' : value).replace(/"/g, '""') + '"';
   }
 
+  function csvText(value) {
+    const text = String(value === null || value === undefined ? '' : value);
+    const safe = /^[=+\-@\t\r]/.test(text) ? "'" + text : text;
+    return '"' + safe.replace(/"/g, '""') + '"';
+  }
+
   function csvNumber(value, digits) {
     const num = U.parseNum(value);
     if (num === null) return '';
@@ -1367,32 +1430,33 @@
 
   function exportCSV() {
     const trades = store.sortTrades(store.state.trades, 'desc');
-    const headers = ['Дата', 'Время', 'Инструмент', 'Направление', 'Вход', 'Выход', 'Стоп', 'Тейк', 'Количество', 'Комиссия', 'P&L', 'R', 'Сетап', 'Эмоция', 'Дисциплина', 'Теги', 'Заметка'];
+    const headers = ['Дата', 'Время', 'Инструмент', 'Направление', 'Вход', 'Выход', 'Стоп при входе', 'Текущий стоп', 'Тейк', 'Количество', 'Комиссия', 'P&L', 'R', 'Сетап', 'Эмоция', 'Дисциплина', 'Теги', 'Заметка'];
     const lines = [headers.map(csvCell).join(';')];
     trades.forEach(function (trade) {
       const emotion = U.emotionMeta(trade.emotion);
       const pnl = store.isClosed(trade) ? store.tradePnl(trade) : null;
       const r = store.isClosed(trade) ? store.tradeR(trade) : null;
       const row = [
-        trade.date,
-        trade.time,
-        trade.symbol,
-        trade.side === 'long' ? 'Long' : 'Short',
+        csvText(trade.date),
+        csvText(trade.time),
+        csvText(trade.symbol),
+        csvText(trade.side === 'long' ? 'Long' : 'Short'),
         csvNumber(trade.entry, 6),
         trade.exit === null ? '' : csvNumber(trade.exit, 6),
         trade.stop === null ? '' : csvNumber(trade.stop, 6),
+        trade.currentStop === null ? '' : csvNumber(trade.currentStop, 6),
         trade.target === null ? '' : csvNumber(trade.target, 6),
         csvNumber(trade.qty, 4),
         csvNumber(trade.fees, 2),
         pnl === null ? '' : csvNumber(pnl, 2),
         r === null ? '' : csvNumber(r, 2),
-        trade.setup,
-        emotion.label,
-        trade.discipline || '',
-        trade.tags.join(', '),
-        trade.notes
+        csvText(trade.setup),
+        csvText(emotion.label),
+        trade.discipline ? csvNumber(trade.discipline, 0) : '',
+        csvText(trade.tags.join(', ')),
+        csvText(trade.notes)
       ];
-      lines.push(row.map(csvCell).join(';'));
+      lines.push(row.join(';'));
     });
     U.download('tradejournal-trades-' + U.todayISO() + '.csv', '\uFEFF' + lines.join('\r\n'), 'text/csv;charset=utf-8');
     toast('Таблица сделок скачана в CSV');
@@ -1409,24 +1473,40 @@
         toast('Не удалось прочитать файл: это не корректный JSON.', 'error');
         return;
       }
-      if (!data || !Array.isArray(data.trades)) {
-        toast('В файле нет массива сделок. Похоже, это резервная копия другого формата.', 'error');
+      if (!store.isJournalData(data)) {
+        toast('В файле нет корректных массивов сделок и записей. Похоже, это резервная копия другого формата.', 'error');
         return;
       }
       askConfirm({
         title: 'Импортировать данные?',
-        text: 'Текущие сделки и записи будут заменены данными из файла. Рекомендуем сначала сделать экспорт текущего журнала.',
+        text: 'Текущие сделки и записи будут заменены данными из файла. Рекомендуем сначала сделать экспорт текущего журнала. Сразу после импорта действие можно будет отменить.',
         okLabel: 'Импортировать'
       }).then(function (confirmed) {
         if (!confirmed) return;
+        const before = JSON.parse(JSON.stringify(store.state));
         const ok = store.replaceData(data);
+        if (!ok) {
+          store.replaceData(before);
+          applyCurrency();
+          renderAll();
+          toast('Импорт не сохранён: браузер не смог записать данные. Журнал оставлен прежним.', 'error');
+          return;
+        }
         applyCurrency();
         state.calCursor = monthStart(new Date());
         state.selectedDay = U.todayISO();
         renderAll();
-        if (ok) {
-          toast('Импортировано: ' + store.state.trades.length + ' ' + pluralTrades(store.state.trades.length) + ' и ' + store.state.notes.length + ' записей');
-        }
+        toast('Импортировано: ' + store.state.trades.length + ' ' + pluralTrades(store.state.trades.length) + ' и ' + store.state.notes.length + ' записей', 'success', {
+          label: 'Отменить',
+          onClick: function () {
+            const restored = store.replaceData(before);
+            applyCurrency();
+            state.calCursor = monthStart(new Date());
+            state.selectedDay = U.todayISO();
+            renderAll();
+            toast(restored ? 'Импорт отменён, прежние данные восстановлены' : 'Не удалось сохранить откат', restored ? 'success' : 'error');
+          }
+        });
       });
     };
     reader.onerror = function () { toast('Не удалось открыть файл.', 'error'); };
@@ -1440,28 +1520,62 @@
       okLabel: 'Загрузить демо'
     }).then(function (confirmed) {
       if (!confirmed) return;
+      const before = JSON.parse(JSON.stringify(store.state));
       const ok = store.setDemo(NS.sample.generate());
+      if (!ok) {
+        store.replaceData(before);
+        renderAll();
+        toast('Демо не сохранено: браузер не смог записать данные. Журнал оставлен прежним.', 'error');
+        return;
+      }
       applyCurrency();
       state.calCursor = monthStart(new Date());
       state.selectedDay = U.todayISO();
       renderAll();
-      toast(ok ? 'Демо-данные загружены' : 'Демо загружено, но сохранить данные не удалось', ok ? 'success' : 'error');
+      toast('Демо-данные загружены', 'success', {
+        label: 'Отменить',
+        onClick: function () {
+          const restored = store.replaceData(before);
+          applyCurrency();
+          state.calCursor = monthStart(new Date());
+          state.selectedDay = U.todayISO();
+          renderAll();
+          toast(restored ? 'Демо-данные убраны, прежние восстановлены' : 'Не удалось сохранить откат', restored ? 'success' : 'error');
+        }
+      });
     });
   }
 
   function resetJournalData() {
     askConfirm({
       title: 'Очистить все данные?',
-      text: 'Все сделки и записи будут удалены без возможности восстановления. Настройки профиля и стартовый баланс сохранятся.',
+      text: 'Все сделки и записи будут удалены. Настройки профиля и стартовый баланс сохранятся. Сразу после очистки действие можно будет отменить.',
       okLabel: 'Очистить всё'
     }).then(function (confirmed) {
       if (!confirmed) return;
+      const before = JSON.parse(JSON.stringify(store.state));
       const ok = store.resetData(true);
+      if (!ok) {
+        store.replaceData(before);
+        renderAll();
+        toast('Очистка не сохранена: браузер не смог записать данные. Журнал оставлен прежним.', 'error');
+        return;
+      }
       applyCurrency();
       state.calCursor = monthStart(new Date());
       state.selectedDay = U.todayISO();
       renderAll();
-      toast(ok ? 'Журнал очищен. Начинаем с чистого листа.' : 'Очищено, но сохранить изменения не удалось', ok ? 'success' : 'error');
+      toast('Журнал очищен. Начинаем с чистого листа.', 'success', {
+        label: 'Отменить',
+        onClick: function () {
+          const restored = store.replaceData(before);
+          applyCurrency();
+          state.calCursor = monthStart(new Date());
+          state.selectedDay = U.todayISO();
+          renderAll();
+          toast(restored ? 'Очистка отменена, данные восстановлены' : 'Не удалось сохранить откат', restored ? 'success' : 'error');
+        }
+      });
     });
   }
 
@@ -1488,6 +1602,7 @@
     $('#tradeEntry').value = trade && trade.entry !== null ? trade.entry : '';
     $('#tradeExit').value = trade && trade.exit !== null ? trade.exit : '';
     $('#tradeStop').value = trade && trade.stop !== null ? trade.stop : '';
+    $('#tradeCurrentStop').value = trade && trade.currentStop !== null ? trade.currentStop : '';
     $('#tradeTarget').value = trade && trade.target !== null ? trade.target : '';
     $('#tradeQty').value = trade && trade.qty !== null ? trade.qty : '';
     $('#tradeFees').value = trade ? trade.fees : '';
@@ -1529,12 +1644,15 @@
   function renderShotPreview() {
     const box = $('#shotPreview');
     const remove = $('#removeShot');
+    box.innerHTML = '';
     if (state.screenshot) {
-      box.innerHTML = '<img src="' + state.screenshot + '" alt="Скриншот сделки">';
+      const image = document.createElement('img');
+      image.src = state.screenshot;
+      image.alt = 'Скриншот сделки';
+      box.appendChild(image);
       box.classList.add('has');
       remove.classList.remove('hidden');
     } else {
-      box.innerHTML = '';
       box.classList.remove('has');
       remove.classList.add('hidden');
     }
@@ -1614,11 +1732,14 @@
     const qty = U.parseNum($('#tradeQty').value);
     const exitRaw = $('#tradeExit').value.trim();
     const stopRaw = $('#tradeStop').value.trim();
+    const currentStopRaw = $('#tradeCurrentStop').value.trim();
     const targetRaw = $('#tradeTarget').value.trim();
     const exit = exitRaw === '' ? null : U.parseNum(exitRaw);
     const stop = stopRaw === '' ? null : U.parseNum(stopRaw);
+    const currentStop = currentStopRaw === '' ? null : U.parseNum(currentStopRaw);
     const target = targetRaw === '' ? null : U.parseNum(targetRaw);
     const fees = U.parseNum($('#tradeFees').value) || 0;
+    const side = $('#tradeSide').value === 'short' ? 'short' : 'long';
 
     let error = '';
     if (!date) error = 'Укажите дату сделки.';
@@ -1626,7 +1747,11 @@
     else if (entry === null) error = 'Укажите цену входа.';
     else if (qty === null || qty <= 0) error = 'Количество должно быть больше нуля.';
     else if (fees < 0) error = 'Комиссия не может быть отрицательной.';
-    else if (stop !== null && Math.abs(stop - entry) < 1e-12) error = 'Стоп-лосс не может совпадать с ценой входа.';
+    else if (stop !== null && Math.abs(stop - entry) < 1e-12) error = 'Стоп при входе не может совпадать с ценой входа.';
+    else if (stop !== null && side === 'long' && stop > entry) error = 'Для Long стоп при входе должен быть ниже цены входа.';
+    else if (stop !== null && side === 'short' && stop < entry) error = 'Для Short стоп при входе должен быть выше цены входа.';
+    else if (target !== null && side === 'long' && target <= entry) error = 'Для Long тейк-профит должен быть выше цены входа.';
+    else if (target !== null && side === 'short' && target >= entry) error = 'Для Short тейк-профит должен быть ниже цены входа.';
 
     if (error) {
       $('#tradeError').hidden = false;
@@ -1640,10 +1765,11 @@
       date: date,
       time: $('#tradeTime').value,
       symbol: symbol,
-      side: $('#tradeSide').value === 'short' ? 'short' : 'long',
+      side: side,
       entry: entry,
       exit: exit,
       stop: stop,
+      currentStop: currentStop,
       target: target,
       qty: qty,
       fees: fees,
@@ -1684,15 +1810,32 @@
     if (!trade) return;
     askConfirm({
       title: 'Удалить сделку?',
-      text: 'Сделка ' + trade.symbol + ' от ' + U.formatDate(trade.date, 'long') + ' будет удалена без возможности восстановления.',
+      text: 'Сделка ' + trade.symbol + ' от ' + U.formatDate(trade.date, 'long') + ' будет удалена. Сразу после удаления действие можно будет отменить.',
       okLabel: 'Удалить'
     }).then(function (confirmed) {
       if (!confirmed) return;
-      store.state.trades = store.state.trades.filter(function (t) { return t.id !== state.tradeId; });
-      persist();
+      const index = store.state.trades.findIndex(function (t) { return t.id === trade.id; });
+      store.state.trades = store.state.trades.filter(function (t) { return t.id !== trade.id; });
+      const ok = persist();
+      if (!ok) {
+        store.state.trades.splice(Math.max(0, index), 0, trade);
+        renderAll();
+        toast('Не удалось удалить сделку: данные не сохранены.', 'error');
+        return;
+      }
       closeModal('tradeModal');
       renderAll();
-      toast('Сделка удалена');
+      toast('Сделка удалена', 'success', {
+        label: 'Отменить',
+        onClick: function () {
+          if (!store.state.trades.some(function (t) { return t.id === trade.id; })) {
+            store.state.trades.splice(Math.min(Math.max(0, index), store.state.trades.length), 0, trade);
+          }
+          const restored = persist();
+          renderAll();
+          toast(restored ? 'Сделка восстановлена' : 'Сделка восстановлена только в текущей сессии', restored ? 'success' : 'error');
+        }
+      });
     });
   }
 
@@ -1784,18 +1927,35 @@
     if (!note) return;
     askConfirm({
       title: 'Удалить запись?',
-      text: 'Запись от ' + U.formatDate(note.date, 'long') + ' будет удалена без возможности восстановления.',
+      text: 'Запись от ' + U.formatDate(note.date, 'long') + ' будет удалена. Сразу после удаления действие можно будет отменить.',
       okLabel: 'Удалить'
     }).then(function (confirmed) {
       if (!confirmed) return;
+      const index = store.state.notes.findIndex(function (n) { return n.id === id; });
       store.state.notes = store.state.notes.filter(function (n) { return n.id !== id; });
-      persist();
+      const ok = persist();
+      if (!ok) {
+        store.state.notes.splice(Math.max(0, index), 0, note);
+        renderAll();
+        toast('Не удалось удалить запись: данные не сохранены.', 'error');
+        return;
+      }
       if (state.noteId === id) {
         state.noteId = null;
         closeModal('noteModal');
       }
       renderAll();
-      toast('Запись удалена');
+      toast('Запись удалена', 'success', {
+        label: 'Отменить',
+        onClick: function () {
+          if (!store.state.notes.some(function (n) { return n.id === note.id; })) {
+            store.state.notes.splice(Math.min(Math.max(0, index), store.state.notes.length), 0, note);
+          }
+          const restored = persist();
+          renderAll();
+          toast(restored ? 'Запись восстановлена' : 'Запись восстановлена только в текущей сессии', restored ? 'success' : 'error');
+        }
+      });
     });
   }
 
