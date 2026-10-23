@@ -39,15 +39,16 @@
      Init
      ============================================================ */
 
-  function init() {
-    const hadStored = store.hasStored();
+  async function init() {
+    const hadStored = await store.hasStored();
     if (hadStored) {
-      if (!store.load()) {
-        showRecoveryScreen(store.getRaw());
+      if (!(await store.load())) {
+        showRecoveryScreen(await store.getRaw());
         return;
       }
     } else {
-      store.setDemo(NS.sample.generate());
+      const demoOk = await store.setDemo(NS.sample.generate());
+      if (!demoOk) toast('Не удалось сохранить демо-данные. Проверьте папку данных.', 'error');
     }
     applyCurrency();
     buildMoodPicker();
@@ -93,9 +94,9 @@
     }
 
     $('#recoveryReload').addEventListener('click', function () { location.reload(); });
-    $('#recoveryReset').addEventListener('click', function () {
+    $('#recoveryReset').addEventListener('click', async function () {
       if (!window.confirm('Удалить повреждённые данные и загрузить демо-журнал? Убедитесь, что файл уже скачан.')) return;
-      store.clearRaw();
+      await store.clearRaw();
       location.reload();
     });
   }
@@ -208,8 +209,8 @@
     return 'neutral';
   }
 
-  function persist() {
-    const ok = store.save();
+  async function persist() {
+    const ok = await store.save();
     if (!ok) {
       toast(desktop
         ? 'Не удалось сохранить файл журнала. Проверьте свободное место и папку данных.'
@@ -1497,7 +1498,7 @@
           toast(result && result.error ? result.error : 'Не удалось восстановить копию.', 'error');
           return;
         }
-        if (!store.load()) {
+        if (!(await store.load())) {
           toast('Копия записана в файл, но приложение не смогло её перечитать. Перезапустите приложение.', 'error');
           return;
         }
@@ -1513,7 +1514,7 @@
     });
   }
 
-  function saveSettings(event) {
+  async function saveSettings(event) {
     event.preventDefault();
     const name = $('#settingName').value.trim();
     const currency = $('#settingCurrency').value || '$';
@@ -1537,7 +1538,7 @@
     };
     store.state.demo = false;
     applyCurrency();
-    const ok = persist();
+    const ok = await persist();
     renderSidebar();
     renderCurrentView();
     if (ok) {
@@ -1629,12 +1630,12 @@
         title: 'Импортировать данные?',
         text: 'Текущие сделки и записи будут заменены данными из файла. Рекомендуем сначала сделать экспорт текущего журнала. Сразу после импорта действие можно будет отменить.',
         okLabel: 'Импортировать'
-      }).then(function (confirmed) {
+      }).then(async function (confirmed) {
         if (!confirmed) return;
         const before = JSON.parse(JSON.stringify(store.state));
-        const ok = store.replaceData(data);
+        const ok = await store.replaceData(data);
         if (!ok) {
-          store.replaceData(before);
+          await store.replaceData(before);
           applyCurrency();
           renderAll();
           toast('Импорт не сохранён: не удалось записать данные. Журнал оставлен прежним.', 'error');
@@ -1646,8 +1647,8 @@
         renderAll();
         toast('Импортировано: ' + store.state.trades.length + ' ' + pluralTrades(store.state.trades.length) + ' и ' + store.state.notes.length + ' записей', 'success', {
           label: 'Отменить',
-          onClick: function () {
-            const restored = store.replaceData(before);
+          onClick: async function () {
+            const restored = await store.replaceData(before);
             applyCurrency();
             state.calCursor = monthStart(new Date());
             state.selectedDay = U.todayISO();
@@ -1666,12 +1667,12 @@
       title: 'Загрузить демо-данные?',
       text: 'Текущие сделки и записи будут заменены примерами. В настройках журнал можно очистить в любой момент.',
       okLabel: 'Загрузить демо'
-    }).then(function (confirmed) {
+    }).then(async function (confirmed) {
       if (!confirmed) return;
       const before = JSON.parse(JSON.stringify(store.state));
-      const ok = store.setDemo(NS.sample.generate());
+      const ok = await store.setDemo(NS.sample.generate());
       if (!ok) {
-        store.replaceData(before);
+        await store.replaceData(before);
         renderAll();
         toast('Демо не сохранено: не удалось записать данные. Журнал оставлен прежним.', 'error');
         return;
@@ -1682,8 +1683,8 @@
       renderAll();
       toast('Демо-данные загружены', 'success', {
         label: 'Отменить',
-        onClick: function () {
-          const restored = store.replaceData(before);
+        onClick: async function () {
+          const restored = await store.replaceData(before);
           applyCurrency();
           state.calCursor = monthStart(new Date());
           state.selectedDay = U.todayISO();
@@ -1699,12 +1700,12 @@
       title: 'Очистить все данные?',
       text: 'Все сделки и записи будут удалены. Настройки профиля и стартовый баланс сохранятся. Сразу после очистки действие можно будет отменить.',
       okLabel: 'Очистить всё'
-    }).then(function (confirmed) {
+    }).then(async function (confirmed) {
       if (!confirmed) return;
       const before = JSON.parse(JSON.stringify(store.state));
-      const ok = store.resetData(true);
+      const ok = await store.resetData(true);
       if (!ok) {
-        store.replaceData(before);
+        await store.replaceData(before);
         renderAll();
         toast('Очистка не сохранена: не удалось записать данные. Журнал оставлен прежним.', 'error');
         return;
@@ -1715,8 +1716,8 @@
       renderAll();
       toast('Журнал очищен. Начинаем с чистого листа.', 'success', {
         label: 'Отменить',
-        onClick: function () {
-          const restored = store.replaceData(before);
+        onClick: async function () {
+          const restored = await store.replaceData(before);
           applyCurrency();
           state.calCursor = monthStart(new Date());
           state.selectedDay = U.todayISO();
@@ -1872,7 +1873,7 @@
     $('#previewRR').className = '';
   }
 
-  function saveTrade(event) {
+  async function saveTrade(event) {
     event.preventDefault();
     const date = $('#tradeDate').value;
     const symbol = $('#tradeSymbol').value.trim().toUpperCase();
@@ -1941,7 +1942,7 @@
     }
 
     store.state.demo = false;
-    const ok = persist();
+    const ok = await persist();
     if (!ok) {
       $('#tradeError').hidden = false;
       $('#tradeError').textContent = 'Сделка добавлена в текущую сессию, но сохранить её не удалось. Проверьте свободное место и папку данных, затем попробуйте ещё раз.';
@@ -1960,11 +1961,11 @@
       title: 'Удалить сделку?',
       text: 'Сделка ' + trade.symbol + ' от ' + U.formatDate(trade.date, 'long') + ' будет удалена. Сразу после удаления действие можно будет отменить.',
       okLabel: 'Удалить'
-    }).then(function (confirmed) {
+    }).then(async function (confirmed) {
       if (!confirmed) return;
       const index = store.state.trades.findIndex(function (t) { return t.id === trade.id; });
       store.state.trades = store.state.trades.filter(function (t) { return t.id !== trade.id; });
-      const ok = persist();
+      const ok = await persist();
       if (!ok) {
         store.state.trades.splice(Math.max(0, index), 0, trade);
         renderAll();
@@ -1975,11 +1976,11 @@
       renderAll();
       toast('Сделка удалена', 'success', {
         label: 'Отменить',
-        onClick: function () {
+        onClick: async function () {
           if (!store.state.trades.some(function (t) { return t.id === trade.id; })) {
             store.state.trades.splice(Math.min(Math.max(0, index), store.state.trades.length), 0, trade);
           }
-          const restored = persist();
+          const restored = await persist();
           renderAll();
           toast(restored ? 'Сделка восстановлена' : 'Сделка восстановлена только в текущей сессии', restored ? 'success' : 'error');
         }
@@ -2023,7 +2024,7 @@
     openModal('noteModal', '#noteText');
   }
 
-  function saveNote(event) {
+  async function saveNote(event) {
     event.preventDefault();
     const date = $('#noteDate').value;
     const text = $('#noteText').value.trim();
@@ -2059,7 +2060,7 @@
     }
 
     store.state.demo = false;
-    const ok = persist();
+    const ok = await persist();
     if (!ok) {
       $('#noteError').hidden = false;
       $('#noteError').textContent = 'Запись сохранена в текущей сессии, но сохранить её не удалось. Проверьте свободное место и папку данных.';
@@ -2077,11 +2078,11 @@
       title: 'Удалить запись?',
       text: 'Запись от ' + U.formatDate(note.date, 'long') + ' будет удалена. Сразу после удаления действие можно будет отменить.',
       okLabel: 'Удалить'
-    }).then(function (confirmed) {
+    }).then(async function (confirmed) {
       if (!confirmed) return;
       const index = store.state.notes.findIndex(function (n) { return n.id === id; });
       store.state.notes = store.state.notes.filter(function (n) { return n.id !== id; });
-      const ok = persist();
+      const ok = await persist();
       if (!ok) {
         store.state.notes.splice(Math.max(0, index), 0, note);
         renderAll();
@@ -2095,11 +2096,11 @@
       renderAll();
       toast('Запись удалена', 'success', {
         label: 'Отменить',
-        onClick: function () {
+        onClick: async function () {
           if (!store.state.notes.some(function (n) { return n.id === note.id; })) {
             store.state.notes.splice(Math.min(Math.max(0, index), store.state.notes.length), 0, note);
           }
-          const restored = persist();
+          const restored = await persist();
           renderAll();
           toast(restored ? 'Запись восстановлена' : 'Запись восстановлена только в текущей сессии', restored ? 'success' : 'error');
         }
@@ -2185,6 +2186,9 @@
     window.addEventListener('resize', U.debounce(function () {
       if (state.view === 'dashboard') renderDashboard();
     }, 220));
+    window.addEventListener('tj:download-error', function (event) {
+      toast(event.detail || 'Не удалось сохранить файл.', 'error');
+    });
 
     $('#newTradeBtn').addEventListener('click', function () { openTradeModal(); });
     $('#newNoteBtn').addEventListener('click', function () { openNoteModal(); });
@@ -2198,9 +2202,9 @@
       renderCurrentView();
     });
 
-    $('#keepDemoBtn').addEventListener('click', function () {
+    $('#keepDemoBtn').addEventListener('click', async function () {
       store.state.demo = false;
-      persist();
+      await persist();
       renderDashboard();
       renderSidebar();
       toast('Демо-режим отключён, данные остались в журнале');
@@ -2210,9 +2214,13 @@
         title: 'Начать с чистого листа?',
         text: 'Демо-сделки и записи будут удалены. Настройки профиля сохранятся.',
         okLabel: 'Очистить демо'
-      }).then(function (confirmed) {
+      }).then(async function (confirmed) {
         if (!confirmed) return;
-        store.resetData(true);
+        const ok = await store.resetData(true);
+        if (!ok) {
+          toast('Не удалось сохранить очистку демо-данных.', 'error');
+          return;
+        }
         state.calCursor = monthStart(new Date());
         state.selectedDay = U.todayISO();
         renderAll();
@@ -2415,9 +2423,16 @@
      Start
      ============================================================ */
 
+  function start() {
+    init().catch(function (err) {
+      console.error('TradeJournal: не удалось запустить приложение', err);
+      toast('Не удалось запустить приложение: ' + (err && err.message ? err.message : err), 'error');
+    });
+  }
+
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', init);
+    document.addEventListener('DOMContentLoaded', start);
   } else {
-    init();
+    start();
   }
 })();

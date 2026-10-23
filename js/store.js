@@ -31,14 +31,16 @@
 
   function hasStored() {
     if (desktop) {
-      try { return desktop.hasData(); } catch (err) {
+      return Promise.resolve().then(function () {
+        return desktop.hasData();
+      }).catch(function (err) {
         // If the file cannot be checked, report that data may exist so the app
         // does not silently replace it with demo data.
         console.warn('TradeJournal: не удалось проверить файл журнала', err);
         return true;
-      }
+      });
     }
-    try { return localStorage.getItem(KEY) !== null; } catch (err) { return false; }
+    try { return Promise.resolve(localStorage.getItem(KEY) !== null); } catch (err) { return Promise.resolve(false); }
   }
 
   function parseTags(value) {
@@ -152,43 +154,58 @@
   }
 
   function load() {
-    try {
-      const raw = desktop ? desktop.load() : localStorage.getItem(KEY);
-      if (raw === null) return false;
+    const read = desktop
+      ? Promise.resolve().then(function () { return desktop.load(); })
+      : Promise.resolve().then(function () { return localStorage.getItem(KEY); });
+
+    return read.then(function (raw) {
+      if (raw === null || raw === undefined) return false;
       const parsed = JSON.parse(raw);
       if (!isJournalData(parsed)) throw new Error('Неожиданная структура журнала');
       state = normalizeData(parsed);
       loadError = null;
       return true;
-    } catch (err) {
+    }).catch(function (err) {
       loadError = err;
       console.warn('TradeJournal: не удалось прочитать данные', err);
       return false;
-    }
+    });
   }
 
   function getRaw() {
     if (desktop) {
-      try { return desktop.load(); } catch (err) { return null; }
+      return Promise.resolve().then(function () { return desktop.load(); }).catch(function () { return null; });
     }
-    try { return localStorage.getItem(KEY); } catch (err) { return null; }
+    try { return Promise.resolve(localStorage.getItem(KEY)); } catch (err) { return Promise.resolve(null); }
   }
 
   function clearRaw() {
     if (desktop) {
-      try { return desktop.clear(); } catch (err) { return false; }
+      return Promise.resolve().then(function () { return desktop.clear(); }).then(function () {
+        return true;
+      }).catch(function () {
+        return false;
+      });
     }
-    try { localStorage.removeItem(KEY); return true; } catch (err) { return false; }
+    try { localStorage.removeItem(KEY); return Promise.resolve(true); } catch (err) { return Promise.resolve(false); }
   }
 
   function save() {
+    const raw = JSON.stringify(state);
+    if (desktop) {
+      return Promise.resolve().then(function () { return desktop.save(raw); }).then(function () {
+        return true;
+      }).catch(function (err) {
+        console.warn('TradeJournal: не удалось сохранить данные', err);
+        return false;
+      });
+    }
     try {
-      if (desktop) return desktop.save(JSON.stringify(state));
-      localStorage.setItem(KEY, JSON.stringify(state));
-      return true;
+      localStorage.setItem(KEY, raw);
+      return Promise.resolve(true);
     } catch (err) {
       console.warn('TradeJournal: не удалось сохранить данные', err);
-      return false;
+      return Promise.resolve(false);
     }
   }
 

@@ -240,6 +240,15 @@
   }
 
   function download(filename, content, mime) {
+    const desktop = window.tradeJournalDesktop;
+    if (desktop && typeof desktop.saveDownload === 'function') {
+      desktop.saveDownload(filename, String(content), mime || '').catch(function (err) {
+        const message = err && err.message ? err.message : String(err || 'Не удалось сохранить файл.');
+        window.dispatchEvent(new CustomEvent('tj:download-error', { detail: message }));
+      });
+      return;
+    }
+
     const blob = new Blob([content], { type: mime || 'text/plain;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');

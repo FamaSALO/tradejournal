@@ -1,21 +1,18 @@
 {
   "name": "tradejournal",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "private": true,
   "description": "TradeJournal — локальный дневник трейдера для Windows",
   "author": "FamaSALO",
   "license": "MIT",
-  "main": "electron/main.js",
   "scripts": {
-    "start": "electron .",
-    "smoke": "electron . --smoke-test",
-    "pack": "electron-builder --dir",
-    "dist": "electron-builder --win nsis portable",
-    "dist:nsis": "electron-builder --win nsis",
-    "dist:portable": "electron-builder --win portable"
+    "web:build": "node scripts/build-web.mjs",
+    "start": "tauri dev",
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "tauri": "tauri"
   },
   "devDependencies": {
-    "electron": "45.0.0",
-    "electron-builder": "26.15.3"
+    "@tauri-apps/cli": "2.12.4"
   }
 }
