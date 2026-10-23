@@ -7,6 +7,30 @@
 
 ![Обзор TradeJournal](assets/preview.png)
 
+## Технологии и архитектура
+
+Приложение не использует UI-фреймворки и сборщик: интерфейс написан на HTML5, CSS3 и чистом JavaScript. Одни и те же файлы `index.html`, `css/` и `js/` работают как обычная веб-страница и загружаются внутри Windows-приложения.
+
+- **Windows-оболочка** — Electron 45 на Node.js. Главный процесс `electron/main.js` управляет окном, файловым хранилищем и резервными копиями.
+- **Связь интерфейса с системой** — IPC через `contextBridge`. Renderer не имеет доступа к Node.js и может вызывать только разрешённые методы `window.tradeJournalDesktop`.
+- **Защита окна** — `contextIsolation: true`, `nodeIntegration: false`, `sandbox: true`, Content Security Policy и запрет переходов внутри окна. Внешние ссылки открываются в системном браузере.
+- **Графики** — собственная отрисовка на Canvas 2D без сторонних библиотек.
+- **Хранение** — JSON-файлы в `%APPDATA%\TradeJournal`: атомарная запись, `journal.previous.json`, автоматические и ручные резервные копии. В веб-версии используется `localStorage`.
+- **Сборка** — electron-builder 26.15.3, NSIS-установщик и portable-сборка для Windows x64. Для сборки нужны Node.js 22.12+ и npm.
+- **Публикация** — GitHub Pages для веб-версии и GitHub Releases для Windows-сборок.
+
+```text
+index.html + css/ + js/          интерфейс (renderer)
+            │
+            │ window.tradeJournalDesktop
+            ▼
+electron/preload.js              contextBridge + IPC
+            ▼
+electron/main.js                 Electron + Node.js + fs
+            ▼
+%APPDATA%\TradeJournal\          journal.json, backups/
+```
+
 ## Возможности
 
 - **Обзор** — чистый P&L, винрейт, профит-фактор, средний R, просадка, серии сделок, кривая капитала и дневной P&L.
