@@ -128,7 +128,7 @@ src-tauri\target\release\bundle\nsis\TradeJournal_2.0.0_x64-setup.exe
 
 Портативную сборку можно получить, упаковав `TradeJournal.exe` в ZIP. Именно это делает CI-сборка в `.github/workflows/tauri.yml`.
 
-Если локально не установлены MSVC Build Tools, используйте готовую CI-сборку: отправьте изменения в ветку `tauri-v2`, дождитесь завершения workflow **Build Tauri app** и скачайте артефакт.
+Если локально не установлены MSVC Build Tools, используйте готовую CI-сборку: отправьте изменения в ветку `main`, дождитесь завершения workflow **Build Tauri app** и скачайте артефакт.
 
 ## Веб-версия
 
