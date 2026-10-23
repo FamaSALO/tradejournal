@@ -669,14 +669,18 @@
           </label>
         </div>
 
-        <div class="shot-field">
+        <div class="shot-field" id="shotField">
           <div class="shot-head">
             <span>Скриншот графика</span>
-            <label class="btn btn-ghost btn-sm" for="tradeShot">Загрузить</label>
-            <input type="file" id="tradeShot" accept="image/*" hidden>
-            <button type="button" class="link-btn hidden" id="removeShot">Удалить</button>
+            <div class="shot-actions">
+              <button type="button" class="btn btn-ghost btn-sm" id="pasteShot">Вставить</button>
+              <label class="btn btn-ghost btn-sm" for="tradeShot">Загрузить</label>
+              <button type="button" class="link-btn hidden" id="removeShot">Удалить</button>
+            </div>
           </div>
+          <input type="file" id="tradeShot" accept="image/*" hidden>
           <div class="shot-preview" id="shotPreview"></div>
+          <p class="shot-hint">Ctrl+V, перетащите файл или загрузите с ПК. Нажмите на скриншот, чтобы увеличить.</p>
         </div>
 
         <div class="calc-strip">
@@ -765,6 +769,16 @@
       <button type="button" class="btn btn-danger" id="confirmOk">Удалить</button>
     </footer>
   </div>
+</div>
+
+<div class="shot-lightbox" id="shotLightbox" hidden>
+  <button type="button" class="shot-lightbox-backdrop" id="shotLightboxBackdrop" tabindex="-1" aria-label="Закрыть просмотр"></button>
+  <figure class="shot-lightbox-panel" role="dialog" aria-modal="true" aria-label="Скриншот сделки">
+    <img id="shotLightboxImage" alt="Скриншот сделки">
+    <button type="button" class="icon-btn shot-lightbox-close" id="shotLightboxClose" aria-label="Закрыть">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>
+    </button>
+  </figure>
 </div>
 
 <div class="toasts" id="toasts" aria-live="polite"></div>

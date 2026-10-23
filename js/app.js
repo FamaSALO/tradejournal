@@ -28,6 +28,7 @@
     tradeId: null,
     noteId: null,
     screenshot: '',
+    shotFocus: null,
     noteMood: 'neutral',
     confirmResolver: null,
     lastFocus: null
@@ -1740,6 +1741,8 @@
   }
 
   function openTradeModal(id, presetDate) {
+    closeShotLightbox();
+    $('#shotField').classList.remove('is-dragover');
     const trade = id ? store.state.trades.find(function (t) { return t.id === id; }) : null;
     state.tradeId = trade ? trade.id : null;
     state.screenshot = trade && trade.screenshot ? trade.screenshot : '';
@@ -1795,15 +1798,48 @@
     const remove = $('#removeShot');
     box.innerHTML = '';
     if (state.screenshot) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'shot-open';
+      button.title = 'Открыть скриншот на весь экран';
+      button.setAttribute('aria-label', 'Открыть скриншот в полном размере');
+      button.addEventListener('click', openShotLightbox);
       const image = document.createElement('img');
       image.src = state.screenshot;
       image.alt = 'Скриншот сделки';
-      box.appendChild(image);
+      button.appendChild(image);
+      box.appendChild(button);
       box.classList.add('has');
       remove.classList.remove('hidden');
     } else {
       box.classList.remove('has');
       remove.classList.add('hidden');
+    }
+  }
+
+  function openShotLightbox() {
+    if (!state.screenshot) return;
+    const lightbox = $('#shotLightbox');
+    const image = $('#shotLightboxImage');
+    if (!lightbox || !image) return;
+    state.shotFocus = document.activeElement;
+    image.src = state.screenshot;
+    lightbox.hidden = false;
+    $('#shotLightboxClose').focus();
+  }
+
+  function closeShotLightbox() {
+    const lightbox = $('#shotLightbox');
+    if (!lightbox || lightbox.hidden) return;
+    lightbox.hidden = true;
+    $('#shotLightboxImage').removeAttribute('src');
+    let focus = state.shotFocus;
+    state.shotFocus = null;
+    if (!focus || focus === document.body || !document.contains(focus)) {
+      focus = $('#shotPreview .shot-open');
+    }
+    if (focus && document.contains(focus)) {
+      try { focus.focus(); } catch (err) { /* ignore */ }
     }
   }
 
@@ -1837,6 +1873,50 @@
     };
     reader.onerror = function () { toast('Не удалось прочитать файл.', 'error'); };
     reader.readAsDataURL(file);
+  }
+
+  async function pasteScreenshotFromClipboard() {
+    if (!navigator.clipboard || typeof navigator.clipboard.read !== 'function') {
+      toast('Нажмите Ctrl+V, чтобы вставить скриншот из буфера.', 'warn');
+      return;
+    }
+    try {
+      const items = await navigator.clipboard.read();
+      for (const item of items) {
+        const type = item.types.find(function (value) { return value.indexOf('image/') === 0; });
+        if (!type) continue;
+        const blob = await item.getType(type);
+        compressScreenshot(new File([blob], 'clipboard.' + (type.split('/')[1] || 'png'), { type: type }));
+        return;
+      }
+      toast('В буфере обмена нет изображения.', 'warn');
+    } catch (err) {
+      toast('Не удалось прочитать буфер. Нажмите Ctrl+V.', 'warn');
+    }
+  }
+
+  function handleScreenshotPaste(event) {
+    const modal = $('#tradeModal');
+    if (!modal || modal.hidden) return;
+    const data = event.clipboardData;
+    if (!data) return;
+    let file = null;
+    if (data.items) {
+      for (const item of data.items) {
+        if (item.kind === 'file' && item.type.indexOf('image/') === 0) {
+          file = item.getAsFile();
+          if (file) break;
+        }
+      }
+    }
+    if (!file && data.files) {
+      file = Array.prototype.find.call(data.files, function (item) {
+        return item.type.indexOf('image/') === 0;
+      }) || null;
+    }
+    if (!file) return;
+    event.preventDefault();
+    compressScreenshot(file);
   }
 
   function updateTradePreview() {
@@ -2179,6 +2259,7 @@
   function bindEvents() {
     document.addEventListener('click', handleGlobalClick);
     document.addEventListener('keydown', handleKeydown);
+    document.addEventListener('paste', handleScreenshotPaste);
     window.addEventListener('hashchange', function () {
       const view = String(location.hash || '').replace('#', '');
       if (VIEW_META[view] && view !== state.view) navigate(view, { push: false });
@@ -2300,9 +2381,34 @@
       compressScreenshot(file);
       event.target.value = '';
     });
+    $('#pasteShot').addEventListener('click', pasteScreenshotFromClipboard);
     $('#removeShot').addEventListener('click', function () {
       state.screenshot = '';
       renderShotPreview();
+    });
+    $('#shotLightboxClose').addEventListener('click', closeShotLightbox);
+    $('#shotLightboxBackdrop').addEventListener('click', closeShotLightbox);
+
+    const shotField = $('#shotField');
+    ['dragenter', 'dragover'].forEach(function (type) {
+      shotField.addEventListener(type, function (event) {
+        if (!event.dataTransfer || Array.prototype.indexOf.call(event.dataTransfer.types, 'Files') === -1) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = 'copy';
+        shotField.classList.add('is-dragover');
+      });
+    });
+    shotField.addEventListener('dragleave', function (event) {
+      const next = event.relatedTarget;
+      if (!next || next.nodeType !== 1 || !shotField.contains(next)) {
+        shotField.classList.remove('is-dragover');
+      }
+    });
+    shotField.addEventListener('drop', function (event) {
+      event.preventDefault();
+      shotField.classList.remove('is-dragover');
+      const file = event.dataTransfer && event.dataTransfer.files && event.dataTransfer.files[0];
+      if (file) compressScreenshot(file);
     });
     $('#tradeForm').addEventListener('input', updateTradePreview);
     $('#tradeForm').addEventListener('submit', saveTrade);
@@ -2382,6 +2488,11 @@
 
   function handleKeydown(event) {
     if (event.key === 'Escape') {
+      const lightbox = $('#shotLightbox');
+      if (lightbox && !lightbox.hidden) {
+        closeShotLightbox();
+        return;
+      }
       const open = $$('.modal').filter(function (modal) { return !modal.hidden; });
       if (open.length) {
         closeModal(open[open.length - 1].id);

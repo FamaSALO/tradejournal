@@ -1051,12 +1051,57 @@ svg { display: block; }
 .mood-btn.active { border-color: var(--mood-color, var(--violet)); background: rgba(157, 123, 255, 0.09); color: #ddd3ff; }
 .mood-btn .m-emoji { font-size: 13px; line-height: 1; }
 
-.shot-field { margin-top: 15px; padding: 12px; border: 1px dashed rgba(148, 178, 212, 0.17); border-radius: 10px; background: rgba(255, 255, 255, 0.012); }
+.shot-field { margin-top: 15px; padding: 12px; border: 1px dashed rgba(148, 178, 212, 0.17); border-radius: 10px; background: rgba(255, 255, 255, 0.012); transition: border-color 0.14s ease, background 0.14s ease; }
+.shot-field.is-dragover { border-color: rgba(49, 227, 170, 0.7); background: rgba(49, 227, 170, 0.06); }
 .shot-head { display: flex; align-items: center; gap: 8px; font-size: 10.5px; color: var(--muted); }
-.shot-head .btn { margin-left: auto; }
+.shot-actions { display: flex; align-items: center; flex-wrap: wrap; justify-content: flex-end; gap: 6px; margin-left: auto; }
+.shot-actions .link-btn { margin-left: 2px; }
+.shot-hint { margin: 8px 0 0; font-size: 9.5px; line-height: 1.5; color: var(--muted-2); }
 .shot-preview { display: none; margin-top: 10px; }
 .shot-preview.has { display: block; }
-.shot-preview img { display: block; max-width: 100%; max-height: 180px; border-radius: 7px; border: 1px solid var(--border); }
+.shot-open { display: block; max-width: 100%; padding: 0; border: 0; border-radius: 8px; background: none; cursor: zoom-in; }
+.shot-open:focus-visible { outline: 2px solid var(--green); outline-offset: 3px; }
+.shot-open img { display: block; max-width: 100%; max-height: 180px; border-radius: 7px; border: 1px solid var(--border); transition: border-color 0.14s ease; }
+.shot-open:hover img { border-color: rgba(49, 227, 170, 0.55); }
+
+/* ============================ Screenshot lightbox ============================ */
+.shot-lightbox { position: fixed; inset: 0; z-index: 400; display: grid; place-items: center; padding: clamp(10px, 3vw, 30px); }
+.shot-lightbox[hidden] { display: none; }
+.shot-lightbox-backdrop {
+  position: absolute;
+  inset: 0;
+  border: 0;
+  background: rgba(3, 6, 10, 0.9);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  animation: fadeIn 0.16s ease;
+  cursor: zoom-out;
+}
+.shot-lightbox-panel {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  max-width: min(1400px, 96vw);
+  max-height: calc(100vh - 2 * clamp(10px, 3vw, 30px));
+  margin: 0;
+  border: 1px solid rgba(148, 178, 212, 0.24);
+  border-radius: 12px;
+  background: #05090d;
+  box-shadow: 0 30px 100px rgba(0, 0, 0, 0.78);
+  overflow: hidden;
+  animation: popIn 0.18s cubic-bezier(0.2, 0.8, 0.25, 1);
+}
+.shot-lightbox-panel img { display: block; width: auto; height: auto; max-width: 100%; max-height: calc(100vh - 2 * clamp(10px, 3vw, 30px)); object-fit: contain; }
+.shot-lightbox-close {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  background: rgba(8, 13, 19, 0.86);
+  border: 1px solid rgba(148, 178, 212, 0.25);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+}
+.shot-lightbox-close:hover { background: rgba(17, 26, 37, 0.96); }
 
 .calc-strip {
   display: grid;
@@ -1312,6 +1357,12 @@ svg { display: block; }
   .modal-panel { width: 100%; max-height: 100vh; border-radius: 0; border: 0; }
   .modal-body { padding: 15px 16px; }
   .modal-head, .modal-foot { padding: 14px 16px; }
+  .shot-head { align-items: flex-start; flex-wrap: wrap; }
+  .shot-actions { width: 100%; justify-content: flex-start; margin-left: 0; }
+  .shot-hint { font-size: 9px; }
+  .shot-lightbox { padding: 6px; }
+  .shot-lightbox-panel { max-width: 100%; border-radius: 8px; }
+  .shot-lightbox-panel img { max-width: 100%; max-height: calc(100vh - 12px); }
   .calc-strip { grid-template-columns: 1fr; gap: 7px; }
   .cs-item { display: flex; justify-content: space-between; align-items: baseline; }
   .cs-item span { margin: 0; }
