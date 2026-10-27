@@ -28,6 +28,7 @@
     calCursor: monthStart(new Date()),
     selectedDay: U.todayISO(),
     tradeId: null,
+    tradeOriginalId: null,
     tradeAccountId: null,
     tradeBaseline: null,
     tradeBaselineScreenshot: '',
@@ -2227,6 +2228,7 @@
     state.tradeInitializing = true;
     state.tradeAccountId = accountId;
     state.tradeId = trade ? trade.id : null;
+    state.tradeOriginalId = trade ? trade.id : null;
     state.tradeBaseline = tradeFieldsFromTrade(trade, presetDate);
     state.tradeBaselineScreenshot = trade && trade.screenshot ? trade.screenshot : '';
     state.screenshot = state.tradeBaselineScreenshot;
@@ -2602,6 +2604,7 @@
       }
 
       clearTradeDraft(draftTradeId, accountId);
+      clearTradeDraft(state.tradeOriginalId, accountId);
       clearTradeDraft(trade.id, accountId);
       state.tradeDirty = false;
       state.tradeBaseline = tradeFieldsFromTrade(trade);
