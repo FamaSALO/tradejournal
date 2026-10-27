@@ -2193,6 +2193,9 @@
 
   function clearCurrentTradeDraft() {
     clearTradeDraft(state.tradeId, state.tradeAccountId);
+    if (state.tradeOriginalId !== state.tradeId) {
+      clearTradeDraft(state.tradeOriginalId, state.tradeAccountId);
+    }
   }
 
   function clearAccountDrafts(accountId) {
