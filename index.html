@@ -56,6 +56,10 @@
     </nav>
 
     <div class="sidebar-bottom">
+      <label class="account-switch">
+        <span>Активный счёт</span>
+        <select id="sidebarAccountSelect" aria-label="Активный счёт"></select>
+      </label>
       <div class="balance-card">
         <span class="balance-label">Баланс счёта</span>
         <strong id="sidebarBalance">$10 000.00</strong>
@@ -93,7 +97,8 @@
           </select>
         </label>
         <button class="avatar" id="avatarBtn" title="Профиль и настройки">
-          <span id="avatarInitials">T</span>
+          <img id="avatarImage" alt="" hidden>
+          <span id="avatarInitials">TJ</span>
         </button>
         <button class="btn btn-primary" id="newTradeBtn">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
@@ -443,15 +448,60 @@
       <!-- ================= SETTINGS ================= -->
       <section class="view" data-panel="settings">
         <div class="grid">
+          <article class="card span-12 profile-accounts-card">
+            <header class="card-head">
+              <div class="card-title"><h2>Профиль и счета</h2><p>Профиль общий для всех счетов, у каждого счёта своя статистика и настройки</p></div>
+              <span class="chip" id="activeAccountChip">Основной счёт</span>
+            </header>
+            <div class="profile-layout">
+              <form id="profileForm" class="profile-panel" autocomplete="off">
+                <div class="profile-avatar-wrap">
+                  <div class="profile-avatar" id="profileAvatarPreview"><span>TJ</span></div>
+                  <div class="profile-avatar-actions">
+                    <label class="btn btn-ghost btn-sm" for="profileAvatarInput">Загрузить фото</label>
+                    <input type="file" id="profileAvatarInput" accept="image/*" hidden>
+                    <button type="button" class="btn btn-ghost btn-sm" id="removeAvatarBtn">Удалить</button>
+                  </div>
+                  <p class="muted small">JPG, PNG или WebP. Фото сжимается автоматически.</p>
+                </div>
+                <div class="profile-fields">
+                  <label class="field">
+                    <span>Имя трейдера</span>
+                    <input type="text" id="profileName" maxlength="40" placeholder="Например, Артём">
+                  </label>
+                  <div class="form-actions">
+                    <button type="submit" class="btn btn-primary">Сохранить профиль</button>
+                    <span class="muted" id="profileSavedAt"></span>
+                  </div>
+                </div>
+              </form>
+
+              <div class="account-panel">
+                <div class="account-head">
+                  <div>
+                    <span class="desktop-label">Активный счёт</span>
+                    <strong id="accountMeta">—</strong>
+                  </div>
+                </div>
+                <label class="field">
+                  <span>Счёт</span>
+                  <select id="accountSelect"></select>
+                </label>
+                <div class="account-actions">
+                  <button type="button" class="btn btn-ghost btn-sm" id="newAccountBtn">+ Новый счёт</button>
+                  <button type="button" class="btn btn-ghost btn-sm" id="renameAccountBtn">Переименовать</button>
+                  <button type="button" class="btn btn-danger-ghost btn-sm" id="deleteAccountBtn">Удалить</button>
+                </div>
+                <p class="muted small">У каждого счёта свои сделки, записи и риск-настройки. Профиль и аватар общие.</p>
+              </div>
+            </div>
+          </article>
+
           <article class="card span-7">
             <header class="card-head">
-              <div class="card-title"><h2>Профиль и риск-менеджмент</h2><p>Эти значения используются в статистике и калькуляторе</p></div>
+              <div class="card-title"><h2>Риск-менеджмент</h2><p>Эти значения используются в статистике и калькуляторе активного счёта</p></div>
             </header>
             <form id="settingsForm" class="form-grid settings-form" autocomplete="off">
-              <label class="field">
-                <span>Имя трейдера</span>
-                <input type="text" id="settingName" maxlength="40" placeholder="Например, Артём">
-              </label>
               <label class="field">
                 <span>Валюта</span>
                 <select id="settingCurrency">
@@ -509,13 +559,13 @@
             <div class="storage-block">
               <div class="storage-head"><span>Использование хранилища</span><strong id="storageText">—</strong></div>
               <div class="storage-meter"><i id="storageBar"></i></div>
-              <p class="muted small">В веб-версии данные лежат в localStorage браузера, в Windows-приложении — в локальных файлах. Очистка кэша браузера удалит журнал — держите резервную копию.</p>
+              <p class="muted small">В веб-версии данные лежат в localStorage браузера, в Windows-приложении — в локальных файлах, а скриншоты — отдельно в папке <b>screenshots</b>. Очистка кэша браузера удалит журнал — держите резервную копию.</p>
             </div>
 
             <div class="danger-zone">
               <span class="danger-label">Опасная зона</span>
-              <button class="btn btn-ghost" id="loadDemoBtn">Перезагрузить демо-данные</button>
-              <button class="btn btn-danger-ghost" id="resetAllBtn">Очистить все данные</button>
+              <button class="btn btn-ghost" id="loadDemoBtn">Загрузить демо в активный счёт</button>
+              <button class="btn btn-danger-ghost" id="resetAllBtn">Очистить активный счёт</button>
             </div>
           </article>
 
@@ -532,7 +582,7 @@
               <div class="desktop-path-wrap">
                 <span class="desktop-label">Файл журнала</span>
                 <code id="desktopDataPath">…</code>
-                <p class="muted small">Основной файл — <b>journal.json</b>. Резервные копии находятся в папке <b>backups</b>.</p>
+                <p class="muted small">Основной файл — <b>journal.json</b>, скриншоты — в папке <b>screenshots</b>, резервные копии — в <b>backups</b>.</p>
               </div>
               <div class="desktop-actions">
                 <button class="btn btn-ghost" id="openDataFolderBtn">
@@ -546,7 +596,7 @@
               </div>
             </div>
 
-            <p class="muted small desktop-transfer-note">Перенос из веб-версии: сделайте «Экспорт JSON» в браузере и выберите «Импорт JSON» здесь.</p>
+            <p class="muted small desktop-transfer-note">Перенос из веб-версии: сделайте «Экспорт JSON» в браузере и выберите «Импорт JSON» здесь. Скриншоты в экспорте встроены в файл.</p>
 
             <div class="desktop-backups">
               <div class="storage-head">
@@ -562,7 +612,7 @@
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17.5 8.5 12l4 3L21 6"/><path d="M15 6h6v6"/></svg>
             </div>
             <div>
-              <h3>TradeJournal <span class="version">v1.0</span></h3>
+              <h3>TradeJournal <span class="version" id="appVersion">v2.1.0</span></h3>
               <p>Локальный дневник трейдера без серверов и регистрации. Сделки, календарь P&L, аналитика по сетапам и эмоциям, журнал наблюдений и калькулятор риска — всё в одном приложении. <span class="kbd">N</span> — новая сделка, <span class="kbd">Esc</span> — закрыть окно.</p>
             </div>
           </article>
@@ -579,8 +629,8 @@
   <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="tradeModalTitle">
     <header class="modal-head">
       <div>
-        <h2 id="tradeModalTitle">Новая сделка</h2>
-        <p>Заполните данные — статистика обновится автоматически</p>
+        <h2 id="tradeModalTitle"><span id="tradeModalTitleText">Новая сделка</span> <span class="draft-badge" id="draftBadge" hidden>черновик</span></h2>
+        <p>Заполните данные — статистика обновится автоматически · <span class="kbd">Ctrl</span>+<span class="kbd">Enter</span> — сохранить</p>
       </div>
       <button type="button" class="icon-btn" data-close="tradeModal" aria-label="Закрыть">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>
@@ -692,6 +742,7 @@
       </div>
       <footer class="modal-foot">
         <button type="button" class="btn btn-danger-ghost hidden" id="deleteTradeBtn">Удалить</button>
+        <button type="button" class="link-btn draft-reset hidden" id="discardDraftBtn">Сбросить черновик</button>
         <div class="spacer"></div>
         <button type="button" class="btn btn-ghost" data-close="tradeModal">Отмена</button>
         <button type="submit" class="btn btn-primary" id="saveTradeBtn">Сохранить</button>
@@ -745,6 +796,36 @@
         <div class="spacer"></div>
         <button type="button" class="btn btn-ghost" data-close="noteModal">Отмена</button>
         <button type="submit" class="btn btn-primary" id="saveNoteBtn">Сохранить</button>
+      </footer>
+    </form>
+  </div>
+</div>
+
+<!-- ================= ACCOUNT MODAL ================= -->
+<div class="modal" id="accountModal" hidden>
+  <div class="modal-backdrop" data-close="accountModal"></div>
+  <div class="modal-panel modal-sm" role="dialog" aria-modal="true" aria-labelledby="accountModalTitle">
+    <header class="modal-head">
+      <div>
+        <h2 id="accountModalTitle">Новый счёт</h2>
+        <p id="accountModalHint">Дайте счёту понятное название</p>
+      </div>
+      <button type="button" class="icon-btn" data-close="accountModal" aria-label="Закрыть">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>
+      </button>
+    </header>
+    <form id="accountForm" novalidate>
+      <div class="modal-body">
+        <label class="field">
+          <span>Название счёта *</span>
+          <input type="text" id="accountName" maxlength="40" placeholder="Например, Основной счёт" autocomplete="off" required>
+        </label>
+        <p class="form-error" id="accountError" hidden></p>
+      </div>
+      <footer class="modal-foot">
+        <div class="spacer"></div>
+        <button type="button" class="btn btn-ghost" data-close="accountModal">Отмена</button>
+        <button type="submit" class="btn btn-primary" id="saveAccountBtn">Создать счёт</button>
       </footer>
     </form>
   </div>

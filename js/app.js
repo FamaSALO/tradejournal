@@ -4,6 +4,8 @@
   const U = NS.utils;
   const store = NS.store;
   const desktop = window.tradeJournalDesktop || null;
+  const APP_VERSION = '2.1.0';
+  const DRAFT_PREFIX = 'tradejournal.draft.v1.';
 
   const $ = function (selector, root) { return (root || document).querySelector(selector); };
   const $$ = function (selector, root) { return Array.prototype.slice.call((root || document).querySelectorAll(selector)); };
@@ -26,10 +28,22 @@
     calCursor: monthStart(new Date()),
     selectedDay: U.todayISO(),
     tradeId: null,
+    tradeAccountId: null,
+    tradeBaseline: null,
+    tradeBaselineScreenshot: '',
+    tradeDirty: false,
+    tradeSaving: false,
+    tradeInitializing: false,
+    tradeDraftTimer: null,
+    draftQuotaWarned: false,
     noteId: null,
     screenshot: '',
+    screenshotPreview: '',
+    screenshotBusy: false,
     shotFocus: null,
     noteMood: 'neutral',
+    profileAvatarDraft: '',
+    accountModalMode: 'create',
     confirmResolver: null,
     lastFocus: null
   };
@@ -47,11 +61,15 @@
         showRecoveryScreen(await store.getRaw());
         return;
       }
+      const migratedShots = await store.migrateScreenshots();
+      if (migratedShots) console.info('TradeJournal: скриншоты перенесены в файлы:', migratedShots);
+      if (store.needsMigration) await store.save();
     } else {
       const demoOk = await store.setDemo(NS.sample.generate());
       if (!demoOk) toast('Не удалось сохранить демо-данные. Проверьте папку данных.', 'error');
     }
     applyCurrency();
+    setVersionLabel(APP_VERSION);
     buildMoodPicker();
     buildEmotionSelect();
     refreshDatalists();
@@ -61,6 +79,11 @@
     const hashView = String(location.hash || '').replace('#', '');
     const initialView = VIEW_META[hashView] ? hashView : 'dashboard';
     navigate(initialView, { push: false, scroll: false });
+  }
+
+  function setVersionLabel(version) {
+    const label = $('#appVersion');
+    if (label) label.textContent = 'v' + (version || APP_VERSION);
   }
 
   function showRecoveryScreen(rawData) {
@@ -196,12 +219,45 @@
 
     $('#navTradesCount').textContent = store.state.trades.length;
 
-    const name = (settings.name || '').trim();
-    const initials = name
-      ? name.split(/\s+/).slice(0, 2).map(function (part) { return part.charAt(0).toUpperCase(); }).join('')
+    renderAvatar();
+    renderSidebarAccounts();
+  }
+
+  function initialsOf(name) {
+    const text = String(name || '').trim();
+    return text
+      ? text.split(/\s+/).slice(0, 2).map(function (part) { return part.charAt(0).toUpperCase(); }).join('')
       : 'TJ';
-    $('#avatarInitials').textContent = initials;
-    $('#avatarBtn').title = name ? name + ' — профиль и настройки' : 'Профиль и настройки';
+  }
+
+  function renderAvatar() {
+    const profile = store.state.profile || {};
+    const name = (profile.name || '').trim();
+    const image = $('#avatarImage');
+    const initials = $('#avatarInitials');
+    if (image && initials) {
+      if (profile.avatar) {
+        image.src = profile.avatar;
+        image.hidden = false;
+        initials.hidden = true;
+      } else {
+        image.removeAttribute('src');
+        image.hidden = true;
+        initials.hidden = false;
+        initials.textContent = initialsOf(name);
+      }
+    }
+    const button = $('#avatarBtn');
+    if (button) button.title = name ? name + ' — профиль и настройки' : 'Профиль и настройки';
+  }
+
+  function renderSidebarAccounts() {
+    const select = $('#sidebarAccountSelect');
+    if (!select) return;
+    select.innerHTML = store.state.accounts.map(function (account) {
+      return '<option value="' + U.escapeHtml(account.id) + '">' + U.escapeHtml(account.name) + '</option>';
+    }).join('');
+    select.value = store.state.activeAccountId;
   }
 
   function toneClass(value) {
@@ -1360,13 +1416,35 @@
 
   function renderSettings() {
     const settings = store.state.settings;
-    $('#settingName').value = settings.name || '';
+    const account = store.activeAccount();
+    const profile = store.state.profile || {};
+
+    $('#profileName').value = profile.name || '';
+    state.profileAvatarDraft = profile.avatar || '';
+    renderProfileAvatar();
+    $('#profileSavedAt').textContent = '';
+
+    const accountSelect = $('#accountSelect');
+    if (accountSelect) {
+      accountSelect.innerHTML = store.state.accounts.map(function (item) {
+        return '<option value="' + U.escapeHtml(item.id) + '">' + U.escapeHtml(item.name) + '</option>';
+      }).join('');
+      accountSelect.value = store.state.activeAccountId;
+    }
+    $('#activeAccountChip').textContent = account ? account.name : '—';
+    $('#accountMeta').textContent = account
+      ? account.name + ' · ' + account.trades.length + ' ' + pluralTrades(account.trades.length) + ' · ' +
+        account.notes.length + ' ' + pluralNotes(account.notes.length)
+      : '—';
+    $('#deleteAccountBtn').disabled = store.state.accounts.length <= 1;
+
     $('#settingCurrency').value = settings.currency || '$';
     $('#settingBalance').value = settings.startBalance;
     $('#settingRisk').value = settings.riskPercent;
     $('#settingDailyLimit').value = settings.dailyLossLimit;
     $('#settingMaxTrades').value = settings.maxTradesPerDay;
     $('#settingsSavedAt').textContent = '';
+    setVersionLabel(APP_VERSION);
 
     const size = store.storageSize();
     const storageLimit = desktop ? 100 * 1024 * 1024 : 5 * 1024 * 1024;
@@ -1375,6 +1453,26 @@
     $('#storageBar').style.width = Math.max(pct > 0 ? 2 : 0, pct) + '%';
 
     if (desktop) refreshDesktopBackups();
+  }
+
+  function pluralNotes(n) {
+    return U.plural(n, ['запись', 'записи', 'записей']);
+  }
+
+  function renderProfileAvatar() {
+    const box = $('#profileAvatarPreview');
+    if (!box) return;
+    box.innerHTML = '';
+    if (state.profileAvatarDraft) {
+      const image = document.createElement('img');
+      image.src = state.profileAvatarDraft;
+      image.alt = 'Аватар профиля';
+      box.appendChild(image);
+      return;
+    }
+    const initials = document.createElement('span');
+    initials.textContent = initialsOf($('#profileName') ? $('#profileName').value : '');
+    box.appendChild(initials);
   }
 
   function desktopReasonLabel(reason) {
@@ -1426,6 +1524,7 @@
         $('#desktopDataPath').textContent = path;
         $('#desktopDataPath').title = path;
       }
+      if (info && info.version) setVersionLabel(info.version);
     } catch (err) {
       $('#desktopDataPath').textContent = 'Не удалось получить путь к данным';
     }
@@ -1503,6 +1602,9 @@
           toast('Копия записана в файл, но приложение не смогло её перечитать. Перезапустите приложение.', 'error');
           return;
         }
+        await store.migrateScreenshots();
+        if (store.needsMigration) await store.save();
+        clearAllDrafts();
         applyCurrency();
         state.calCursor = monthStart(new Date());
         state.selectedDay = U.todayISO();
@@ -1517,7 +1619,6 @@
 
   async function saveSettings(event) {
     event.preventDefault();
-    const name = $('#settingName').value.trim();
     const currency = $('#settingCurrency').value || '$';
     const balance = U.parseNum($('#settingBalance').value);
     const risk = U.parseNum($('#settingRisk').value);
@@ -1530,7 +1631,6 @@
     if (maxTrades === null || maxTrades < 0) return toast('Максимум сделок в день должен быть неотрицательным.', 'error');
 
     store.state.settings = {
-      name: name,
       currency: currency,
       startBalance: balance,
       riskPercent: risk,
@@ -1548,18 +1648,193 @@
     }
   }
 
-  function exportJSON() {
-    const payload = {
-      app: 'TradeJournal',
-      version: 1,
-      exportedAt: new Date().toISOString(),
-      demo: !!store.state.demo,
-      settings: store.state.settings,
-      trades: store.state.trades,
-      notes: store.state.notes
+  async function saveProfile(event) {
+    event.preventDefault();
+    const name = $('#profileName').value.trim().slice(0, 40);
+    store.state.profile = {
+      name: name,
+      avatar: state.profileAvatarDraft || ''
     };
-    U.download('tradejournal-' + U.todayISO() + '.json', JSON.stringify(payload, null, 2), 'application/json');
-    toast('Резервная копия скачана');
+    const ok = await persist();
+    if (!ok) return;
+    state.profileAvatarDraft = store.state.profile.avatar || '';
+    renderSidebar();
+    renderProfileAvatar();
+    $('#profileSavedAt').textContent = 'Сохранено в ' + new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+    toast('Профиль сохранён');
+  }
+
+  function compressAvatar(file) {
+    if (!file) return;
+    if (!/^image\//.test(file.type)) {
+      toast('Можно загрузить только изображение.', 'error');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = function () {
+      const image = new Image();
+      image.onload = function () {
+        const side = Math.min(image.width, image.height);
+        if (!side) {
+          toast('Не удалось обработать изображение.', 'error');
+          return;
+        }
+        const max = 256;
+        const scale = Math.min(1, max / side);
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.max(1, Math.round(side * scale));
+        canvas.height = Math.max(1, Math.round(side * scale));
+        const ctx = canvas.getContext('2d');
+        const sx = Math.max(0, (image.width - side) / 2);
+        const sy = Math.max(0, (image.height - side) / 2);
+        ctx.drawImage(image, sx, sy, side, side, 0, 0, canvas.width, canvas.height);
+        try {
+          state.profileAvatarDraft = canvas.toDataURL('image/jpeg', 0.84);
+          renderProfileAvatar();
+          toast('Аватар обновлён — нажмите «Сохранить профиль»');
+        } catch (err) {
+          toast('Не удалось обработать изображение.', 'error');
+        }
+      };
+      image.onerror = function () { toast('Не удалось открыть изображение.', 'error'); };
+      image.src = String(reader.result);
+    };
+    reader.onerror = function () { toast('Не удалось прочитать файл.', 'error'); };
+    reader.readAsDataURL(file);
+  }
+
+  function openAccountModal(mode) {
+    state.accountModalMode = mode === 'rename' ? 'rename' : 'create';
+    const account = store.activeAccount();
+    const rename = state.accountModalMode === 'rename';
+    $('#accountModalTitle').textContent = rename ? 'Переименовать счёт' : 'Новый счёт';
+    $('#accountModalHint').textContent = rename ? 'Новое название активного счёта' : 'Дайте счёту понятное название';
+    $('#accountName').value = rename && account ? account.name : '';
+    $('#saveAccountBtn').textContent = rename ? 'Сохранить название' : 'Создать счёт';
+    $('#accountError').hidden = true;
+    openModal('accountModal', '#accountName');
+  }
+
+  async function saveAccount(event) {
+    event.preventDefault();
+    const name = $('#accountName').value.trim().slice(0, 40);
+    if (!name) {
+      $('#accountError').hidden = false;
+      $('#accountError').textContent = 'Укажите название счёта.';
+      return;
+    }
+    const rename = state.accountModalMode === 'rename';
+    const account = store.activeAccount();
+    if (rename) {
+      if (!account || !store.renameAccount(account.id, name)) {
+        $('#accountError').hidden = false;
+        $('#accountError').textContent = 'Не удалось переименовать счёт.';
+        return;
+      }
+    } else {
+      store.addAccount(name);
+    }
+    const ok = await persist();
+    if (!ok) {
+      $('#accountError').hidden = false;
+      $('#accountError').textContent = 'Не удалось сохранить счёт. Проверьте папку данных.';
+      return;
+    }
+    closeModal('accountModal');
+    applyCurrency();
+    state.calCursor = monthStart(new Date());
+    state.selectedDay = U.todayISO();
+    renderAll();
+    toast(rename ? 'Счёт переименован' : 'Счёт создан');
+  }
+
+  async function switchAccount(id) {
+    if (!id || id === store.state.activeAccountId) return;
+    if (!$('#tradeModal').hidden) {
+      if (state.screenshotBusy) {
+        toast('Скриншот ещё сохраняется, подождите пару секунд.', 'warn');
+        renderSidebarAccounts();
+        renderSettings();
+        return;
+      }
+      saveDraftNow();
+      closeModal('tradeModal');
+    }
+    const previous = store.state.activeAccountId;
+    if (!store.setActiveAccount(id)) return;
+    const ok = await persist();
+    if (!ok) {
+      store.setActiveAccount(previous);
+      renderAll();
+      toast('Не удалось переключить счёт: данные не сохранены.', 'error');
+      return;
+    }
+    applyCurrency();
+    state.calCursor = monthStart(new Date());
+    state.selectedDay = U.todayISO();
+    renderAll();
+    const account = store.activeAccount();
+    toast('Активный счёт: ' + (account ? account.name : '—'));
+  }
+
+  function deleteActiveAccount() {
+    const account = store.activeAccount();
+    if (!account) return;
+    if (store.state.accounts.length <= 1) {
+      toast('Нельзя удалить единственный счёт.', 'warn');
+      return;
+    }
+    askConfirm({
+      title: 'Удалить счёт?',
+      text: 'Счёт «' + account.name + '» и все его сделки и записи будут удалены. Сразу после удаления действие можно будет отменить.',
+      okLabel: 'Удалить'
+    }).then(async function (confirmed) {
+      if (!confirmed) return;
+      const before = JSON.parse(JSON.stringify(store.state));
+      const id = account.id;
+      if (!store.deleteAccount(id)) {
+        toast('Не удалось удалить счёт.', 'error');
+        return;
+      }
+      const ok = await persist();
+      if (!ok) {
+        await store.replaceData(before);
+        renderAll();
+        toast('Удаление не сохранено: данные оставлены прежними.', 'error');
+        return;
+      }
+      clearAccountDrafts(id);
+      applyCurrency();
+      state.calCursor = monthStart(new Date());
+      state.selectedDay = U.todayISO();
+      renderAll();
+      toast('Счёт удалён', 'success', {
+        label: 'Отменить',
+        onClick: async function () {
+          const restored = await store.replaceData(before);
+          applyCurrency();
+          state.calCursor = monthStart(new Date());
+          state.selectedDay = U.todayISO();
+          renderAll();
+          toast(restored ? 'Счёт восстановлен' : 'Не удалось восстановить счёт', restored ? 'success' : 'error');
+        }
+      });
+    });
+  }
+
+  async function exportJSON() {
+    try {
+      const snapshot = await store.exportSnapshot();
+      const payload = Object.assign({}, snapshot, {
+        app: 'TradeJournal',
+        appVersion: APP_VERSION,
+        exportedAt: new Date().toISOString()
+      });
+      U.download('tradejournal-' + U.todayISO() + '.json', JSON.stringify(payload, null, 2), 'application/json');
+      toast('Резервная копия скачана');
+    } catch (err) {
+      toast('Не удалось подготовить экспорт: ' + (err && err.message ? err.message : err), 'error');
+    }
   }
 
   function csvCell(value) {
@@ -1629,7 +1904,7 @@
       }
       askConfirm({
         title: 'Импортировать данные?',
-        text: 'Текущие сделки и записи будут заменены данными из файла. Рекомендуем сначала сделать экспорт текущего журнала. Сразу после импорта действие можно будет отменить.',
+        text: 'Все счета, сделки и записи будут заменены данными из файла. Рекомендуем сначала сделать экспорт текущего журнала. Сразу после импорта действие можно будет отменить.',
         okLabel: 'Импортировать'
       }).then(async function (confirmed) {
         if (!confirmed) return;
@@ -1642,14 +1917,20 @@
           toast('Импорт не сохранён: не удалось записать данные. Журнал оставлен прежним.', 'error');
           return;
         }
+        await store.migrateScreenshots();
+        clearAllDrafts();
         applyCurrency();
         state.calCursor = monthStart(new Date());
         state.selectedDay = U.todayISO();
         renderAll();
-        toast('Импортировано: ' + store.state.trades.length + ' ' + pluralTrades(store.state.trades.length) + ' и ' + store.state.notes.length + ' записей', 'success', {
+        const importedAccounts = store.state.accounts.length;
+        const importedTrades = store.state.accounts.reduce(function (sum, account) { return sum + account.trades.length; }, 0);
+        const importedNotes = store.state.accounts.reduce(function (sum, account) { return sum + account.notes.length; }, 0);
+        toast('Импортировано: счетов ' + importedAccounts + ', сделок ' + importedTrades + ', записей ' + importedNotes, 'success', {
           label: 'Отменить',
           onClick: async function () {
             const restored = await store.replaceData(before);
+            clearAllDrafts();
             applyCurrency();
             state.calCursor = monthStart(new Date());
             state.selectedDay = U.todayISO();
@@ -1666,7 +1947,7 @@
   function loadDemoData() {
     askConfirm({
       title: 'Загрузить демо-данные?',
-      text: 'Текущие сделки и записи будут заменены примерами. В настройках журнал можно очистить в любой момент.',
+      text: 'Текущие сделки и записи активного счёта будут заменены примерами. В настройках счёт можно очистить в любой момент.',
       okLabel: 'Загрузить демо'
     }).then(async function (confirmed) {
       if (!confirmed) return;
@@ -1678,6 +1959,7 @@
         toast('Демо не сохранено: не удалось записать данные. Журнал оставлен прежним.', 'error');
         return;
       }
+      clearAccountDrafts(store.state.activeAccountId);
       applyCurrency();
       state.calCursor = monthStart(new Date());
       state.selectedDay = U.todayISO();
@@ -1686,6 +1968,7 @@
         label: 'Отменить',
         onClick: async function () {
           const restored = await store.replaceData(before);
+          clearAccountDrafts(store.state.activeAccountId);
           applyCurrency();
           state.calCursor = monthStart(new Date());
           state.selectedDay = U.todayISO();
@@ -1699,7 +1982,7 @@
   function resetJournalData() {
     askConfirm({
       title: 'Очистить все данные?',
-      text: 'Все сделки и записи будут удалены. Настройки профиля и стартовый баланс сохранятся. Сразу после очистки действие можно будет отменить.',
+      text: 'Все сделки и записи активного счёта будут удалены. Настройки счёта и стартовый баланс сохранятся. Сразу после очистки действие можно будет отменить.',
       okLabel: 'Очистить всё'
     }).then(async function (confirmed) {
       if (!confirmed) return;
@@ -1711,6 +1994,7 @@
         toast('Очистка не сохранена: не удалось записать данные. Журнал оставлен прежним.', 'error');
         return;
       }
+      clearAccountDrafts(store.state.activeAccountId);
       applyCurrency();
       state.calCursor = monthStart(new Date());
       state.selectedDay = U.todayISO();
@@ -1719,6 +2003,7 @@
         label: 'Отменить',
         onClick: async function () {
           const restored = await store.replaceData(before);
+          clearAccountDrafts(store.state.activeAccountId);
           applyCurrency();
           state.calCursor = monthStart(new Date());
           state.selectedDay = U.todayISO();
@@ -1740,39 +2025,244 @@
     }).join('');
   }
 
+  const TRADE_FIELD_KEYS = ['date', 'time', 'symbol', 'entry', 'exit', 'stop', 'currentStop', 'target', 'qty', 'fees', 'setup', 'emotion', 'discipline', 'tags', 'notes', 'side'];
+
+  function tradeDraftKey(accountId, tradeId) {
+    return DRAFT_PREFIX + String(accountId || '') + '.' + (tradeId || 'new');
+  }
+
+  function isScreenshotValue(value) {
+    if (typeof value !== 'string' || value.length > 3000000) return false;
+    return /^data:image\/(?:png|jpe?g|webp);base64,[a-z0-9+/=]+$/i.test(value)
+      || /^file:screenshots\/[a-z0-9_-]{1,80}\.(?:jpe?g|png|webp)$/i.test(value);
+  }
+
+  function tradeFieldsFromTrade(trade, presetDate) {
+    return {
+      date: trade ? trade.date : (presetDate || U.todayISO()),
+      time: trade ? (trade.time || '') : U.nowTime(),
+      symbol: trade ? trade.symbol : '',
+      entry: trade && trade.entry !== null && trade.entry !== undefined ? String(trade.entry) : '',
+      exit: trade && trade.exit !== null && trade.exit !== undefined ? String(trade.exit) : '',
+      stop: trade && trade.stop !== null && trade.stop !== undefined ? String(trade.stop) : '',
+      currentStop: trade && trade.currentStop !== null && trade.currentStop !== undefined ? String(trade.currentStop) : '',
+      target: trade && trade.target !== null && trade.target !== undefined ? String(trade.target) : '',
+      qty: trade && trade.qty !== null && trade.qty !== undefined ? String(trade.qty) : '',
+      fees: trade && trade.fees !== null && trade.fees !== undefined ? String(trade.fees) : '',
+      setup: trade ? (trade.setup || '') : '',
+      emotion: trade ? (trade.emotion || '') : '',
+      discipline: String(trade ? (trade.discipline || 0) : 0),
+      tags: trade ? trade.tags.join(', ') : '',
+      notes: trade ? (trade.notes || '') : '',
+      side: trade ? trade.side : 'long'
+    };
+  }
+
+  function readTradeFields() {
+    return {
+      date: $('#tradeDate').value,
+      time: $('#tradeTime').value,
+      symbol: $('#tradeSymbol').value,
+      entry: $('#tradeEntry').value,
+      exit: $('#tradeExit').value,
+      stop: $('#tradeStop').value,
+      currentStop: $('#tradeCurrentStop').value,
+      target: $('#tradeTarget').value,
+      qty: $('#tradeQty').value,
+      fees: $('#tradeFees').value,
+      setup: $('#tradeSetup').value,
+      emotion: $('#tradeEmotion').value,
+      discipline: $('#tradeDiscipline').value,
+      tags: $('#tradeTags').value,
+      notes: $('#tradeNotes').value,
+      side: $('#tradeSide').value
+    };
+  }
+
+  function sameTradeFields(left, right) {
+    return TRADE_FIELD_KEYS.every(function (key) {
+      return String(left[key] === undefined || left[key] === null ? '' : left[key])
+        === String(right[key] === undefined || right[key] === null ? '' : right[key]);
+    });
+  }
+
+  function normalizeDraftFields(fields, baseline) {
+    const result = Object.assign({}, baseline);
+    if (!fields || typeof fields !== 'object') return result;
+    TRADE_FIELD_KEYS.forEach(function (key) {
+      if (typeof fields[key] !== 'string') return;
+      const max = key === 'notes' ? 20000 : (key === 'tags' ? 2000 : 200);
+      result[key] = fields[key].slice(0, max);
+    });
+    result.side = result.side === 'short' ? 'short' : 'long';
+    result.discipline = String(U.clamp(Math.round(U.parseNum(result.discipline) || 0), 0, 5));
+    return result;
+  }
+
+  function applyTradeFields(fields) {
+    $('#tradeDate').value = fields.date || '';
+    $('#tradeTime').value = fields.time || '';
+    $('#tradeSymbol').value = fields.symbol || '';
+    $('#tradeEntry').value = fields.entry || '';
+    $('#tradeExit').value = fields.exit || '';
+    $('#tradeStop').value = fields.stop || '';
+    $('#tradeCurrentStop').value = fields.currentStop || '';
+    $('#tradeTarget').value = fields.target || '';
+    $('#tradeQty').value = fields.qty || '';
+    $('#tradeFees').value = fields.fees || '';
+    $('#tradeSetup').value = fields.setup || '';
+    $('#tradeEmotion').value = fields.emotion || '';
+    $('#tradeTags').value = fields.tags || '';
+    $('#tradeNotes').value = fields.notes || '';
+    setSide(fields.side);
+    setDiscipline(Number(fields.discipline) || 0);
+  }
+
+  function updateDraftUi() {
+    const badge = $('#draftBadge');
+    const reset = $('#discardDraftBtn');
+    if (badge) badge.hidden = !state.tradeDirty;
+    if (reset) reset.classList.toggle('hidden', !state.tradeDirty);
+  }
+
+  function syncTradeDirty() {
+    if (state.tradeInitializing || !state.tradeBaseline) return;
+    const dirty = !sameTradeFields(readTradeFields(), state.tradeBaseline)
+      || (state.screenshot || '') !== (state.tradeBaselineScreenshot || '');
+    state.tradeDirty = dirty;
+    updateDraftUi();
+    if (dirty) scheduleTradeDraft();
+    else clearCurrentTradeDraft();
+  }
+
+  function scheduleTradeDraft() {
+    clearTimeout(state.tradeDraftTimer);
+    state.tradeDraftTimer = setTimeout(writeTradeDraft, 450);
+  }
+
+  function writeTradeDraft() {
+    if (!state.tradeBaseline || state.tradeInitializing) return;
+    if (!state.tradeDirty) {
+      clearCurrentTradeDraft();
+      return;
+    }
+    const accountId = state.tradeAccountId || store.state.activeAccountId;
+    if (!accountId) return;
+    const payload = {
+      savedAt: new Date().toISOString(),
+      accountId: accountId,
+      tradeId: state.tradeId || '',
+      fields: readTradeFields(),
+      screenshot: state.screenshot || ''
+    };
+    try {
+      localStorage.setItem(tradeDraftKey(accountId, state.tradeId), JSON.stringify(payload));
+      state.draftQuotaWarned = false;
+    } catch (err) {
+      if (!state.draftQuotaWarned) {
+        state.draftQuotaWarned = true;
+        toast('Не удалось сохранить черновик: хранилище браузера заполнено.', 'warn');
+      }
+    }
+  }
+
+  function saveDraftNow() {
+    clearTimeout(state.tradeDraftTimer);
+    state.tradeDraftTimer = null;
+    writeTradeDraft();
+  }
+
+  function readTradeDraft(accountId, tradeId) {
+    try {
+      const raw = localStorage.getItem(tradeDraftKey(accountId, tradeId));
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object' || !parsed.fields || typeof parsed.fields !== 'object') return null;
+      return parsed;
+    } catch (err) {
+      return null;
+    }
+  }
+
+  function clearTradeDraft(tradeId, accountId) {
+    const id = accountId || state.tradeAccountId || store.state.activeAccountId;
+    if (!id) return;
+    try { localStorage.removeItem(tradeDraftKey(id, tradeId)); } catch (err) { /* ignore */ }
+  }
+
+  function clearCurrentTradeDraft() {
+    clearTradeDraft(state.tradeId, state.tradeAccountId);
+  }
+
+  function clearAccountDrafts(accountId) {
+    if (!accountId) return;
+    const prefix = DRAFT_PREFIX + String(accountId) + '.';
+    try {
+      const keys = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && key.indexOf(prefix) === 0) keys.push(key);
+      }
+      keys.forEach(function (key) { localStorage.removeItem(key); });
+    } catch (err) { /* ignore */ }
+  }
+
+  function clearAllDrafts() {
+    try {
+      const keys = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && key.indexOf(DRAFT_PREFIX) === 0) keys.push(key);
+      }
+      keys.forEach(function (key) { localStorage.removeItem(key); });
+    } catch (err) { /* ignore */ }
+  }
+
   function openTradeModal(id, presetDate) {
     closeShotLightbox();
     $('#shotField').classList.remove('is-dragover');
+    const accountId = store.state.activeAccountId;
     const trade = id ? store.state.trades.find(function (t) { return t.id === id; }) : null;
+
+    state.tradeInitializing = true;
+    state.tradeAccountId = accountId;
     state.tradeId = trade ? trade.id : null;
-    state.screenshot = trade && trade.screenshot ? trade.screenshot : '';
+    state.tradeBaseline = tradeFieldsFromTrade(trade, presetDate);
+    state.tradeBaselineScreenshot = trade && trade.screenshot ? trade.screenshot : '';
+    state.screenshot = state.tradeBaselineScreenshot;
+    state.screenshotPreview = '';
+    state.tradeDirty = false;
+    state.tradeSaving = false;
+    state.screenshotBusy = false;
 
-    $('#tradeModalTitle').textContent = trade ? 'Редактировать сделку' : 'Новая сделка';
-    $('#tradeDate').value = trade ? trade.date : (presetDate || U.todayISO());
-    $('#tradeTime').value = trade ? (trade.time || '') : U.nowTime();
-    $('#tradeSymbol').value = trade ? trade.symbol : '';
-    $('#tradeEntry').value = trade && trade.entry !== null ? trade.entry : '';
-    $('#tradeExit').value = trade && trade.exit !== null ? trade.exit : '';
-    $('#tradeStop').value = trade && trade.stop !== null ? trade.stop : '';
-    $('#tradeCurrentStop').value = trade && trade.currentStop !== null ? trade.currentStop : '';
-    $('#tradeTarget').value = trade && trade.target !== null ? trade.target : '';
-    $('#tradeQty').value = trade && trade.qty !== null ? trade.qty : '';
-    $('#tradeFees').value = trade ? trade.fees : '';
-    $('#tradeSetup').value = trade ? (trade.setup || '') : '';
-    $('#tradeEmotion').value = trade ? (trade.emotion || '') : '';
-    $('#tradeTags').value = trade ? trade.tags.join(', ') : '';
-    $('#tradeNotes').value = trade ? (trade.notes || '') : '';
+    $('#tradeModalTitleText').textContent = trade ? 'Редактировать сделку' : 'Новая сделка';
+    applyTradeFields(state.tradeBaseline);
 
-    setSide(trade ? trade.side : 'long');
-    setDiscipline(trade ? trade.discipline : 0);
-    renderShotPreview();
+    let restored = false;
+    const draft = readTradeDraft(accountId, trade ? trade.id : null);
+    if (draft) {
+      const fields = normalizeDraftFields(draft.fields, state.tradeBaseline);
+      const draftShot = isScreenshotValue(draft.screenshot) ? draft.screenshot : state.tradeBaselineScreenshot;
+      if (!sameTradeFields(fields, state.tradeBaseline) || draftShot !== state.tradeBaselineScreenshot) {
+        applyTradeFields(fields);
+        state.screenshot = draftShot;
+        restored = true;
+      } else {
+        clearTradeDraft(trade ? trade.id : null, accountId);
+      }
+    }
 
     $('#tradeError').hidden = true;
     $('#deleteTradeBtn').classList.toggle('hidden', !trade);
     $('#saveTradeBtn').textContent = trade ? 'Сохранить изменения' : 'Сохранить сделку';
+    $('#saveTradeBtn').disabled = false;
     $('#tradeShot').value = '';
+    state.tradeInitializing = false;
+    renderShotPreview();
     updateTradePreview();
+    syncTradeDirty();
     openModal('tradeModal', '#tradeSymbol');
+    if (restored) toast('Черновик восстановлен', 'success');
   }
 
   function setSide(side) {
@@ -1793,11 +2283,41 @@
     });
   }
 
+  let shotPreviewToken = 0;
+  let shotLightboxToken = 0;
+
   function renderShotPreview() {
     const box = $('#shotPreview');
     const remove = $('#removeShot');
+    if (!box || !remove) return;
+    const token = ++shotPreviewToken;
     box.innerHTML = '';
-    if (state.screenshot) {
+    state.screenshotPreview = '';
+
+    if (!state.screenshot) {
+      box.classList.remove('has');
+      remove.classList.add('hidden');
+      return;
+    }
+
+    box.classList.add('has');
+    remove.classList.remove('hidden');
+    const loading = document.createElement('span');
+    loading.className = 'shot-loading';
+    loading.textContent = 'Загрузка…';
+    box.appendChild(loading);
+
+    store.screenshotSource(state.screenshot).then(function (source) {
+      if (token !== shotPreviewToken) return;
+      box.innerHTML = '';
+      if (!source) {
+        const missing = document.createElement('span');
+        missing.className = 'shot-loading';
+        missing.textContent = 'Файл скриншота не найден';
+        box.appendChild(missing);
+        return;
+      }
+      state.screenshotPreview = source;
       const button = document.createElement('button');
       button.type = 'button';
       button.className = 'shot-open';
@@ -1805,16 +2325,14 @@
       button.setAttribute('aria-label', 'Открыть скриншот в полном размере');
       button.addEventListener('click', openShotLightbox);
       const image = document.createElement('img');
-      image.src = state.screenshot;
+      image.src = source;
       image.alt = 'Скриншот сделки';
       button.appendChild(image);
       box.appendChild(button);
-      box.classList.add('has');
-      remove.classList.remove('hidden');
-    } else {
-      box.classList.remove('has');
-      remove.classList.add('hidden');
-    }
+    }).catch(function () {
+      if (token !== shotPreviewToken) return;
+      box.innerHTML = '<span class="shot-loading">Не удалось загрузить скриншот</span>';
+    });
   }
 
   function openShotLightbox() {
@@ -1823,12 +2341,25 @@
     const image = $('#shotLightboxImage');
     if (!lightbox || !image) return;
     state.shotFocus = document.activeElement;
-    image.src = state.screenshot;
+    const token = ++shotLightboxToken;
+    image.removeAttribute('src');
+    image.alt = 'Загрузка скриншота';
     lightbox.hidden = false;
     $('#shotLightboxClose').focus();
+    if (state.screenshotPreview) {
+      image.src = state.screenshotPreview;
+      image.alt = 'Скриншот сделки';
+      return;
+    }
+    store.screenshotSource(state.screenshot).then(function (source) {
+      if (token !== shotLightboxToken || lightbox.hidden || !source) return;
+      image.src = source;
+      image.alt = 'Скриншот сделки';
+    });
   }
 
   function closeShotLightbox() {
+    shotLightboxToken++;
     const lightbox = $('#shotLightbox');
     if (!lightbox || lightbox.hidden) return;
     lightbox.hidden = true;
@@ -1843,8 +2374,30 @@
     }
   }
 
+  async function applyScreenshot(dataUrl) {
+    if (state.screenshotBusy) return;
+    state.screenshotBusy = true;
+    const saveButton = $('#saveTradeBtn');
+    if (saveButton) saveButton.disabled = true;
+    try {
+      state.screenshot = await store.saveScreenshot(dataUrl);
+      renderShotPreview();
+      syncTradeDirty();
+      toast('Скриншот добавлен');
+    } catch (err) {
+      toast(err && err.message ? err.message : 'Не удалось сохранить скриншот.', 'error');
+    } finally {
+      state.screenshotBusy = false;
+      if (saveButton && !state.tradeSaving) saveButton.disabled = false;
+    }
+  }
+
   function compressScreenshot(file) {
     if (!file) return;
+    if (state.screenshotBusy) {
+      toast('Дождитесь окончания сохранения скриншота.', 'warn');
+      return;
+    }
     if (!/^image\//.test(file.type)) {
       toast('Можно прикрепить только изображение.', 'error');
       return;
@@ -1861,9 +2414,7 @@
         const ctx = canvas.getContext('2d');
         ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
         try {
-          state.screenshot = canvas.toDataURL('image/jpeg', 0.72);
-          renderShotPreview();
-          toast('Скриншот добавлен');
+          applyScreenshot(canvas.toDataURL('image/jpeg', 0.72));
         } catch (err) {
           toast('Не удалось обработать изображение.', 'error');
         }
@@ -1955,6 +2506,12 @@
 
   async function saveTrade(event) {
     event.preventDefault();
+    if (state.tradeSaving) return;
+    if (state.screenshotBusy) {
+      toast('Скриншот ещё сохраняется, подождите пару секунд.', 'warn');
+      return;
+    }
+
     const date = $('#tradeDate').value;
     const symbol = $('#tradeSymbol').value.trim().toUpperCase();
     const entry = U.parseNum($('#tradeEntry').value);
@@ -1988,49 +2545,125 @@
       return;
     }
 
+    const accountId = state.tradeAccountId || store.state.activeAccountId;
+    const draftTradeId = state.tradeId;
     const existing = state.tradeId ? store.state.trades.find(function (t) { return t.id === state.tradeId; }) : null;
-    const trade = {
-      id: existing ? existing.id : U.uid(),
-      date: date,
-      time: $('#tradeTime').value,
-      symbol: symbol,
-      side: side,
-      entry: entry,
-      exit: exit,
-      stop: stop,
-      currentStop: currentStop,
-      target: target,
-      qty: qty,
-      fees: fees,
-      setup: $('#tradeSetup').value.trim(),
-      emotion: $('#tradeEmotion').value,
-      discipline: Number($('#tradeDiscipline').value) || 0,
-      tags: splitTags($('#tradeTags').value),
-      notes: $('#tradeNotes').value.trim(),
-      screenshot: state.screenshot
-    };
+    const saveButton = $('#saveTradeBtn');
+    state.tradeSaving = true;
+    if (saveButton) saveButton.disabled = true;
 
-    if (existing) {
-      const index = store.state.trades.findIndex(function (t) { return t.id === existing.id; });
-      if (index !== -1) store.state.trades[index] = trade;
-    } else {
-      store.state.trades.push(trade);
+    try {
+      let screenshot = state.screenshot || '';
+      if (desktop && screenshot && !/^file:screenshots\//i.test(screenshot)) {
+        screenshot = await store.saveScreenshot(screenshot);
+        state.screenshot = screenshot;
+        renderShotPreview();
+      }
+
+      const trade = {
+        id: existing ? existing.id : U.uid(),
+        date: date,
+        time: $('#tradeTime').value,
+        symbol: symbol,
+        side: side,
+        entry: entry,
+        exit: exit,
+        stop: stop,
+        currentStop: currentStop,
+        target: target,
+        qty: qty,
+        fees: fees,
+        setup: $('#tradeSetup').value.trim(),
+        emotion: $('#tradeEmotion').value,
+        discipline: Number($('#tradeDiscipline').value) || 0,
+        tags: splitTags($('#tradeTags').value),
+        notes: $('#tradeNotes').value.trim(),
+        screenshot: screenshot
+      };
+
+      if (existing) {
+        const index = store.state.trades.findIndex(function (t) { return t.id === existing.id; });
+        if (index !== -1) store.state.trades[index] = trade;
+      } else {
+        store.state.trades.push(trade);
+        state.tradeId = trade.id;
+        $('#tradeModalTitleText').textContent = 'Редактировать сделку';
+        $('#deleteTradeBtn').classList.remove('hidden');
+        $('#saveTradeBtn').textContent = 'Сохранить изменения';
+      }
+
+      store.state.demo = false;
+      const ok = await persist();
+      if (!ok) {
+        $('#tradeError').hidden = false;
+        $('#tradeError').textContent = 'Сделка добавлена в текущую сессию, но сохранить её не удалось. Проверьте свободное место и папку данных, затем попробуйте ещё раз.';
+        saveDraftNow();
+        return;
+      }
+
+      clearTradeDraft(draftTradeId, accountId);
+      clearTradeDraft(trade.id, accountId);
+      state.tradeDirty = false;
+      state.tradeBaseline = tradeFieldsFromTrade(trade);
+      state.tradeBaselineScreenshot = trade.screenshot || '';
+      state.screenshot = trade.screenshot || '';
       state.tradeId = trade.id;
-      $('#tradeModalTitle').textContent = 'Редактировать сделку';
-      $('#deleteTradeBtn').classList.remove('hidden');
-      $('#saveTradeBtn').textContent = 'Сохранить изменения';
-    }
-
-    store.state.demo = false;
-    const ok = await persist();
-    if (!ok) {
+      updateDraftUi();
+      closeModal('tradeModal');
+      renderAll();
+      toast(existing ? 'Сделка обновлена' : 'Сделка добавлена');
+    } catch (err) {
       $('#tradeError').hidden = false;
-      $('#tradeError').textContent = 'Сделка добавлена в текущую сессию, но сохранить её не удалось. Проверьте свободное место и папку данных, затем попробуйте ещё раз.';
+      $('#tradeError').textContent = err && err.message ? err.message : 'Не удалось сохранить сделку.';
+      saveDraftNow();
+    } finally {
+      state.tradeSaving = false;
+      if (saveButton) saveButton.disabled = false;
+    }
+  }
+
+  function requestCloseTradeModal() {
+    const modal = $('#tradeModal');
+    if (!modal || modal.hidden) return;
+    if (state.tradeSaving) return;
+    if (state.screenshotBusy) {
+      toast('Скриншот ещё сохраняется, подождите пару секунд.', 'warn');
       return;
     }
-    closeModal('tradeModal');
-    renderAll();
-    toast(existing ? 'Сделка обновлена' : 'Сделка добавлена');
+    if (!state.tradeDirty) {
+      clearCurrentTradeDraft();
+      closeModal('tradeModal');
+      return;
+    }
+    saveDraftNow();
+    askConfirm({
+      title: 'Закрыть форму сделки?',
+      text: 'Введённые данные сохранены как черновик. Они восстановятся, когда вы снова откроете эту сделку.',
+      okLabel: 'Закрыть',
+      danger: false
+    }).then(function (confirmed) {
+      if (!confirmed) return;
+      closeModal('tradeModal');
+    });
+  }
+
+  function discardTradeDraft() {
+    if (state.tradeSaving || state.tradeInitializing) return;
+    clearCurrentTradeDraft();
+    state.screenshot = state.tradeBaselineScreenshot || '';
+    state.screenshotPreview = '';
+    applyTradeFields(state.tradeBaseline || tradeFieldsFromTrade(null));
+    state.tradeDirty = false;
+    updateDraftUi();
+    renderShotPreview();
+    updateTradePreview();
+    toast('Черновик сброшен');
+  }
+
+  function handleTradeFormChanged() {
+    if (state.tradeInitializing) return;
+    updateTradePreview();
+    syncTradeDirty();
   }
 
   function deleteTrade() {
@@ -2052,6 +2685,7 @@
         toast('Не удалось удалить сделку: данные не сохранены.', 'error');
         return;
       }
+      clearTradeDraft(trade.id, state.tradeAccountId || store.state.activeAccountId);
       closeModal('tradeModal');
       renderAll();
       toast('Сделка удалена', 'success', {
@@ -2260,6 +2894,9 @@
     document.addEventListener('click', handleGlobalClick);
     document.addEventListener('keydown', handleKeydown);
     document.addEventListener('paste', handleScreenshotPaste);
+    window.addEventListener('beforeunload', function () {
+      if (!$('#tradeModal').hidden) saveDraftNow();
+    });
     window.addEventListener('hashchange', function () {
       const view = String(location.hash || '').replace('#', '');
       if (VIEW_META[view] && view !== state.view) navigate(view, { push: false });
@@ -2278,6 +2915,7 @@
     $('#menuBtn').addEventListener('click', openSidebar);
     $('#sidebarOverlay').addEventListener('click', closeSidebar);
     $('#avatarBtn').addEventListener('click', function () { navigate('settings'); });
+    $('#sidebarAccountSelect').addEventListener('change', function (event) { switchAccount(event.target.value); });
     $('#periodSelect').addEventListener('change', function (event) {
       state.period = event.target.value;
       renderCurrentView();
@@ -2293,7 +2931,7 @@
     $('#clearDemoBtn').addEventListener('click', function () {
       askConfirm({
         title: 'Начать с чистого листа?',
-        text: 'Демо-сделки и записи будут удалены. Настройки профиля сохранятся.',
+        text: 'Демо-сделки и записи активного счёта будут удалены. Настройки счёта сохранятся.',
         okLabel: 'Очистить демо'
       }).then(async function (confirmed) {
         if (!confirmed) return;
@@ -2302,6 +2940,7 @@
           toast('Не удалось сохранить очистку демо-данных.', 'error');
           return;
         }
+        clearAccountDrafts(store.state.activeAccountId);
         state.calCursor = monthStart(new Date());
         state.selectedDay = U.todayISO();
         renderAll();
@@ -2355,6 +2994,25 @@
     $('#calcReset').addEventListener('click', resetCalculator);
 
     $('#settingsForm').addEventListener('submit', saveSettings);
+    $('#profileForm').addEventListener('submit', saveProfile);
+    $('#profileName').addEventListener('input', function () {
+      if (!state.profileAvatarDraft) renderProfileAvatar();
+    });
+    $('#profileAvatarInput').addEventListener('change', function (event) {
+      const file = event.target.files && event.target.files[0];
+      compressAvatar(file);
+      event.target.value = '';
+    });
+    $('#removeAvatarBtn').addEventListener('click', function () {
+      state.profileAvatarDraft = '';
+      renderProfileAvatar();
+      toast('Аватар будет удалён после сохранения профиля', 'warn');
+    });
+    $('#accountSelect').addEventListener('change', function (event) { switchAccount(event.target.value); });
+    $('#newAccountBtn').addEventListener('click', function () { openAccountModal('create'); });
+    $('#renameAccountBtn').addEventListener('click', function () { openAccountModal('rename'); });
+    $('#deleteAccountBtn').addEventListener('click', deleteActiveAccount);
+    $('#accountForm').addEventListener('submit', saveAccount);
     $('#exportJsonBtn').addEventListener('click', exportJSON);
     $('#importJsonBtn').addEventListener('click', function () { $('#importFile').click(); });
     $('#importFile').addEventListener('change', function (event) {
@@ -2367,7 +3025,9 @@
 
     $('#sideSegmented').addEventListener('click', function (event) {
       const button = event.target.closest('button[data-side]');
-      if (button) setSide(button.dataset.side);
+      if (!button) return;
+      setSide(button.dataset.side);
+      syncTradeDirty();
     });
     $('#disciplineStars').addEventListener('click', function (event) {
       const star = event.target.closest('.star');
@@ -2375,6 +3035,7 @@
       const value = Number(star.dataset.star);
       const current = Number($('#tradeDiscipline').value) || 0;
       setDiscipline(current === value ? 0 : value);
+      syncTradeDirty();
     });
     $('#tradeShot').addEventListener('change', function (event) {
       const file = event.target.files && event.target.files[0];
@@ -2383,8 +3044,14 @@
     });
     $('#pasteShot').addEventListener('click', pasteScreenshotFromClipboard);
     $('#removeShot').addEventListener('click', function () {
+      if (state.screenshotBusy) {
+        toast('Скриншот ещё сохраняется, подождите пару секунд.', 'warn');
+        return;
+      }
       state.screenshot = '';
+      state.screenshotPreview = '';
       renderShotPreview();
+      syncTradeDirty();
     });
     $('#shotLightboxClose').addEventListener('click', closeShotLightbox);
     $('#shotLightboxBackdrop').addEventListener('click', closeShotLightbox);
@@ -2410,9 +3077,11 @@
       const file = event.dataTransfer && event.dataTransfer.files && event.dataTransfer.files[0];
       if (file) compressScreenshot(file);
     });
-    $('#tradeForm').addEventListener('input', updateTradePreview);
+    $('#tradeForm').addEventListener('input', handleTradeFormChanged);
+    $('#tradeForm').addEventListener('change', handleTradeFormChanged);
     $('#tradeForm').addEventListener('submit', saveTrade);
     $('#deleteTradeBtn').addEventListener('click', deleteTrade);
+    $('#discardDraftBtn').addEventListener('click', discardTradeDraft);
 
     $('#moodPicker').addEventListener('click', function (event) {
       const button = event.target.closest('.mood-btn');
@@ -2430,7 +3099,11 @@
   function handleGlobalClick(event) {
     const closeEl = event.target.closest('[data-close]');
     if (closeEl) {
-      closeModal(closeEl.dataset.close);
+      if (closeEl.dataset.close === 'tradeModal') {
+        requestCloseTradeModal();
+      } else {
+        closeModal(closeEl.dataset.close);
+      }
       return;
     }
 
@@ -2487,30 +3160,46 @@
   }
 
   function handleKeydown(event) {
-    if (event.key === 'Escape') {
-      const lightbox = $('#shotLightbox');
-      if (lightbox && !lightbox.hidden) {
+    const key = event.key;
+    const withModifier = event.ctrlKey || event.metaKey;
+    const open = $$('.modal').filter(function (modal) { return !modal.hidden; });
+    const topModal = open.length ? open[open.length - 1].id : '';
+    const lightbox = $('#shotLightbox');
+    const lightboxOpen = !!(lightbox && !lightbox.hidden);
+
+    if (!lightboxOpen && topModal === 'tradeModal' && withModifier
+      && (key === 'Enter' || key.toLowerCase() === 's')) {
+      event.preventDefault();
+      $('#tradeForm').requestSubmit();
+      return;
+    }
+
+    if (key === 'Escape') {
+      if (lightboxOpen) {
         closeShotLightbox();
         return;
       }
-      const open = $$('.modal').filter(function (modal) { return !modal.hidden; });
       if (open.length) {
-        closeModal(open[open.length - 1].id);
+        if (topModal === 'tradeModal') {
+          requestCloseTradeModal();
+          return;
+        }
+        closeModal(topModal);
         return;
       }
       closeSidebar();
       return;
     }
 
-    if (isTyping(event.target) || anyModalOpen()) return;
+    if (isTyping(event.target) || open.length) return;
 
-    if (event.key === 'n' || event.key === 'N' || event.key === 'т' || event.key === 'Т') {
+    if (key === 'n' || key === 'N' || key === 'т' || key === 'Т') {
       event.preventDefault();
       openTradeModal();
       return;
     }
 
-    if (event.key === '/' && state.view === 'trades') {
+    if (key === '/' && state.view === 'trades') {
       event.preventDefault();
       $('#tradeSearch').focus();
     }

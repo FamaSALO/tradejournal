@@ -78,6 +78,14 @@
       });
     },
 
+    saveScreenshot: function (id, dataUrl) {
+      return call('screenshot_save', { id: id, dataUrl: dataUrl });
+    },
+
+    loadScreenshot: function (reference) {
+      return call('screenshot_load', { reference: reference });
+    },
+
     getDataInfo: function () {
       return call('data_info');
     },

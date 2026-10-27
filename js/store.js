@@ -4,11 +4,17 @@
   const U = NS.utils;
   const desktop = window.tradeJournalDesktop || null;
 
+  // The storage key is intentionally kept as v1: existing web journals must be
+  // discovered and migrated in place instead of being replaced with demo data.
   const KEY = 'tradejournal.v1';
+  const SCHEMA_VERSION = 2;
+  const DEFAULT_ACCOUNT_NAME = 'Основной счёт';
   const MAX_SCREENSHOT_LENGTH = 3000000;
   const SAFE_SCREENSHOT_RE = /^data:image\/(?:png|jpe?g|webp);base64,[a-z0-9+/=]+$/i;
+  const SAFE_SCREENSHOT_FILE_RE = /^file:screenshots\/[a-z0-9_-]{1,80}\.(?:jpe?g|png|webp)$/i;
+  const MAX_AVATAR_LENGTH = 2000000;
+  const SAFE_AVATAR_RE = SAFE_SCREENSHOT_RE;
   const DEFAULT_SETTINGS = {
-    name: '',
     currency: '$',
     startBalance: 10000,
     riskPercent: 1,
@@ -16,16 +22,84 @@
     maxTradesPerDay: 3
   };
 
-  let state = blankState(DEFAULT_SETTINGS);
+  let root = blankRoot();
   let loadError = null;
+  let pendingMigration = false;
 
-  function blankState(settings) {
+  const state = {};
+  Object.defineProperties(state, {
+    version: {
+      enumerable: true,
+      get: function () { return root.version; }
+    },
+    profile: {
+      enumerable: true,
+      get: function () { return root.profile; },
+      set: function (value) { root.profile = normalizeProfile(value); }
+    },
+    accounts: {
+      enumerable: true,
+      get: function () { return root.accounts; },
+      set: function (value) { root.accounts = Array.isArray(value) ? value : []; }
+    },
+    activeAccountId: {
+      enumerable: true,
+      get: function () { return root.activeAccountId; },
+      set: function (value) { root.activeAccountId = String(value || ''); }
+    },
+    demo: {
+      get: function () { const account = activeAccount(); return !!(account && account.demo); },
+      set: function (value) { const account = activeAccount(); if (account) account.demo = !!value; }
+    },
+    settings: {
+      get: function () { const account = activeAccount(); return account ? account.settings : DEFAULT_SETTINGS; },
+      set: function (value) { const account = activeAccount(); if (account) account.settings = normalizeSettings(value); }
+    },
+    trades: {
+      get: function () { const account = activeAccount(); return account ? account.trades : []; },
+      set: function (value) { const account = activeAccount(); if (account) account.trades = Array.isArray(value) ? value : []; }
+    },
+    notes: {
+      get: function () { const account = activeAccount(); return account ? account.notes : []; },
+      set: function (value) { const account = activeAccount(); if (account) account.notes = Array.isArray(value) ? value : []; }
+    }
+  });
+
+  function activeAccount() {
+    if (!root || !Array.isArray(root.accounts) || !root.accounts.length) return null;
+    let account = root.accounts.find(function (item) { return item.id === root.activeAccountId; });
+    if (!account) {
+      account = root.accounts[0];
+      root.activeAccountId = account.id;
+    }
+    return account;
+  }
+
+  function accountName(value, index) {
+    const text = String(value || '').trim().slice(0, 40);
+    if (text) return text;
+    return index === 0 ? DEFAULT_ACCOUNT_NAME : 'Счёт ' + (index + 1);
+  }
+
+  function createAccount(name, settings, index) {
     return {
-      version: 1,
+      id: U.uid(),
+      name: accountName(name, index || 0),
+      createdAt: new Date().toISOString(),
       demo: false,
-      settings: Object.assign({}, DEFAULT_SETTINGS, settings || {}),
+      settings: normalizeSettings(settings),
       trades: [],
       notes: []
+    };
+  }
+
+  function blankRoot() {
+    const account = createAccount(DEFAULT_ACCOUNT_NAME, DEFAULT_SETTINGS, 0);
+    return {
+      version: SCHEMA_VERSION,
+      profile: { name: '', avatar: '' },
+      activeAccountId: account.id,
+      accounts: [account]
     };
   }
 
@@ -63,9 +137,14 @@
     const side = raw.side === 'short' ? 'short' : 'long';
     const discipline = U.clamp(Math.round(U.parseNum(raw.discipline) || 0), 0, 5);
     const time = typeof raw.time === 'string' && /^\d{2}:\d{2}/.test(raw.time) ? raw.time.slice(0, 5) : '';
-    const shot = typeof raw.screenshot === 'string'
-      && raw.screenshot.length <= MAX_SCREENSHOT_LENGTH
-      && SAFE_SCREENSHOT_RE.test(raw.screenshot) ? raw.screenshot : '';
+    let shot = '';
+    if (typeof raw.screenshot === 'string') {
+      if (SAFE_SCREENSHOT_FILE_RE.test(raw.screenshot)) {
+        shot = raw.screenshot;
+      } else if (raw.screenshot.length <= MAX_SCREENSHOT_LENGTH && SAFE_SCREENSHOT_RE.test(raw.screenshot)) {
+        shot = raw.screenshot;
+      }
+    }
     return {
       id: raw.id ? String(raw.id) : U.uid(),
       date: date,
@@ -115,7 +194,6 @@
     const daily = U.parseNum(raw.dailyLossLimit);
     const maxTrades = U.parseNum(raw.maxTradesPerDay);
     return {
-      name: String(raw.name || '').slice(0, 40),
       currency: currency || '$',
       startBalance: startBalance !== null && startBalance >= 0 ? startBalance : 10000,
       riskPercent: risk !== null && risk >= 0 ? U.clamp(risk, 0, 100) : 1,
@@ -124,32 +202,90 @@
     };
   }
 
-  function isJournalData(raw) {
-    return !!raw && typeof raw === 'object' && !Array.isArray(raw)
-      && Array.isArray(raw.trades) && Array.isArray(raw.notes);
+  function normalizeProfile(raw, legacyName) {
+    raw = raw || {};
+    const name = String(raw.name !== undefined ? raw.name : (legacyName || '')).trim().slice(0, 40);
+    let avatar = typeof raw.avatar === 'string' ? raw.avatar : '';
+    if (avatar && (avatar.length > MAX_AVATAR_LENGTH || !SAFE_AVATAR_RE.test(avatar))) avatar = '';
+    return { name: name, avatar: avatar };
   }
 
-  function normalizeData(raw) {
+  function normalizeAccount(raw, index, legacy) {
     raw = raw || {};
-    const settings = normalizeSettings(raw.settings);
+    legacy = legacy || {};
+    const settingsSource = raw.settings !== undefined ? raw.settings : legacy.settings;
+    const tradesSource = raw.trades !== undefined ? raw.trades : legacy.trades;
+    const notesSource = raw.notes !== undefined ? raw.notes : legacy.notes;
+
     const seenTradeIds = new Set();
-    const trades = (Array.isArray(raw.trades) ? raw.trades : []).map(normalizeTrade).filter(Boolean).map(function (trade) {
+    const trades = (Array.isArray(tradesSource) ? tradesSource : []).map(normalizeTrade).filter(Boolean).map(function (trade) {
       if (seenTradeIds.has(trade.id)) trade.id = U.uid();
       seenTradeIds.add(trade.id);
       return trade;
     });
+
     const seenNoteIds = new Set();
-    const notes = (Array.isArray(raw.notes) ? raw.notes : []).map(normalizeNote).filter(Boolean).map(function (note) {
+    const notes = (Array.isArray(notesSource) ? notesSource : []).map(normalizeNote).filter(Boolean).map(function (note) {
       if (seenNoteIds.has(note.id)) note.id = U.uid();
       seenNoteIds.add(note.id);
       return note;
     });
+
     return {
-      version: 1,
-      demo: !!raw.demo,
-      settings: settings,
+      id: raw.id ? String(raw.id) : U.uid(),
+      name: accountName(raw.name, index),
+      createdAt: raw.createdAt ? String(raw.createdAt) : new Date().toISOString(),
+      demo: raw.demo !== undefined ? !!raw.demo : !!legacy.demo,
+      settings: normalizeSettings(settingsSource),
       trades: trades,
       notes: notes
+    };
+  }
+
+  function isJournalData(raw) {
+    return !!raw && typeof raw === 'object' && !Array.isArray(raw)
+      && (Array.isArray(raw.accounts) || (Array.isArray(raw.trades) && Array.isArray(raw.notes)));
+  }
+
+  function normalizeData(raw) {
+    raw = raw || {};
+    const isV2 = Array.isArray(raw.accounts);
+    let accounts = [];
+
+    if (isV2) {
+      accounts = raw.accounts.map(function (account, index) {
+        return normalizeAccount(account, index);
+      });
+    } else {
+      accounts = [normalizeAccount({}, 0, {
+        settings: raw.settings,
+        trades: raw.trades,
+        notes: raw.notes,
+        demo: raw.demo
+      })];
+    }
+
+    if (!accounts.length) {
+      accounts = [createAccount(DEFAULT_ACCOUNT_NAME, raw.settings, 0)];
+    }
+
+    const seenAccountIds = new Set();
+    accounts.forEach(function (account) {
+      if (seenAccountIds.has(account.id)) account.id = U.uid();
+      seenAccountIds.add(account.id);
+    });
+
+    const profile = normalizeProfile(raw.profile, raw.settings && raw.settings.name);
+    let activeAccountId = raw.activeAccountId ? String(raw.activeAccountId) : '';
+    if (!accounts.some(function (account) { return account.id === activeAccountId; })) {
+      activeAccountId = accounts[0].id;
+    }
+
+    return {
+      version: SCHEMA_VERSION,
+      profile: profile,
+      activeAccountId: activeAccountId,
+      accounts: accounts
     };
   }
 
@@ -162,7 +298,8 @@
       if (raw === null || raw === undefined) return false;
       const parsed = JSON.parse(raw);
       if (!isJournalData(parsed)) throw new Error('Неожиданная структура журнала');
-      state = normalizeData(parsed);
+      root = normalizeData(parsed);
+      pendingMigration = !(parsed.version === SCHEMA_VERSION && Array.isArray(parsed.accounts));
       loadError = null;
       return true;
     }).catch(function (err) {
@@ -191,9 +328,10 @@
   }
 
   function save() {
-    const raw = JSON.stringify(state);
+    const raw = JSON.stringify(root);
     if (desktop) {
       return Promise.resolve().then(function () { return desktop.save(raw); }).then(function () {
+        pendingMigration = false;
         return true;
       }).catch(function (err) {
         console.warn('TradeJournal: не удалось сохранить данные', err);
@@ -202,6 +340,7 @@
     }
     try {
       localStorage.setItem(KEY, raw);
+      pendingMigration = false;
       return Promise.resolve(true);
     } catch (err) {
       console.warn('TradeJournal: не удалось сохранить данные', err);
@@ -211,20 +350,135 @@
 
   function replaceData(raw) {
     if (!isJournalData(raw)) return false;
-    state = normalizeData(raw);
+    root = normalizeData(raw);
     return save();
   }
 
   function setDemo(data) {
-    state = normalizeData(data);
-    state.demo = true;
+    const normalized = normalizeData(data);
+    const source = normalized.accounts[0];
+    const account = activeAccount();
+    if (!source || !account) return Promise.resolve(false);
+    account.settings = normalizeSettings(source.settings);
+    account.trades = source.trades;
+    account.notes = source.notes;
+    account.demo = true;
     return save();
   }
 
   function resetData(keepSettings) {
-    const settings = keepSettings ? Object.assign({}, state.settings) : Object.assign({}, DEFAULT_SETTINGS);
-    state = blankState(settings);
+    const account = activeAccount();
+    if (!account) return Promise.resolve(false);
+    account.trades = [];
+    account.notes = [];
+    account.demo = false;
+    if (!keepSettings) account.settings = normalizeSettings(DEFAULT_SETTINGS);
     return save();
+  }
+
+  function setActiveAccount(id) {
+    const next = String(id || '');
+    if (!root.accounts.some(function (account) { return account.id === next; })) return false;
+    root.activeAccountId = next;
+    return true;
+  }
+
+  function accountById(id) {
+    return root.accounts.find(function (account) { return account.id === id; }) || null;
+  }
+
+  function addAccount(name) {
+    const current = activeAccount();
+    const settings = Object.assign({}, DEFAULT_SETTINGS, current ? { currency: current.settings.currency } : {});
+    const account = createAccount(name, settings, root.accounts.length);
+    root.accounts.push(account);
+    root.activeAccountId = account.id;
+    return account;
+  }
+
+  function renameAccount(id, name) {
+    const account = accountById(id);
+    const next = String(name || '').trim().slice(0, 40);
+    if (!account || !next) return false;
+    account.name = next;
+    return true;
+  }
+
+  function deleteAccount(id) {
+    if (root.accounts.length <= 1) return false;
+    const index = root.accounts.findIndex(function (account) { return account.id === id; });
+    if (index === -1) return false;
+    root.accounts.splice(index, 1);
+    if (root.activeAccountId === id) {
+      const next = root.accounts[Math.min(index, root.accounts.length - 1)];
+      root.activeAccountId = next.id;
+    }
+    return true;
+  }
+
+  function saveScreenshotData(dataUrl) {
+    if (!desktop) return Promise.resolve(dataUrl);
+    if (!SAFE_SCREENSHOT_RE.test(String(dataUrl || ''))) {
+      return Promise.reject(new Error('Некорректное изображение скриншота.'));
+    }
+    return desktop.saveScreenshot(U.uid(), dataUrl).then(function (result) {
+      if (result && result.reference) return result.reference;
+      if (typeof result === 'string') return result;
+      throw new Error('Не удалось сохранить скриншот.');
+    });
+  }
+
+  function screenshotSource(value) {
+    if (!value) return Promise.resolve('');
+    if (SAFE_SCREENSHOT_RE.test(value)) return Promise.resolve(value);
+    if (desktop && SAFE_SCREENSHOT_FILE_RE.test(value)) {
+      return Promise.resolve().then(function () {
+        return desktop.loadScreenshot(value);
+      }).catch(function (err) {
+        console.warn('TradeJournal: не удалось загрузить скриншот', err);
+        return '';
+      });
+    }
+    return Promise.resolve('');
+  }
+
+  async function migrateScreenshots() {
+    if (!desktop) return 0;
+    let changed = 0;
+    for (const account of root.accounts) {
+      for (const trade of account.trades) {
+        if (!SAFE_SCREENSHOT_RE.test(trade.screenshot || '')) continue;
+        try {
+          const result = await desktop.saveScreenshot(U.uid(), trade.screenshot);
+          const reference = result && result.reference ? result.reference : '';
+          if (reference) {
+            trade.screenshot = reference;
+            changed++;
+          }
+        } catch (err) {
+          console.warn('TradeJournal: не удалось вынести скриншот в файл', err);
+        }
+      }
+    }
+    if (changed) await save();
+    return changed;
+  }
+
+  async function exportSnapshot() {
+    const snapshot = JSON.parse(JSON.stringify(root));
+    if (!desktop) return snapshot;
+    for (const account of snapshot.accounts) {
+      for (const trade of account.trades) {
+        if (!SAFE_SCREENSHOT_FILE_RE.test(trade.screenshot || '')) continue;
+        try {
+          const dataUrl = await desktop.loadScreenshot(trade.screenshot);
+          if (dataUrl) trade.screenshot = dataUrl;
+        } catch (err) {
+          console.warn('TradeJournal: не удалось вложить скриншот в экспорт', err);
+        }
+      }
+    }
+    return snapshot;
   }
 
   function isClosed(trade) {
@@ -413,14 +667,17 @@
   }
 
   function storageSize() {
-    try { return new Blob([JSON.stringify(state)]).size; } catch (err) { return 0; }
+    try { return new Blob([JSON.stringify(root)]).size; } catch (err) { return 0; }
   }
 
   NS.store = {
     KEY: KEY,
+    SCHEMA_VERSION: SCHEMA_VERSION,
+    DEFAULT_ACCOUNT_NAME: DEFAULT_ACCOUNT_NAME,
     DEFAULT_SETTINGS: DEFAULT_SETTINGS,
     get state() { return state; },
     get loadError() { return loadError; },
+    get needsMigration() { return pendingMigration; },
     hasStored: hasStored,
     isJournalData: isJournalData,
     load: load,
@@ -430,6 +687,16 @@
     replaceData: replaceData,
     setDemo: setDemo,
     resetData: resetData,
+    activeAccount: activeAccount,
+    accountById: accountById,
+    setActiveAccount: setActiveAccount,
+    addAccount: addAccount,
+    renameAccount: renameAccount,
+    deleteAccount: deleteAccount,
+    saveScreenshot: saveScreenshotData,
+    screenshotSource: screenshotSource,
+    migrateScreenshots: migrateScreenshots,
+    exportSnapshot: exportSnapshot,
     isClosed: isClosed,
     tradePnl: tradePnl,
     tradeRisk: tradeRisk,

@@ -1,3 +1,4 @@
+use base64::Engine as _;
 use serde::Serialize;
 use std::fs::{self, OpenOptions};
 use std::io::{ErrorKind, Write};
@@ -9,6 +10,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{Manager, State};
 
 const MAX_STORAGE_BYTES: usize = 100 * 1024 * 1024;
+const MAX_SCREENSHOT_BYTES: usize = 6 * 1024 * 1024;
 const MAX_BACKUPS: usize = 20;
 const BACKUP_INTERVAL: Duration = Duration::from_secs(10 * 60);
 
@@ -20,6 +22,7 @@ struct StorePaths {
     journal: PathBuf,
     previous: PathBuf,
     backups: PathBuf,
+    screenshots: PathBuf,
 }
 
 #[derive(Clone)]
@@ -44,8 +47,16 @@ struct DataInfo {
     data_dir: String,
     journal_path: String,
     backup_dir: String,
+    screenshot_dir: String,
     version: String,
     is_desktop: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ScreenshotSaved {
+    reference: String,
+    size: usize,
 }
 
 #[derive(Serialize)]
@@ -87,12 +98,16 @@ fn is_journal_data(value: &serde_json::Value) -> bool {
     value
         .as_object()
         .map(|object| {
-            object
+            let legacy = object
                 .get("trades")
                 .map_or(false, serde_json::Value::is_array)
                 && object
                     .get("notes")
-                    .map_or(false, serde_json::Value::is_array)
+                    .map_or(false, serde_json::Value::is_array);
+            let accounts = object
+                .get("accounts")
+                .map_or(false, serde_json::Value::is_array);
+            legacy || accounts
         })
         .unwrap_or(false)
 }
@@ -388,6 +403,117 @@ fn clear_journal(state: &AppState) -> Result<(), String> {
     Ok(())
 }
 
+fn valid_screenshot_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 80
+        && id.chars().all(|character| {
+            character.is_ascii_alphanumeric() || character == '-' || character == '_'
+        })
+}
+
+fn screenshot_file_name(reference: &str) -> Option<&str> {
+    let name = reference
+        .strip_prefix("file:screenshots/")
+        .unwrap_or(reference);
+    if name.is_empty() || name.contains("..") {
+        return None;
+    }
+    let path = Path::new(name);
+    if path.file_name().and_then(|value| value.to_str()) != Some(name) {
+        return None;
+    }
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())?
+        .to_ascii_lowercase();
+    if !matches!(extension.as_str(), "jpg" | "jpeg" | "png" | "webp") {
+        return None;
+    }
+    let stem = path.file_stem().and_then(|value| value.to_str())?;
+    if !valid_screenshot_id(stem) {
+        return None;
+    }
+    Some(name)
+}
+
+fn valid_image_magic(extension: &str, bytes: &[u8]) -> bool {
+    match extension {
+        "jpg" => bytes.starts_with(&[0xFF, 0xD8, 0xFF]),
+        "png" => bytes.starts_with(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]),
+        "webp" => bytes.len() >= 12 && bytes.starts_with(b"RIFF") && &bytes[8..12] == &b"WEBP"[..],
+        _ => false,
+    }
+}
+
+fn decode_screenshot_data_url(data_url: &str) -> Result<(String, Vec<u8>), String> {
+    let (meta, payload) = data_url
+        .split_once(',')
+        .ok_or_else(|| "Некорректный формат изображения.".to_string())?;
+    if !meta.starts_with("data:image/") || !meta.ends_with(";base64") {
+        return Err("Поддерживаются только изображения JPEG, PNG и WebP.".to_string());
+    }
+    let mime = &meta[5..meta.len() - 7];
+    let extension = match mime {
+        "image/jpeg" | "image/jpg" => "jpg",
+        "image/png" => "png",
+        "image/webp" => "webp",
+        _ => return Err("Поддерживаются только изображения JPEG, PNG и WebP.".to_string()),
+    };
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(payload)
+        .map_err(|_| "Не удалось декодировать изображение.".to_string())?;
+    if bytes.is_empty() {
+        return Err("Изображение пустое.".to_string());
+    }
+    if bytes.len() > MAX_SCREENSHOT_BYTES {
+        return Err("Скриншот слишком большой (более 6 МБ).".to_string());
+    }
+    if !valid_image_magic(extension, &bytes) {
+        return Err("Файл не похож на изображение JPEG, PNG или WebP.".to_string());
+    }
+    Ok((extension.to_string(), bytes))
+}
+
+fn save_screenshot(state: &AppState, id: &str, data_url: &str) -> Result<ScreenshotSaved, String> {
+    if !valid_screenshot_id(id) {
+        return Err("Некорректный идентификатор скриншота.".to_string());
+    }
+    let (extension, bytes) = decode_screenshot_data_url(data_url)?;
+    fs::create_dir_all(&state.paths.screenshots)
+        .map_err(|error| format!("Не удалось создать папку скриншотов: {error}"))?;
+    let file_name = format!("{id}.{extension}");
+    let path = state.paths.screenshots.join(&file_name);
+    write_atomic(&path, &bytes)
+        .map_err(|error| format!("Не удалось сохранить скриншот: {error}"))?;
+    Ok(ScreenshotSaved {
+        reference: format!("file:screenshots/{file_name}"),
+        size: bytes.len(),
+    })
+}
+
+fn load_screenshot(state: &AppState, reference: &str) -> Result<String, String> {
+    let file_name = screenshot_file_name(reference)
+        .ok_or_else(|| "Некорректная ссылка на скриншот.".to_string())?;
+    let path = state.paths.screenshots.join(file_name);
+    let bytes = fs::read(&path).map_err(|_| "Скриншот не найден.".to_string())?;
+    if bytes.len() > MAX_SCREENSHOT_BYTES {
+        return Err("Скриншот слишком большой.".to_string());
+    }
+    let extension = Path::new(file_name)
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let mime = match extension.as_str() {
+        "jpg" | "jpeg" => "image/jpeg",
+        "png" => "image/png",
+        "webp" => "image/webp",
+        _ => return Err("Неподдерживаемый формат скриншота.".to_string()),
+    };
+    let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
+    Ok(format!("data:{mime};base64,{encoded}"))
+}
+
 fn resolve_paths(app: &tauri::AppHandle) -> Result<StorePaths, Box<dyn std::error::Error>> {
     let app_data_root = std::env::var_os("APPDATA")
         .map(PathBuf::from)
@@ -404,6 +530,7 @@ fn resolve_paths(app: &tauri::AppHandle) -> Result<StorePaths, Box<dyn std::erro
         journal: data_dir.join("journal.json"),
         previous: data_dir.join("journal.previous.json"),
         backups: data_dir.join("backups"),
+        screenshots: data_dir.join("screenshots"),
         data_dir,
     })
 }
@@ -462,11 +589,32 @@ async fn storage_clear(state: State<'_, AppState>) -> Result<(), String> {
 }
 
 #[tauri::command]
+async fn screenshot_save(
+    state: State<'_, AppState>,
+    id: String,
+    data_url: String,
+) -> Result<ScreenshotSaved, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || save_screenshot(&state, &id, &data_url))
+        .await
+        .map_err(|error| format!("Не удалось выполнить сохранение скриншота: {error}"))?
+}
+
+#[tauri::command]
+async fn screenshot_load(state: State<'_, AppState>, reference: String) -> Result<String, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || load_screenshot(&state, &reference))
+        .await
+        .map_err(|error| format!("Не удалось выполнить чтение скриншота: {error}"))?
+}
+
+#[tauri::command]
 fn data_info(app: tauri::AppHandle, state: State<'_, AppState>) -> DataInfo {
     DataInfo {
         data_dir: state.paths.data_dir.to_string_lossy().to_string(),
         journal_path: state.paths.journal.to_string_lossy().to_string(),
         backup_dir: state.paths.backups.to_string_lossy().to_string(),
+        screenshot_dir: state.paths.screenshots.to_string_lossy().to_string(),
         version: app.package_info().version.to_string(),
         is_desktop: true,
     }
@@ -551,6 +699,7 @@ pub fn run() {
             let paths = resolve_paths(app.handle())?;
             fs::create_dir_all(&paths.data_dir)?;
             fs::create_dir_all(&paths.backups)?;
+            fs::create_dir_all(&paths.screenshots)?;
             app.manage(AppState {
                 paths,
                 save_lock: Arc::new(Mutex::new(())),
@@ -566,6 +715,8 @@ pub fn run() {
             storage_list_backups,
             storage_restore,
             storage_clear,
+            screenshot_save,
+            screenshot_load,
             data_info,
             open_data_folder,
             save_download

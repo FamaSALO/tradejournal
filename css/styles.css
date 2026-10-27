@@ -173,6 +173,37 @@ svg { display: block; }
 .nav-item.active .nav-badge { background: rgba(49, 227, 170, 0.16); color: #8df3d2; }
 
 .sidebar-bottom { margin-top: auto; padding-top: 22px; }
+.account-switch {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-bottom: 9px;
+  padding: 0 2px;
+}
+.account-switch > span {
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+  color: var(--muted-2);
+}
+.account-switch select {
+  width: 100%;
+  padding: 7px 26px 7px 9px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background-color: #0c131b;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%238b9bb0' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 9px center;
+  color: #c4d1e1;
+  font-size: 11px;
+  font-weight: 500;
+  appearance: none;
+  -webkit-appearance: none;
+  outline: none;
+}
+.account-switch select:focus { border-color: rgba(49, 227, 170, 0.5); }
 .balance-card {
   margin-bottom: 9px;
   padding: 14px;
@@ -213,6 +244,8 @@ svg { display: block; }
 .avatar {
   width: 36px;
   height: 36px;
+  padding: 0;
+  overflow: hidden;
   border-radius: 50%;
   border: 1px solid rgba(49, 227, 170, 0.25);
   background: linear-gradient(145deg, rgba(49, 227, 170, 0.2), rgba(139, 92, 246, 0.16));
@@ -223,6 +256,7 @@ svg { display: block; }
   transition: transform 0.16s ease, border-color 0.16s ease;
 }
 .avatar:hover { transform: translateY(-1px); border-color: rgba(49, 227, 170, 0.55); }
+.avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
 
 /* ============================ Controls ============================ */
 .btn {
@@ -895,9 +929,78 @@ svg { display: block; }
 .rule-tile p { font-size: 10.5px; line-height: 1.6; color: var(--muted); }
 
 /* ============================ Settings ============================ */
+.profile-accounts-card { overflow: hidden; }
+.profile-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(280px, 0.9fr);
+  gap: 22px;
+  align-items: stretch;
+}
+.profile-panel {
+  display: flex;
+  gap: 18px;
+  align-items: flex-start;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 13px;
+  background: rgba(255, 255, 255, 0.016);
+}
+.profile-avatar-wrap { display: flex; flex-direction: column; align-items: center; gap: 8px; width: 150px; flex-shrink: 0; }
+.profile-avatar {
+  width: 82px;
+  height: 82px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 50%;
+  border: 1px solid rgba(49, 227, 170, 0.28);
+  background: linear-gradient(145deg, rgba(49, 227, 170, 0.2), rgba(139, 92, 246, 0.16));
+  color: #c6ffe9;
+  font-size: 24px;
+  font-weight: 700;
+}
+.profile-avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.profile-avatar-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 5px; }
+.profile-avatar-wrap p { text-align: center; line-height: 1.45; }
+.profile-fields { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 12px; }
+.account-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px;
+  border: 1px solid rgba(49, 227, 170, 0.14);
+  border-radius: 13px;
+  background:
+    radial-gradient(200px 90px at 100% 0%, rgba(49, 227, 170, 0.09), transparent 72%),
+    rgba(255, 255, 255, 0.016);
+}
+.account-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
+.account-head strong { display: block; margin-top: 3px; font-size: 14px; color: #dbe6f3; letter-spacing: -0.01em; }
+.account-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.account-panel > p { line-height: 1.5; }
 .settings-form { row-gap: 14px; }
 .form-actions { display: flex; align-items: center; gap: 12px; margin-top: 2px; }
 .form-actions .muted { font-size: 10.5px; }
+.draft-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 2px 7px;
+  border-radius: 20px;
+  background: var(--amber-soft);
+  color: var(--amber);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  vertical-align: middle;
+}
+.draft-reset { flex-shrink: 0; font-size: 10.5px; }
+.shot-loading {
+  display: grid;
+  place-items: center;
+  min-height: 92px;
+  color: var(--muted-2);
+  font-size: 10.5px;
+}
 .data-actions { display: flex; flex-wrap: wrap; gap: 7px; }
 .storage-block { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--border); }
 .storage-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; font-size: 10.5px; color: var(--muted); }
@@ -1310,6 +1413,11 @@ svg { display: block; }
   .calc-grid { grid-template-columns: 1fr 1fr; }
   .form-grid { grid-template-columns: 1fr; }
   .form-grid .span-2 { grid-column: span 1; }
+  .profile-layout { grid-template-columns: 1fr; }
+  .profile-panel { flex-direction: column; }
+  .profile-avatar-wrap { width: 100%; flex-direction: row; align-items: center; text-align: left; }
+  .profile-avatar-wrap p { text-align: left; }
+  .profile-avatar-actions { justify-content: flex-start; }
   .trades-toolbar { padding: 0 12px 12px; }
   .search { min-width: 100%; }
   .trades-toolbar .select-wrap { flex: 1; }
