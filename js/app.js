@@ -4,8 +4,17 @@
   const U = NS.utils;
   const store = NS.store;
   const desktop = window.tradeJournalDesktop || null;
-  const APP_VERSION = '2.1.0';
+  const APP_VERSION = '2.1.1';
   const DRAFT_PREFIX = 'tradejournal.draft.v1.';
+  // Screenshots keep their detail: desktop stores lossless PNG when it stays
+  // reasonable in size, otherwise high-quality WebP. The web version uses the
+  // same WebP quality but caps the size so localStorage stays usable.
+  const SHOT_MAX_SIDE_DESKTOP = 2560;
+  const SHOT_MAX_SIDE_WEB = 1920;
+  const SHOT_MAX_CHARS_DESKTOP = 7200000;
+  const SHOT_MAX_CHARS_WEB = 2800000;
+  const SHOT_PNG_MAX_CHARS_DESKTOP = 2000000;
+  const SHOT_LOSSY_QUALITY = 0.92;
 
   const $ = function (selector, root) { return (root || document).querySelector(selector); };
   const $$ = function (selector, root) { return Array.prototype.slice.call((root || document).querySelectorAll(selector)); };
@@ -2397,6 +2406,37 @@
     }
   }
 
+  let webpEncodeSupport = null;
+
+  function supportsWebpEncoding() {
+    if (webpEncodeSupport === null) {
+      try {
+        webpEncodeSupport = document.createElement('canvas').toDataURL('image/webp').indexOf('data:image/webp') === 0;
+      } catch (err) {
+        webpEncodeSupport = false;
+      }
+    }
+    return webpEncodeSupport;
+  }
+
+  function encodeLossyScreenshot(canvas, maxChars) {
+    const mime = supportsWebpEncoding() ? 'image/webp' : 'image/jpeg';
+    let quality = SHOT_LOSSY_QUALITY;
+    let dataUrl = canvas.toDataURL(mime, quality);
+    while (dataUrl.length > maxChars && quality > 0.56) {
+      quality = Math.max(0.56, quality - 0.06);
+      dataUrl = canvas.toDataURL(mime, quality);
+    }
+    return dataUrl;
+  }
+
+  function encodeScreenshot(canvas) {
+    if (!desktop) return encodeLossyScreenshot(canvas, SHOT_MAX_CHARS_WEB);
+    const png = canvas.toDataURL('image/png');
+    if (png.length <= SHOT_PNG_MAX_CHARS_DESKTOP) return png;
+    return encodeLossyScreenshot(canvas, SHOT_MAX_CHARS_DESKTOP);
+  }
+
   function compressScreenshot(file) {
     if (!file) return;
     if (state.screenshotBusy) {
@@ -2411,15 +2451,17 @@
     reader.onload = function () {
       const image = new Image();
       image.onload = function () {
-        const maxSide = 1100;
+        const maxSide = desktop ? SHOT_MAX_SIDE_DESKTOP : SHOT_MAX_SIDE_WEB;
         const scale = Math.min(1, maxSide / Math.max(image.width, image.height));
         const canvas = document.createElement('canvas');
         canvas.width = Math.max(1, Math.round(image.width * scale));
         canvas.height = Math.max(1, Math.round(image.height * scale));
         const ctx = canvas.getContext('2d');
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
         ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
         try {
-          applyScreenshot(canvas.toDataURL('image/jpeg', 0.72));
+          applyScreenshot(encodeScreenshot(canvas));
         } catch (err) {
           toast('Не удалось обработать изображение.', 'error');
         }
