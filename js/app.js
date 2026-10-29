@@ -4,8 +4,12 @@
   const U = NS.utils;
   const store = NS.store;
   const desktop = window.tradeJournalDesktop || null;
-  const APP_VERSION = '2.1.1';
+  const APP_VERSION = '2.1.2';
   const DRAFT_PREFIX = 'tradejournal.draft.v1.';
+  // Drafts live in localStorage even on desktop, so a full screenshot data URL
+  // must not be duplicated there. Keep the draft small; the screenshot stays in
+  // the trade itself or in a file reference on desktop.
+  const DRAFT_MAX_CHARS = 1000000;
   // Screenshots keep their detail: desktop stores lossless PNG when it stays
   // reasonable in size, otherwise high-quality WebP. The web version uses the
   // same WebP quality but caps the size so localStorage stays usable.
@@ -46,6 +50,8 @@
     tradeInitializing: false,
     tradeDraftTimer: null,
     draftQuotaWarned: false,
+    draftShotWarned: false,
+    draftScreenshotOmitted: false,
     noteId: null,
     screenshot: '',
     screenshotPreview: '',
@@ -111,6 +117,19 @@
           '<button type="button" class="btn btn-ghost" id="recoveryReload">Попробовать снова</button>' +
           '<button type="button" class="btn btn-danger-ghost" id="recoveryReset">Сбросить журнал</button>' +
         '</div>' +
+        '<div class="recovery-restore" id="recoveryRestore" hidden>' +
+          '<h2>Восстановить журнал</h2>' +
+          '<p class="recovery-hint">Можно вернуть предыдущую версию или одну из резервных копий. Текущий файл перед заменой сохраняется в папке backups.</p>' +
+          '<div class="recovery-restore-row">' +
+            '<select id="recoveryBackupSelect" aria-label="Резервная копия" disabled></select>' +
+            '<button type="button" class="btn btn-primary" id="recoveryRestoreBackup" disabled>Восстановить копию</button>' +
+          '</div>' +
+          '<div class="recovery-actions">' +
+            '<button type="button" class="btn btn-ghost" id="recoveryRestorePrevious">Вернуть предыдущую версию</button>' +
+            '<button type="button" class="btn btn-ghost" id="recoveryOpenFolder">Открыть папку данных</button>' +
+          '</div>' +
+          '<p class="recovery-status" id="recoveryStatus" role="status"></p>' +
+        '</div>' +
         '<p class="recovery-hint">Сброс удалит повреждённые данные и загрузит демо-журнал.</p>' +
       '</div>';
     document.body.appendChild(screen);
@@ -132,6 +151,86 @@
       if (!window.confirm('Удалить повреждённые данные и загрузить демо-журнал? Убедитесь, что файл уже скачан.')) return;
       await store.clearRaw();
       location.reload();
+    });
+
+    if (desktop) setupRecoveryRestore();
+  }
+
+  function setupRecoveryRestore() {
+    const panel = $('#recoveryRestore');
+    if (!panel || !desktop) return;
+    panel.hidden = false;
+
+    const select = $('#recoveryBackupSelect');
+    const restoreButton = $('#recoveryRestoreBackup');
+    const previousButton = $('#recoveryRestorePrevious');
+    const folderButton = $('#recoveryOpenFolder');
+    const status = $('#recoveryStatus');
+    let busy = false;
+
+    function setStatus(text, tone) {
+      status.textContent = text || '';
+      status.className = 'recovery-status' + (tone ? ' ' + tone : '');
+    }
+
+    function setBusy(value) {
+      busy = value;
+      [select, restoreButton, previousButton, folderButton].forEach(function (element) {
+        if (element) element.disabled = value;
+      });
+    }
+
+    desktop.listBackups().then(function (backups) {
+      const list = Array.isArray(backups) ? backups : [];
+      if (!list.length) {
+        select.innerHTML = '<option value="">Резервных копий нет</option>';
+        return;
+      }
+      select.innerHTML = list.map(function (backup) {
+        const label = desktopReasonLabel(backup.reason) + ' · ' + formatBackupDate(backup.mtime) + ' · ' + U.bytes(backup.size);
+        return '<option value="' + U.escapeHtml(backup.name) + '">' + U.escapeHtml(label) + '</option>';
+      }).join('');
+      select.disabled = false;
+      restoreButton.disabled = false;
+    }).catch(function (err) {
+      select.innerHTML = '<option value="">Не удалось прочитать копии</option>';
+      setStatus(err && err.message ? err.message : 'Не удалось прочитать список резервных копий.', 'error');
+    });
+
+    restoreButton.addEventListener('click', function () {
+      if (busy) return;
+      const name = select.value;
+      if (!name) return;
+      if (!window.confirm('Восстановить выбранную резервную копию? Текущий файл журнала будет сохранён в папке backups.')) return;
+      setBusy(true);
+      setStatus('Восстанавливаем резервную копию…');
+      desktop.restoreBackup(name).then(function () {
+        setStatus('Копия восстановлена. Перезапускаем приложение…', 'success');
+        setTimeout(function () { location.reload(); }, 500);
+      }).catch(function (err) {
+        setBusy(false);
+        setStatus(err && err.message ? err.message : 'Не удалось восстановить копию.', 'error');
+      });
+    });
+
+    previousButton.addEventListener('click', function () {
+      if (busy) return;
+      if (!window.confirm('Вернуть предыдущую версию журнала? Текущий файл будет сохранён в папке backups.')) return;
+      setBusy(true);
+      setStatus('Восстанавливаем предыдущую версию…');
+      desktop.restorePrevious().then(function () {
+        setStatus('Предыдущая версия восстановлена. Перезапускаем приложение…', 'success');
+        setTimeout(function () { location.reload(); }, 500);
+      }).catch(function (err) {
+        setBusy(false);
+        setStatus(err && err.message ? err.message : 'Не удалось восстановить предыдущую версию.', 'error');
+      });
+    });
+
+    folderButton.addEventListener('click', function () {
+      desktop.openDataFolder().catch(function (err) {
+        setStatus(err && err.message ? err.message : 'Не удалось открыть папку данных.', 'error');
+      });
     });
   }
 
@@ -330,6 +429,10 @@
     return U.plural(n, ['сделка', 'сделки', 'сделок']);
   }
 
+  function pluralScreenshots(n) {
+    return U.plural(n, ['скриншот', 'скриншота', 'скриншотов']);
+  }
+
   /* ============================================================
      Periods
      ============================================================ */
@@ -519,7 +622,7 @@
     return limit ? list.slice(-limit) : list;
   }
 
-  function renderDiscipline() {
+  function disciplineSnapshot() {
     const settings = store.state.settings;
     const today = U.todayISO();
     const todayTrades = store.state.trades.filter(function (trade) { return trade.date === today; });
@@ -534,6 +637,45 @@
     const startOfDayBalance = Math.max(0, balance - dayPnl);
     const lossLimit = Math.max(0, (U.parseNum(settings.dailyLossLimit) || 0) / 100 * startOfDayBalance);
     const maxTrades = U.parseNum(settings.maxTradesPerDay) || 0;
+    return {
+      todayTrades: todayTrades,
+      closedToday: closedToday,
+      dayPnl: dayPnl,
+      startOfDayBalance: startOfDayBalance,
+      lossLimit: lossLimit,
+      maxTrades: maxTrades
+    };
+  }
+
+  function dailyLimitWarning(date) {
+    if (date !== U.todayISO()) return null;
+    const snapshot = disciplineSnapshot();
+    const messages = [];
+    let title = 'Дневной лимит превышен';
+
+    if (snapshot.lossLimit > 0 && snapshot.dayPnl <= -snapshot.lossLimit) {
+      title = 'Дневной лимит убытка достигнут';
+      messages.push('Убыток за сегодня: ' + U.money(-snapshot.dayPnl) + ' при лимите ' + U.money(snapshot.lossLimit) + '.');
+    }
+    if (snapshot.maxTrades > 0 && snapshot.todayTrades.length >= snapshot.maxTrades) {
+      if (messages.length) title = 'Дневные лимиты превышены';
+      else title = 'Лимит сделок на день достигнут';
+      messages.push('Сегодня уже ' + snapshot.todayTrades.length + ' ' + pluralTrades(snapshot.todayTrades.length) + ' при лимите ' + snapshot.maxTrades + '.');
+    }
+    if (!messages.length) return null;
+
+    return {
+      title: title,
+      text: messages.join(' ') + ' Добавить сделку вне плана?'
+    };
+  }
+
+  function renderDiscipline() {
+    const snapshot = disciplineSnapshot();
+    const todayTrades = snapshot.todayTrades;
+    const dayPnl = snapshot.dayPnl;
+    const lossLimit = snapshot.lossLimit;
+    const maxTrades = snapshot.maxTrades;
     const lossUsed = dayPnl < 0 ? Math.min(-dayPnl, lossLimit) : 0;
     const lossPct = lossLimit > 0 ? Math.min(100, (lossUsed / lossLimit) * 100) : 0;
     const countPct = maxTrades > 0 ? Math.min(100, (todayTrades.length / maxTrades) * 100) : 0;
@@ -554,7 +696,7 @@
     const countBarClass = countPct >= 100 ? 'warn' : '';
 
     const lossRule = lossLimit > 0
-      ? '<div class="rule"><div class="rule-top"><span>Лимит убытка</span><b>' + U.money(lossUsed) + ' / ' + U.money(lossLimit) + '</b></div>' +
+      ? '<div class="rule"><div class="rule-top"><span>Лимит убытка</span><b>' + U.escapeHtml(U.money(lossUsed)) + ' / ' + U.escapeHtml(U.money(lossLimit)) + '</b></div>' +
         '<div class="progress"><i class="' + lossBarClass + '" style="width:' + lossPct + '%"></i></div></div>'
       : '<div class="rule"><div class="rule-top"><span>Лимит убытка</span><b>не задан</b></div><div class="progress"><i style="width:0"></i></div></div>';
 
@@ -1912,9 +2054,31 @@
         toast('В файле нет корректных массивов сделок и записей. Похоже, это резервная копия другого формата.', 'error');
         return;
       }
+      const stats = store.analyzeImport(data);
+      const details = [
+        'Все счета, сделки и записи будут заменены данными из файла. Рекомендуем сначала сделать экспорт текущего журнала.',
+        'В файле: счетов ' + stats.accounts + ', сделок ' + stats.trades + ', записей ' + stats.notes + ', скриншотов ' + stats.screenshots + '.',
+        'Будет импортировано: сделок ' + stats.tradesAccepted + ', записей ' + stats.notesAccepted + ', скриншотов ' + stats.screenshotsAccepted + '.'
+      ];
+      if (stats.screenshotsDropped) {
+        const dropped = stats.screenshotsDropped;
+        const singular = dropped % 10 === 1 && dropped % 100 !== 11;
+        details.push('Внимание: ' + dropped + ' ' + pluralScreenshots(dropped) + (singular ? ' не будет импортирован' : ' не будут импортированы') + ' — слишком большой размер или неподдерживаемый формат.');
+      }
+      if (stats.fileScreenshots) {
+        details.push('Скриншотов-ссылок на файлы: ' + stats.fileScreenshots + '. Они откроются только на ПК, где создан бэкап.');
+      }
+      if (stats.invalidDates) {
+        details.push('Сделок с некорректной датой: ' + stats.invalidDates + ' — дата будет заменена на сегодняшнюю.');
+      }
+      if (stats.missingSymbols) {
+        details.push('Сделок без инструмента: ' + stats.missingSymbols + ' — они не будут импортированы.');
+      }
+      details.push('Сразу после импорта действие можно будет отменить.');
+
       askConfirm({
         title: 'Импортировать данные?',
-        text: 'Все счета, сделки и записи будут заменены данными из файла. Рекомендуем сначала сделать экспорт текущего журнала. Сразу после импорта действие можно будет отменить.',
+        text: details.join(' '),
         okLabel: 'Импортировать'
       }).then(async function (confirmed) {
         if (!confirmed) return;
@@ -1936,7 +2100,11 @@
         const importedAccounts = store.state.accounts.length;
         const importedTrades = store.state.accounts.reduce(function (sum, account) { return sum + account.trades.length; }, 0);
         const importedNotes = store.state.accounts.reduce(function (sum, account) { return sum + account.notes.length; }, 0);
-        toast('Импортировано: счетов ' + importedAccounts + ', сделок ' + importedTrades + ', записей ' + importedNotes, 'success', {
+        let importedMessage = 'Импортировано: счетов ' + importedAccounts + ', сделок ' + importedTrades + ', записей ' + importedNotes;
+        if (stats.screenshotsDropped) {
+          importedMessage += '. Не импортировано скриншотов: ' + stats.screenshotsDropped;
+        }
+        toast(importedMessage, stats.screenshotsDropped ? 'warn' : 'success', {
           label: 'Отменить',
           onClick: async function () {
             const restored = await store.replaceData(before);
@@ -2165,8 +2333,30 @@
       fields: readTradeFields(),
       screenshot: state.screenshot || ''
     };
+
+    let serialized = JSON.stringify(payload);
+    state.draftScreenshotOmitted = false;
+    if (serialized.length > DRAFT_MAX_CHARS && payload.screenshot) {
+      payload.screenshot = '';
+      payload.screenshotOmitted = true;
+      state.draftScreenshotOmitted = true;
+      serialized = JSON.stringify(payload);
+      if (!state.draftShotWarned) {
+        state.draftShotWarned = true;
+        toast('Скриншот слишком большой для черновика: если закрыть форму, он не сохранится. Сохраните сделку, чтобы не потерять изображение.', 'warn');
+      }
+    }
+
+    if (serialized.length > DRAFT_MAX_CHARS) {
+      if (!state.draftQuotaWarned) {
+        state.draftQuotaWarned = true;
+        toast('Не удалось сохранить черновик: данных слишком много для хранилища браузера.', 'warn');
+      }
+      return;
+    }
+
     try {
-      localStorage.setItem(tradeDraftKey(accountId, state.tradeId), JSON.stringify(payload));
+      localStorage.setItem(tradeDraftKey(accountId, state.tradeId), serialized);
       state.draftQuotaWarned = false;
     } catch (err) {
       if (!state.draftQuotaWarned) {
@@ -2248,6 +2438,8 @@
     state.tradeDirty = false;
     state.tradeSaving = false;
     state.screenshotBusy = false;
+    state.draftShotWarned = false;
+    state.draftScreenshotOmitted = false;
 
     $('#tradeModalTitleText').textContent = trade ? 'Редактировать сделку' : 'Новая сделка';
     applyTradeFields(state.tradeBaseline);
@@ -2276,7 +2468,14 @@
     updateTradePreview();
     syncTradeDirty();
     openModal('tradeModal', '#tradeSymbol');
-    if (restored) toast('Черновик восстановлен', 'success');
+    if (restored) {
+      toast(
+        draft && draft.screenshotOmitted
+          ? 'Черновик восстановлен без скриншота: изображение слишком большое для автосохранения.'
+          : 'Черновик восстановлен',
+        draft && draft.screenshotOmitted ? 'warn' : 'success'
+      );
+    }
   }
 
   function setSide(side) {
@@ -2494,6 +2693,8 @@
   }
 
   function handleScreenshotPaste(event) {
+    if (event.defaultPrevented) return;
+    if (isTyping(event.target)) return;
     const modal = $('#tradeModal');
     if (!modal || modal.hidden) return;
     const data = event.clipboardData;
@@ -2600,6 +2801,19 @@
     if (saveButton) saveButton.disabled = true;
 
     try {
+      if (!existing) {
+        const limitWarning = dailyLimitWarning(date);
+        if (limitWarning) {
+          const proceed = await askConfirm({
+            title: limitWarning.title,
+            text: limitWarning.text,
+            okLabel: 'Добавить всё равно',
+            danger: false
+          });
+          if (!proceed) return;
+        }
+      }
+
       let screenshot = state.screenshot || '';
       if (desktop && screenshot && !/^file:screenshots\//i.test(screenshot)) {
         screenshot = await store.saveScreenshot(screenshot);
@@ -2686,7 +2900,9 @@
     saveDraftNow();
     askConfirm({
       title: 'Закрыть форму сделки?',
-      text: 'Введённые данные сохранены как черновик. Они восстановятся, когда вы снова откроете эту сделку.',
+      text: state.draftScreenshotOmitted
+        ? 'Текст будет сохранён как черновик. Скриншот слишком большой для черновика и не сохранится — сохраните сделку, чтобы не потерять изображение.'
+        : 'Введённые данные сохранены как черновик. Они восстановятся, когда вы снова откроете эту сделку.',
       okLabel: 'Закрыть',
       danger: false
     }).then(function (confirmed) {

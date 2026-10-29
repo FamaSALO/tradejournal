@@ -155,17 +155,10 @@ fn write_atomic(path: &Path, content: &[u8]) -> std::io::Result<()> {
     match fs::rename(&temp_path, path) {
         Ok(()) => Ok(()),
         Err(error) => {
-            if matches!(
-                error.kind(),
-                ErrorKind::PermissionDenied | ErrorKind::AlreadyExists
-            ) {
-                let copy_result = fs::copy(&temp_path, path);
-                let _ = fs::remove_file(&temp_path);
-                copy_result.map(|_| ())
-            } else {
-                let _ = fs::remove_file(&temp_path);
-                Err(error)
-            }
+            // Never fall back to copying over the live file: a failed copy can
+            // leave a half-written journal. The old file is still intact.
+            let _ = fs::remove_file(&temp_path);
+            Err(error)
         }
     }
 }
@@ -270,7 +263,7 @@ fn make_backup(
     fs::create_dir_all(&paths.backups)
         .map_err(|error| format!("Не удалось создать папку резервных копий: {error}"))?;
     let target = unique_backup_path(&paths.backups, reason);
-    fs::write(&target, raw.as_bytes())
+    write_atomic(&target, raw.as_bytes())
         .map_err(|error| format!("Не удалось создать резервную копию: {error}"))?;
 
     *lock_or_recover(last_auto_backup) = Some(Instant::now());
@@ -287,7 +280,9 @@ fn save_journal(state: &AppState, raw: String) -> Result<usize, String> {
         .map_err(|error| format!("Не удалось создать папку данных: {error}"))?;
 
     if let Ok(old_raw) = fs::read_to_string(&state.paths.journal) {
-        let _ = fs::copy(&state.paths.journal, &state.paths.previous);
+        if let Err(error) = write_atomic(&state.paths.previous, old_raw.as_bytes()) {
+            eprintln!("TradeJournal: не удалось обновить предыдущую версию: {error}");
+        }
         if let Err(error) = make_backup(
             &state.paths,
             "auto",
@@ -364,7 +359,7 @@ fn restore_backup(state: &AppState, name: &str) -> Result<String, String> {
         .map_err(|error| format!("Не удалось создать папку данных: {error}"))?;
 
     if let Ok(current) = fs::read_to_string(&state.paths.journal) {
-        let _ = fs::copy(&state.paths.journal, &state.paths.previous);
+        let _ = write_atomic(&state.paths.previous, current.as_bytes());
         let _ = make_backup(
             &state.paths,
             "before-restore",
@@ -376,6 +371,30 @@ fn restore_backup(state: &AppState, name: &str) -> Result<String, String> {
 
     write_atomic(&state.paths.journal, raw.as_bytes())
         .map_err(|error| format!("Не удалось восстановить копию: {error}"))?;
+    Ok(raw)
+}
+
+fn restore_previous(state: &AppState) -> Result<String, String> {
+    let _guard = lock_or_recover(&state.save_lock);
+    let raw = fs::read_to_string(&state.paths.previous)
+        .map_err(|_| "Предыдущая версия журнала не найдена.".to_string())?;
+    validate_raw(&raw)?;
+
+    fs::create_dir_all(&state.paths.data_dir)
+        .map_err(|error| format!("Не удалось создать папку данных: {error}"))?;
+
+    if let Ok(current) = fs::read_to_string(&state.paths.journal) {
+        let _ = make_backup(
+            &state.paths,
+            "before-restore",
+            &current,
+            true,
+            &state.last_auto_backup,
+        );
+    }
+
+    write_atomic(&state.paths.journal, raw.as_bytes())
+        .map_err(|error| format!("Не удалось восстановить предыдущую версию: {error}"))?;
     Ok(raw)
 }
 
@@ -581,6 +600,14 @@ async fn storage_restore(state: State<'_, AppState>, name: String) -> Result<Str
 }
 
 #[tauri::command]
+async fn storage_restore_previous(state: State<'_, AppState>) -> Result<String, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || restore_previous(&state))
+        .await
+        .map_err(|error| format!("Не удалось выполнить восстановление: {error}"))?
+}
+
+#[tauri::command]
 async fn storage_clear(state: State<'_, AppState>) -> Result<(), String> {
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || clear_journal(&state))
@@ -714,6 +741,7 @@ pub fn run() {
             storage_backup,
             storage_list_backups,
             storage_restore,
+            storage_restore_previous,
             storage_clear,
             screenshot_save,
             screenshot_load,

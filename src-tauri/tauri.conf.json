@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "TradeJournal",
-  "version": "2.1.1",
+  "version": "2.1.2",
   "identifier": "com.famasalo.tradejournal",
   "build": {
     "beforeDevCommand": "npm run web:build",

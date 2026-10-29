@@ -78,6 +78,14 @@
       });
     },
 
+    restorePrevious: function () {
+      return waitForSaves().then(function () {
+        return call('storage_restore_previous');
+      }).then(function (raw) {
+        return { ok: true, raw: raw };
+      });
+    },
+
     saveScreenshot: function (id, dataUrl) {
       return call('screenshot_save', { id: id, dataUrl: dataUrl });
     },

@@ -9,7 +9,10 @@
   const KEY = 'tradejournal.v1';
   const SCHEMA_VERSION = 2;
   const DEFAULT_ACCOUNT_NAME = 'Основной счёт';
-  const MAX_SCREENSHOT_LENGTH = 3000000;
+  // Desktop exports can embed screenshots up to 7.2M chars (see app.js), so the
+  // import limit must be at least that high or restoring a backup silently
+  // drops screenshots. Web keeps a lower limit because localStorage is small.
+  const MAX_SCREENSHOT_LENGTH = desktop ? 8000000 : 3000000;
   const SAFE_SCREENSHOT_RE = /^data:image\/(?:png|jpe?g|webp);base64,[a-z0-9+/=]+$/i;
   const SAFE_SCREENSHOT_FILE_RE = /^file:screenshots\/[a-z0-9_-]{1,80}\.(?:jpe?g|png|webp)$/i;
   const MAX_AVATAR_LENGTH = 2000000;
@@ -245,6 +248,63 @@
   function isJournalData(raw) {
     return !!raw && typeof raw === 'object' && !Array.isArray(raw)
       && (Array.isArray(raw.accounts) || (Array.isArray(raw.trades) && Array.isArray(raw.notes)));
+  }
+
+  function analyzeImport(raw) {
+    const stats = {
+      accounts: 0,
+      trades: 0,
+      tradesAccepted: 0,
+      notes: 0,
+      notesAccepted: 0,
+      screenshots: 0,
+      screenshotsAccepted: 0,
+      screenshotsDropped: 0,
+      fileScreenshots: 0,
+      invalidDates: 0,
+      missingSymbols: 0
+    };
+    if (!isJournalData(raw)) return stats;
+
+    const accounts = Array.isArray(raw.accounts)
+      ? raw.accounts
+      : [{ trades: raw.trades, notes: raw.notes }];
+
+    accounts.forEach(function (account) {
+      stats.accounts++;
+      const trades = account && Array.isArray(account.trades) ? account.trades : [];
+      trades.forEach(function (trade) {
+        if (!trade || typeof trade !== 'object') return;
+        stats.trades++;
+        if (!String(trade.symbol || '').trim()) stats.missingSymbols++;
+        if (!(typeof trade.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(trade.date.slice(0, 10)))) {
+          stats.invalidDates++;
+        }
+        if (!normalizeTrade(trade)) return;
+        stats.tradesAccepted++;
+
+        const shot = typeof trade.screenshot === 'string' ? trade.screenshot : '';
+        if (!shot) return;
+        stats.screenshots++;
+        if (SAFE_SCREENSHOT_FILE_RE.test(shot)) {
+          stats.fileScreenshots++;
+          stats.screenshotsAccepted++;
+        } else if (shot.length <= MAX_SCREENSHOT_LENGTH && SAFE_SCREENSHOT_RE.test(shot)) {
+          stats.screenshotsAccepted++;
+        } else {
+          stats.screenshotsDropped++;
+        }
+      });
+
+      const notes = account && Array.isArray(account.notes) ? account.notes : [];
+      notes.forEach(function (note) {
+        if (!note || typeof note !== 'object') return;
+        stats.notes++;
+        if (normalizeNote(note)) stats.notesAccepted++;
+      });
+    });
+
+    return stats;
   }
 
   function normalizeData(raw) {
@@ -680,6 +740,7 @@
     get needsMigration() { return pendingMigration; },
     hasStored: hasStored,
     isJournalData: isJournalData,
+    analyzeImport: analyzeImport,
     load: load,
     getRaw: getRaw,
     clearRaw: clearRaw,

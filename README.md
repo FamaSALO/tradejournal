@@ -55,8 +55,8 @@ src-tauri/src/lib.rs             Rust: окно, файлы, копии, диа�
 
 В GitHub Release публикуются:
 
-- `TradeJournal_2.1.1_x64-setup.exe` — установщик NSIS для текущего пользователя, без прав администратора.
-- `TradeJournal-portable-2.1.1-x64.zip` — портативная версия, которая запускается без установки.
+- `TradeJournal_2.1.2_x64-setup.exe` — установщик NSIS для текущего пользователя, без прав администратора.
+- `TradeJournal-portable-2.1.2-x64.zip` — портативная версия, которая запускается без установки.
 - `SHA256SUMS.txt` — контрольные суммы файлов.
 
 Установщик не подписан сертификатом. При первом запуске Windows SmartScreen может показать предупреждение: выберите **Подробнее → Выполнить всё равно**. Это ожидаемо для сборки без платной подписи кода.
@@ -126,7 +126,7 @@ npm.cmd run build
 
 ```text
 src-tauri\target\release\TradeJournal.exe
-src-tauri\target\release\bundle\nsis\TradeJournal_2.1.1_x64-setup.exe
+src-tauri\target\release\bundle\nsis\TradeJournal_2.1.2_x64-setup.exe
 ```
 
 Портативную сборку можно получить, упаковав `TradeJournal.exe` в ZIP. Именно это делает CI-сборка в `.github/workflows/tauri.yml`.
