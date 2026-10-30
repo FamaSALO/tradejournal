@@ -119,7 +119,7 @@
         '</div>' +
         '<div class="recovery-restore" id="recoveryRestore" hidden>' +
           '<h2>Восстановить журнал</h2>' +
-          '<p class="recovery-hint">Можно вернуть предыдущую версию или одну из резервных копий. Текущий файл перед заменой сохраняется в папке backups.</p>' +
+          '<p class="recovery-hint">Можно вернуть предыдущую версию или одну из резервных копий. Повреждённый файл сначала скачайте кнопкой выше — после замены он не сохраняется.</p>' +
           '<div class="recovery-restore-row">' +
             '<select id="recoveryBackupSelect" aria-label="Резервная копия" disabled></select>' +
             '<button type="button" class="btn btn-primary" id="recoveryRestoreBackup" disabled>Восстановить копию</button>' +
@@ -201,7 +201,7 @@
       if (busy) return;
       const name = select.value;
       if (!name) return;
-      if (!window.confirm('Восстановить выбранную резервную копию? Текущий файл журнала будет сохранён в папке backups.')) return;
+      if (!window.confirm('Восстановить выбранную резервную копию? Повреждённый текущий файл будет заменён.')) return;
       setBusy(true);
       setStatus('Восстанавливаем резервную копию…');
       desktop.restoreBackup(name).then(function () {
@@ -215,7 +215,7 @@
 
     previousButton.addEventListener('click', function () {
       if (busy) return;
-      if (!window.confirm('Вернуть предыдущую версию журнала? Текущий файл будет сохранён в папке backups.')) return;
+      if (!window.confirm('Вернуть предыдущую версию журнала? Повреждённый текущий файл будет заменён.')) return;
       setBusy(true);
       setStatus('Восстанавливаем предыдущую версию…');
       desktop.restorePrevious().then(function () {

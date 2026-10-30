@@ -359,14 +359,21 @@ fn restore_backup(state: &AppState, name: &str) -> Result<String, String> {
         .map_err(|error| format!("Не удалось создать папку данных: {error}"))?;
 
     if let Ok(current) = fs::read_to_string(&state.paths.journal) {
-        let _ = write_atomic(&state.paths.previous, current.as_bytes());
-        let _ = make_backup(
-            &state.paths,
-            "before-restore",
-            &current,
-            true,
-            &state.last_auto_backup,
-        );
+        // On the recovery screen the current journal is usually corrupt. Do not
+        // copy it into journal.previous.json or the backup list: that would make
+        // the "previous version" button and the backup list point at bad data.
+        if validate_raw(&current).is_ok() {
+            if let Err(error) = write_atomic(&state.paths.previous, current.as_bytes()) {
+                eprintln!("TradeJournal: не удалось обновить предыдущую версию: {error}");
+            }
+            let _ = make_backup(
+                &state.paths,
+                "before-restore",
+                &current,
+                true,
+                &state.last_auto_backup,
+            );
+        }
     }
 
     write_atomic(&state.paths.journal, raw.as_bytes())
@@ -384,13 +391,15 @@ fn restore_previous(state: &AppState) -> Result<String, String> {
         .map_err(|error| format!("Не удалось создать папку данных: {error}"))?;
 
     if let Ok(current) = fs::read_to_string(&state.paths.journal) {
-        let _ = make_backup(
-            &state.paths,
-            "before-restore",
-            &current,
-            true,
-            &state.last_auto_backup,
-        );
+        if validate_raw(&current).is_ok() {
+            let _ = make_backup(
+                &state.paths,
+                "before-restore",
+                &current,
+                true,
+                &state.last_auto_backup,
+            );
+        }
     }
 
     write_atomic(&state.paths.journal, raw.as_bytes())
