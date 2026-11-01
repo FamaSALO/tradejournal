@@ -587,7 +587,7 @@
             <div class="storage-block">
               <div class="storage-head"><span>Использование хранилища</span><strong id="storageText">—</strong></div>
               <div class="storage-meter"><i id="storageBar"></i></div>
-              <p class="muted small">В веб-версии данные лежат в localStorage браузера, в Windows-приложении — в локальных файлах, а скриншоты — отдельно в папке <b>screenshots</b>. Очистка кэша браузера удалит журнал — держите резервную копию.</p>
+              <p class="muted small">В веб-версии данные лежат в localStorage браузера, в Windows-приложении — в локальных файлах, а скриншоты — отдельно в папке <b>screenshots</b>. Очистка кэша браузера удалит журнал — держите резервную копию. Глубокая проверка неиспользуемых скриншотов доступна в Windows-приложении.</p>
             </div>
 
             <div class="danger-zone">
@@ -635,6 +635,45 @@
               <p class="muted small" id="updateStatus" role="status">Обновления проверяются автоматически при запуске.</p>
             </div>
 
+            <div class="storage-health" id="storageHealth">
+              <div class="storage-head">
+                <span>Здоровье хранилища</span>
+                <button type="button" class="btn btn-ghost btn-sm" id="scanStorageBtn">Проверить</button>
+              </div>
+              <div class="storage-health-grid" id="storageHealthGrid" hidden>
+                <div class="storage-stat">
+                  <span>Журнал</span>
+                  <strong id="healthJournalSize">—</strong>
+                  <small>journal.json</small>
+                </div>
+                <div class="storage-stat">
+                  <span>Скриншоты</span>
+                  <strong id="healthShotsSize">—</strong>
+                  <small id="healthShotsMeta">—</small>
+                </div>
+                <div class="storage-stat">
+                  <span>Резервные копии</span>
+                  <strong id="healthBackupsSize">—</strong>
+                  <small id="healthBackupsMeta">—</small>
+                </div>
+                <div class="storage-stat">
+                  <span>Предыдущая версия</span>
+                  <strong id="healthPreviousSize">—</strong>
+                  <small>journal.previous.json</small>
+                </div>
+              </div>
+              <p class="muted small storage-health-status" id="storageHealthStatus" role="status">Проверьте, сколько места занимают журнал, скриншоты и резервные копии. Поиск неиспользуемых файлов учитывает ссылки в журнале, предыдущей версии и всех резервных копиях.</p>
+              <div class="unused-screenshots" id="unusedScreenshots" hidden>
+                <div class="storage-head">
+                  <span>Неиспользуемые скриншоты</span>
+                  <strong id="unusedSummary">—</strong>
+                </div>
+                <ul class="unused-list" id="unusedList"></ul>
+                <p class="muted small" id="unusedNote" hidden></p>
+                <button type="button" class="btn btn-danger-ghost btn-sm" id="cleanupScreenshotsBtn">Удалить неиспользуемые</button>
+              </div>
+            </div>
+
             <div class="desktop-backups">
               <div class="storage-head">
                 <span>Последние резервные копии</span>
@@ -649,7 +688,7 @@
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17.5 8.5 12l4 3L21 6"/><path d="M15 6h6v6"/></svg>
             </div>
             <div>
-              <h3>TradeJournal <span class="version" id="appVersion">v2.2.0</span></h3>
+              <h3>TradeJournal <span class="version" id="appVersion">v2.2.1</span></h3>
               <p>Локальный дневник трейдера без серверов и регистрации. Сделки, календарь P&L, аналитика по сетапам и эмоциям, журнал наблюдений и калькулятор риска — всё в одном приложении. <span class="kbd">N</span> — новая сделка, <span class="kbd">Esc</span> — закрыть окно.</p>
             </div>
           </article>

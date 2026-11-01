@@ -122,6 +122,68 @@ test('trade normalization is idempotent', function () {
   assert.deepEqual(second, first);
 });
 
+test('analyzeImport reports every loss before the journal is replaced', function () {
+  const raw = {
+    accounts: [{
+      trades: [
+        {
+          id: 'ok',
+          date: '2026-01-05',
+          symbol: 'EURUSD',
+          side: 'long',
+          entry: 1,
+          qty: 1,
+          screenshot: 'data:image/png;base64,AAAA'
+        },
+        {
+          id: 'no-symbol',
+          date: '2026-01-05',
+          symbol: '',
+          side: 'long',
+          entry: 1,
+          qty: 1
+        },
+        {
+          id: 'bad-format',
+          date: '2026-01-05',
+          symbol: 'BTCUSD',
+          side: 'long',
+          entry: 1,
+          qty: 1,
+          screenshot: 'data:image/gif;base64,AAAA'
+        },
+        {
+          id: 'too-large',
+          date: '2026-01-05',
+          symbol: 'ETHUSD',
+          side: 'long',
+          entry: 1,
+          qty: 1,
+          screenshot: 'data:image/png;base64,' + 'A'.repeat(3000000)
+        }
+      ],
+      notes: [
+        { id: 'n1', date: '2026-01-05', text: 'ok' },
+        { id: 'n2', date: '2026-01-05', text: '' }
+      ]
+    }]
+  };
+
+  const stats = store.analyzeImport(raw);
+  assert.equal(stats.trades, 4);
+  assert.equal(stats.tradesAccepted, 3);
+  assert.equal(stats.tradesDropped, 1);
+  assert.equal(stats.missingSymbols, 1);
+  assert.equal(stats.notes, 2);
+  assert.equal(stats.notesAccepted, 1);
+  assert.equal(stats.notesDropped, 1);
+  assert.equal(stats.screenshots, 3);
+  assert.equal(stats.screenshotsAccepted, 1);
+  assert.equal(stats.screenshotsDropped, 2);
+  assert.equal(stats.screenshotsInvalid, 1);
+  assert.equal(stats.screenshotsTooLarge, 1);
+});
+
 test('metrics include realized partial trades and count partials separately', function () {
   const closed = trade({ id: 'closed', exit: 110, fees: 5 });
   const partial = trade({

@@ -379,9 +379,13 @@
       screenshots: 0,
       screenshotsAccepted: 0,
       screenshotsDropped: 0,
+      screenshotsTooLarge: 0,
+      screenshotsInvalid: 0,
       fileScreenshots: 0,
       invalidDates: 0,
       missingSymbols: 0,
+      tradesDropped: 0,
+      notesDropped: 0,
       closedTrades: 0,
       partialTrades: 0,
       openTrades: 0,
@@ -432,6 +436,8 @@
           stats.screenshotsAccepted++;
         } else {
           stats.screenshotsDropped++;
+          if (shot.length > MAX_SCREENSHOT_LENGTH) stats.screenshotsTooLarge++;
+          else stats.screenshotsInvalid++;
         }
       });
 
@@ -443,6 +449,8 @@
       });
     });
 
+    stats.tradesDropped = stats.trades - stats.tradesAccepted;
+    stats.notesDropped = stats.notes - stats.notesAccepted;
     return stats;
   }
 

@@ -47,6 +47,12 @@ jobs:
       - name: Check Rust formatting
         run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
 
+      - name: Build web assets for Rust tests
+        run: npm run web:build
+
+      - name: Run Rust tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+
       - name: Build TradeJournal
         run: npm run build
         env:

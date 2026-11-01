@@ -98,6 +98,18 @@
       return call('data_info');
     },
 
+    storageHealth: function () {
+      return waitForSaves().then(function () {
+        return call('storage_health');
+      });
+    },
+
+    cleanupUnusedScreenshots: function (names) {
+      return waitForSaves().then(function () {
+        return call('storage_cleanup_unused', { names: names || [] });
+      });
+    },
+
     openDataFolder: function () {
       return call('open_data_folder');
     },

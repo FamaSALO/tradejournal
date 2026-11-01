@@ -1491,6 +1491,55 @@ svg { display: block; }
 .desktop-update p.error { color: var(--red) !important; }
 .desktop-update p.success { color: var(--green) !important; }
 
+/* ============================ Storage health ============================ */
+.storage-health { margin-top: 18px; padding-top: 15px; border-top: 1px solid var(--border); }
+.storage-health .storage-head { align-items: center; }
+.storage-health-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-top: 10px; }
+.storage-stat {
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.017);
+}
+.storage-stat span { display: block; font-size: 9.5px; color: var(--muted-2); }
+.storage-stat strong { display: block; margin-top: 3px; font-size: 12px; font-weight: 600; color: #cfdae8; font-variant-numeric: tabular-nums; }
+.storage-stat small { display: block; margin-top: 2px; font-size: 9px; color: var(--muted-2); }
+.storage-health-status { margin-top: 9px; line-height: 1.55; }
+.storage-health-status.warn { color: #ffc857 !important; }
+.storage-health-status.error { color: var(--red) !important; }
+.unused-screenshots {
+  margin-top: 12px;
+  padding: 11px;
+  border: 1px solid rgba(255, 107, 129, 0.18);
+  border-radius: 9px;
+  background: rgba(255, 107, 129, 0.035);
+}
+.unused-list {
+  display: grid;
+  gap: 4px;
+  max-height: 190px;
+  overflow: auto;
+  margin: 9px 0;
+  padding: 0;
+  list-style: none;
+}
+.unused-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 5px 7px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.14);
+  font-size: 10px;
+  color: #b9c6d7;
+}
+.unused-list code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.unused-list span { flex-shrink: 0; color: var(--muted-2); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.unused-screenshots .btn { margin-top: 2px; }
+@media (max-width: 720px) {
+  .storage-health-grid { grid-template-columns: 1fr 1fr; }
+}
+
 /* ============================ Responsive ============================ */
 @media (max-width: 1240px) {
   .grid .span-4, .grid .span-5, .grid .span-7, .grid .span-8 { grid-column: span 6; }

@@ -4,7 +4,7 @@
   const U = NS.utils;
   const store = NS.store;
   const desktop = window.tradeJournalDesktop || null;
-  const APP_VERSION = '2.2.0';
+  const APP_VERSION = '2.2.1';
   const DRAFT_PREFIX = 'tradejournal.draft.v1.';
   // Drafts live in localStorage even on desktop, so a full screenshot data URL
   // must not be duplicated there. Keep the draft small; the screenshot stays in
@@ -65,7 +65,10 @@
     profileAvatarDraft: '',
     accountModalMode: 'create',
     confirmResolver: null,
-    lastFocus: null
+    lastFocus: null,
+    storageHealthData: null,
+    storageHealthScanning: false,
+    storageHealthCleaning: false
   };
 
   const EMOTION_OPTIONS = NS.EMOTIONS;
@@ -311,6 +314,9 @@
     }
 
     renderCurrentView();
+    if (desktop && view === 'settings' && !state.storageHealthScanning) {
+      scanStorageHealth(false);
+    }
     if (options.scroll !== false) window.scrollTo({ top: 0, behavior: 'smooth' });
     closeSidebar();
   }
@@ -1778,6 +1784,8 @@
     $('#openDataFolderBtn').addEventListener('click', openDesktopDataFolder);
     $('#backupNowBtn').addEventListener('click', createDesktopBackup);
     $('#refreshBackupsBtn').addEventListener('click', refreshDesktopBackups);
+    $('#scanStorageBtn').addEventListener('click', function () { scanStorageHealth(true); });
+    $('#cleanupScreenshotsBtn').addEventListener('click', cleanupUnusedScreenshots);
     $('#checkUpdateBtn').addEventListener('click', function () { checkDesktopUpdate(true); });
     $('#desktopBackupsList').addEventListener('click', function (event) {
       const button = event.target.closest('button[data-backup]');
@@ -1893,6 +1901,153 @@
     } catch (err) {
       list.innerHTML = '<p class="muted small">Не удалось прочитать список резервных копий. Откройте папку данных вручную.</p>';
     }
+  }
+
+  function setStorageHealthStatus(text, tone) {
+    const el = $('#storageHealthStatus');
+    if (!el) return;
+    el.textContent = text;
+    el.className = 'muted small storage-health-status' + (tone ? ' ' + tone : '');
+  }
+
+  function renderUnusedScreenshots(data) {
+    const wrap = $('#unusedScreenshots');
+    const list = $('#unusedList');
+    const note = $('#unusedNote');
+    const button = $('#cleanupScreenshotsBtn');
+    if (!wrap || !list || !button) return;
+
+    const unused = data && Array.isArray(data.unused) ? data.unused : [];
+    if (!unused.length) {
+      wrap.hidden = true;
+      list.innerHTML = '';
+      note.hidden = true;
+      note.textContent = '';
+      button.disabled = true;
+      return;
+    }
+
+    wrap.hidden = false;
+    const visible = unused.slice(0, 100);
+    list.innerHTML = visible.map(function (file) {
+      return '<li><code>' + U.escapeHtml(file.name) + '</code><span>' + U.escapeHtml(U.bytes(file.size)) + '</span></li>';
+    }).join('');
+    if (unused.length > visible.length) {
+      note.hidden = false;
+      note.textContent = 'Показаны первые ' + visible.length + ' из ' + unused.length + '. Кнопка удалит все найденные неиспользуемые файлы.';
+    } else {
+      note.hidden = true;
+      note.textContent = '';
+    }
+    $('#unusedSummary').textContent = U.bytes(data.unusedSize || 0);
+    button.disabled = false;
+    button.textContent = 'Удалить неиспользуемые (' + unused.length + ' · ' + U.bytes(data.unusedSize || 0) + ')';
+  }
+
+  function renderStorageHealth(data) {
+    state.storageHealthData = data || {};
+    const grid = $('#storageHealthGrid');
+    if (grid) grid.hidden = false;
+    $('#healthJournalSize').textContent = U.bytes(data.journalSize || 0);
+    $('#healthShotsSize').textContent = U.bytes(data.screenshotsSize || 0);
+    $('#healthBackupsSize').textContent = U.bytes(data.backupsSize || 0);
+    $('#healthPreviousSize').textContent = U.bytes(data.previousSize || 0);
+    $('#healthShotsMeta').textContent = (data.screenshotsCount || 0) + ' ' + U.plural(data.screenshotsCount || 0, ['файл', 'файла', 'файлов']);
+    $('#healthBackupsMeta').textContent = (data.backupsCount || 0) + ' ' + U.plural(data.backupsCount || 0, ['копия', 'копии', 'копий']);
+
+    const parts = [
+      'Ссылок на скриншоты в журнале и копиях: ' + (data.referencedCount || 0) + '.'
+    ];
+    if (data.missingCount) {
+      parts.push('Не хватает файлов по ссылкам: ' + data.missingCount + ' — возможно, они были удалены вручную.');
+    }
+    if (data.unusedCount) {
+      parts.push('Найдено неиспользуемых файлов: ' + data.unusedCount + ' на ' + U.bytes(data.unusedSize || 0) + '.');
+    } else {
+      parts.push('Неиспользуемых скриншотов не найдено.');
+    }
+    setStorageHealthStatus(parts.join(' '), data.missingCount ? 'warn' : '');
+    renderUnusedScreenshots(data);
+  }
+
+  async function scanStorageHealth(manual) {
+    if (!desktop || typeof desktop.storageHealth !== 'function' || state.storageHealthScanning) return;
+    state.storageHealthScanning = true;
+    const button = $('#scanStorageBtn');
+    if (button) {
+      button.disabled = true;
+      button.textContent = 'Проверяем…';
+    }
+    if (manual) setStorageHealthStatus('Проверяем журнал, скриншоты и резервные копии…');
+    try {
+      const data = await desktop.storageHealth();
+      renderStorageHealth(data || {});
+      if (manual) toast('Хранилище проверено');
+    } catch (err) {
+      const message = err && err.message ? err.message : String(err || 'неизвестная ошибка');
+      setStorageHealthStatus('Не удалось проверить хранилище: ' + message, 'error');
+      if (manual) toast('Не удалось проверить хранилище: ' + message, 'error');
+    } finally {
+      state.storageHealthScanning = false;
+      if (button) {
+        button.disabled = false;
+        button.textContent = 'Проверить';
+      }
+    }
+  }
+
+  function cleanupUnusedScreenshots() {
+    if (!desktop || typeof desktop.cleanupUnusedScreenshots !== 'function' || state.storageHealthCleaning) return;
+    const data = state.storageHealthData;
+    const unused = data && Array.isArray(data.unused) ? data.unused : [];
+    if (!unused.length) return;
+
+    askConfirm({
+      title: 'Удалить неиспользуемые скриншоты?',
+      text: 'Будет удалено ' + unused.length + ' ' + pluralScreenshots(unused.length) + ' на ' + U.bytes(data.unusedSize || 0) + '. Файлы, на которые ссылаются журнал, предыдущая версия или резервные копии, не затрагиваются. Действие нельзя отменить.',
+      okLabel: 'Удалить'
+    }).then(async function (confirmed) {
+      if (!confirmed) return;
+      state.storageHealthCleaning = true;
+      const button = $('#cleanupScreenshotsBtn');
+      if (button) {
+        button.disabled = true;
+        button.textContent = 'Удаляем…';
+      }
+      try {
+        const result = await desktop.cleanupUnusedScreenshots(unused.map(function (file) { return file.name; }));
+        const deleted = result && result.deletedCount ? result.deletedCount : 0;
+        const skippedRecent = result && result.skippedRecent ? result.skippedRecent : 0;
+        const message = [];
+        if (deleted) {
+          message.push('Удалено ' + deleted + ' ' + pluralScreenshots(deleted) + ' (' + U.bytes(result.deletedSize || 0) + ').');
+        } else if (skippedRecent) {
+          message.push('Недавно созданные файлы пока не удаляются — повторите проверку позже.');
+        } else {
+          message.push('Нечего удалять: файлы уже отсутствуют или используются.');
+        }
+        if (deleted && skippedRecent) {
+          message.push('Пропущено недавно созданных файлов: ' + skippedRecent + '.');
+        }
+        toast(message.join(' '), deleted ? 'success' : 'warn');
+        if (result && Array.isArray(result.failed) && result.failed.length) {
+          toast('Не удалось удалить файлов: ' + result.failed.length + '. Проверьте папку данных.', 'error');
+        }
+        await scanStorageHealth(false);
+      } catch (err) {
+        const message = err && err.message ? err.message : String(err || 'неизвестная ошибка');
+        setStorageHealthStatus('Не удалось удалить скриншоты: ' + message, 'error');
+        toast('Не удалось удалить скриншоты: ' + message, 'error');
+      } finally {
+        state.storageHealthCleaning = false;
+        if (state.storageHealthData) {
+          renderUnusedScreenshots(state.storageHealthData);
+        } else if (button) {
+          button.disabled = false;
+          button.textContent = 'Удалить неиспользуемые';
+        }
+      }
+    });
   }
 
   async function createDesktopBackup() {
@@ -2443,24 +2598,33 @@
         return;
       }
       const stats = store.analyzeImport(data);
+      const currentTrades = store.state.accounts.reduce(function (sum, account) { return sum + account.trades.length; }, 0);
+      const currentNotes = store.state.accounts.reduce(function (sum, account) { return sum + account.notes.length; }, 0);
       const details = [
         'Все счета, сделки и записи будут заменены данными из файла. Рекомендуем сначала сделать экспорт текущего журнала.',
+        'Сейчас: счетов ' + store.state.accounts.length + ', сделок ' + currentTrades + ', записей ' + currentNotes + '.',
         'В файле: счетов ' + stats.accounts + ', сделок ' + stats.trades + ', записей ' + stats.notes + ', скриншотов ' + stats.screenshots + '.',
         'Будет импортировано: сделок ' + stats.tradesAccepted + ', записей ' + stats.notesAccepted + ', скриншотов ' + stats.screenshotsAccepted + '.'
       ];
+      if (stats.tradesDropped) {
+        details.push('Не будет импортировано сделок: ' + stats.tradesDropped + (stats.missingSymbols ? ' (без инструмента: ' + stats.missingSymbols + ')' : '') + '.');
+      }
+      if (stats.notesDropped) {
+        details.push('Не будет импортировано записей: ' + stats.notesDropped + '.');
+      }
       if (stats.screenshotsDropped) {
         const dropped = stats.screenshotsDropped;
         const singular = dropped % 10 === 1 && dropped % 100 !== 11;
-        details.push('Внимание: ' + dropped + ' ' + pluralScreenshots(dropped) + (singular ? ' не будет импортирован' : ' не будут импортированы') + ' — слишком большой размер или неподдерживаемый формат.');
+        const reasons = [];
+        if (stats.screenshotsTooLarge) reasons.push('слишком большой размер: ' + stats.screenshotsTooLarge);
+        if (stats.screenshotsInvalid) reasons.push('неподдерживаемый формат: ' + stats.screenshotsInvalid);
+        details.push('Внимание: ' + dropped + ' ' + pluralScreenshots(dropped) + (singular ? ' не будет импортирован' : ' не будут импортированы') + (reasons.length ? ' (' + reasons.join(', ') + ')' : '') + '. Эти скриншоты будут потеряны.');
       }
       if (stats.fileScreenshots) {
         details.push('Скриншотов-ссылок на файлы: ' + stats.fileScreenshots + '. Они откроются только на ПК, где создан бэкап.');
       }
       if (stats.invalidDates) {
         details.push('Сделок с некорректной датой: ' + stats.invalidDates + ' — дата будет заменена на сегодняшнюю.');
-      }
-      if (stats.missingSymbols) {
-        details.push('Сделок без инструмента: ' + stats.missingSymbols + ' — они не будут импортированы.');
       }
       details.push('Сразу после импорта действие можно будет отменить.');
 

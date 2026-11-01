@@ -1,5 +1,6 @@
 use base64::Engine as _;
 use serde::Serialize;
+use std::collections::HashSet;
 use std::fs::{self, OpenOptions};
 use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
@@ -13,6 +14,10 @@ const MAX_STORAGE_BYTES: usize = 100 * 1024 * 1024;
 const MAX_SCREENSHOT_BYTES: usize = 6 * 1024 * 1024;
 const MAX_BACKUPS: usize = 20;
 const BACKUP_INTERVAL: Duration = Duration::from_secs(10 * 60);
+// A screenshot is written just before the journal that references it. Keep a
+// grace period so a scan cannot offer a brand-new file for deletion while the
+// journal save is still in flight.
+const UNUSED_SCREENSHOT_GRACE_MS: u64 = 10 * 60 * 1000;
 
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -50,6 +55,43 @@ struct DataInfo {
     screenshot_dir: String,
     version: String,
     is_desktop: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UnusedScreenshot {
+    name: String,
+    size: u64,
+    mtime: u64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StorageHealth {
+    journal_size: u64,
+    previous_size: u64,
+    screenshots_size: u64,
+    backups_size: u64,
+    screenshots_count: usize,
+    backups_count: usize,
+    referenced_count: usize,
+    missing_count: usize,
+    unused_count: usize,
+    unused_size: u64,
+    unused: Vec<UnusedScreenshot>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CleanupResult {
+    deleted: Vec<String>,
+    deleted_count: usize,
+    deleted_size: u64,
+    skipped_referenced: usize,
+    skipped_recent: usize,
+    failed: Vec<String>,
+    remaining_unused: usize,
+    remaining_unused_size: u64,
 }
 
 #[derive(Serialize)]
@@ -474,6 +516,278 @@ fn screenshot_file_name(reference: &str) -> Option<&str> {
     Some(name)
 }
 
+struct ScreenshotFile {
+    name: String,
+    size: u64,
+    mtime: u64,
+}
+
+fn valid_screenshot_file_name(name: &str) -> bool {
+    screenshot_file_name(name) == Some(name)
+}
+
+fn screenshot_reference_name(text: &str) -> Option<String> {
+    // Data URLs are much longer than any valid screenshot file name. Rejecting
+    // them early also keeps Path parsing away from base64 payloads.
+    if text.len() > 128 {
+        return None;
+    }
+    let candidate = text
+        .strip_prefix("file:screenshots/")
+        .or_else(|| text.strip_prefix("screenshots/"))
+        .unwrap_or(text);
+    if candidate.len() > 85 || !valid_screenshot_file_name(candidate) {
+        return None;
+    }
+    Some(candidate.to_ascii_lowercase())
+}
+
+fn collect_screenshot_refs(value: &serde_json::Value, refs: &mut HashSet<String>) {
+    match value {
+        serde_json::Value::String(text) => {
+            if let Some(name) = screenshot_reference_name(text) {
+                refs.insert(name);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                collect_screenshot_refs(item, refs);
+            }
+        }
+        serde_json::Value::Object(map) => {
+            for item in map.values() {
+                collect_screenshot_refs(item, refs);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn display_file_name(path: &Path) -> String {
+    path.file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_else(|| path.to_string_lossy().to_string())
+}
+
+fn gather_referenced_screenshots(paths: &StorePaths) -> Result<HashSet<String>, String> {
+    let mut sources = vec![paths.journal.clone(), paths.previous.clone()];
+    match fs::read_dir(&paths.backups) {
+        Ok(entries) => {
+            for entry in entries.filter_map(Result::ok) {
+                let name = entry.file_name().to_string_lossy().to_string();
+                if name.starts_with("journal-") && name.ends_with(".json") {
+                    sources.push(entry.path());
+                }
+            }
+        }
+        Err(error) if error.kind() == ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(format!(
+                "Не удалось прочитать папку резервных копий: {error}. Очистка отменена."
+            ));
+        }
+    }
+
+    let mut refs = HashSet::new();
+    for source in sources {
+        let raw = match fs::read_to_string(&source) {
+            Ok(raw) => raw,
+            Err(error) if error.kind() == ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(format!(
+                    "Не удалось прочитать {}: {error}. Очистка отменена, чтобы не удалить нужные скриншоты.",
+                    display_file_name(&source)
+                ));
+            }
+        };
+        let parsed: serde_json::Value = serde_json::from_str(&raw).map_err(|_| {
+            format!(
+                "Файл {} повреждён. Очистка отменена, чтобы не удалить нужные скриншоты.",
+                display_file_name(&source)
+            )
+        })?;
+        collect_screenshot_refs(&parsed, &mut refs);
+    }
+    Ok(refs)
+}
+
+fn list_screenshot_files(dir: &Path) -> Result<Vec<ScreenshotFile>, String> {
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => {
+            return Err(format!("Не удалось прочитать папку скриншотов: {error}"));
+        }
+    };
+
+    let mut files = Vec::new();
+    for entry in entries.filter_map(Result::ok) {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if !valid_screenshot_file_name(&name) {
+            continue;
+        }
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
+        if !metadata.is_file() {
+            continue;
+        }
+        files.push(ScreenshotFile {
+            name,
+            size: metadata.len(),
+            mtime: mtime_millis(&metadata),
+        });
+    }
+    files.sort_by(|left, right| left.name.cmp(&right.name));
+    Ok(files)
+}
+
+fn file_size(path: &Path) -> u64 {
+    fs::metadata(path)
+        .map(|metadata| metadata.len())
+        .unwrap_or(0)
+}
+
+fn backups_stats(dir: &Path) -> (u64, usize) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return (0, 0);
+    };
+    let mut size = 0u64;
+    let mut count = 0usize;
+    for entry in entries.filter_map(Result::ok) {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if !name.starts_with("journal-") || !name.ends_with(".json") {
+            continue;
+        }
+        if let Ok(metadata) = entry.metadata() {
+            if metadata.is_file() {
+                size += metadata.len();
+                count += 1;
+            }
+        }
+    }
+    (size, count)
+}
+
+fn collect_storage_health(state: &AppState) -> Result<StorageHealth, String> {
+    let _guard = lock_or_recover(&state.save_lock);
+    let referenced = gather_referenced_screenshots(&state.paths)?;
+    let files = list_screenshot_files(&state.paths.screenshots)?;
+
+    let now = now_millis();
+    let mut screenshots_size = 0u64;
+    let mut unused_size = 0u64;
+    let mut present = HashSet::new();
+    let mut unused = Vec::new();
+    for file in &files {
+        screenshots_size += file.size;
+        let key = file.name.to_ascii_lowercase();
+        present.insert(key.clone());
+        if !referenced.contains(&key)
+            && now.saturating_sub(file.mtime) >= UNUSED_SCREENSHOT_GRACE_MS
+        {
+            unused_size += file.size;
+            unused.push(UnusedScreenshot {
+                name: file.name.clone(),
+                size: file.size,
+                mtime: file.mtime,
+            });
+        }
+    }
+
+    let missing_count = referenced
+        .iter()
+        .filter(|name| !present.contains(*name))
+        .count();
+    unused.sort_by(|left, right| {
+        right
+            .size
+            .cmp(&left.size)
+            .then_with(|| left.name.cmp(&right.name))
+    });
+
+    let (backups_size, backups_count) = backups_stats(&state.paths.backups);
+    Ok(StorageHealth {
+        journal_size: file_size(&state.paths.journal),
+        previous_size: file_size(&state.paths.previous),
+        screenshots_size,
+        backups_size,
+        screenshots_count: files.len(),
+        backups_count,
+        referenced_count: referenced.len(),
+        missing_count,
+        unused_count: unused.len(),
+        unused_size,
+        unused,
+    })
+}
+
+fn cleanup_unused_screenshots(
+    state: &AppState,
+    names: Vec<String>,
+) -> Result<CleanupResult, String> {
+    let _guard = lock_or_recover(&state.save_lock);
+    // Re-scan under the save lock: a journal save between the preview and the
+    // click may have started referencing a file that was previously unused.
+    let referenced = gather_referenced_screenshots(&state.paths)?;
+
+    let now = now_millis();
+    let mut deleted = Vec::new();
+    let mut deleted_size = 0u64;
+    let mut skipped_referenced = 0usize;
+    let mut skipped_recent = 0usize;
+    let mut failed = Vec::new();
+
+    for name in names {
+        if !valid_screenshot_file_name(&name) {
+            failed.push(name);
+            continue;
+        }
+        if referenced.contains(&name.to_ascii_lowercase()) {
+            skipped_referenced += 1;
+            continue;
+        }
+        let path = state.paths.screenshots.join(&name);
+        let Ok(metadata) = fs::metadata(&path) else {
+            continue;
+        };
+        if !metadata.is_file() {
+            continue;
+        }
+        if now.saturating_sub(mtime_millis(&metadata)) < UNUSED_SCREENSHOT_GRACE_MS {
+            skipped_recent += 1;
+            continue;
+        }
+        match fs::remove_file(&path) {
+            Ok(()) => {
+                deleted_size += metadata.len();
+                deleted.push(name);
+            }
+            Err(_) => failed.push(name),
+        }
+    }
+
+    let remaining = list_screenshot_files(&state.paths.screenshots)?
+        .into_iter()
+        .filter(|file| {
+            !referenced.contains(&file.name.to_ascii_lowercase())
+                && now.saturating_sub(file.mtime) >= UNUSED_SCREENSHOT_GRACE_MS
+        })
+        .collect::<Vec<_>>();
+    let remaining_unused_size = remaining.iter().map(|file| file.size).sum();
+
+    Ok(CleanupResult {
+        deleted_count: deleted.len(),
+        deleted,
+        deleted_size,
+        skipped_referenced,
+        skipped_recent,
+        failed,
+        remaining_unused: remaining.len(),
+        remaining_unused_size,
+    })
+}
+
 fn valid_image_magic(extension: &str, bytes: &[u8]) -> bool {
     match extension {
         "jpg" => bytes.starts_with(&[0xFF, 0xD8, 0xFF]),
@@ -632,6 +946,25 @@ async fn storage_clear(state: State<'_, AppState>) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || clear_journal(&state))
         .await
         .map_err(|error| format!("Не удалось выполнить очистку: {error}"))?
+}
+
+#[tauri::command]
+async fn storage_health(state: State<'_, AppState>) -> Result<StorageHealth, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || collect_storage_health(&state))
+        .await
+        .map_err(|error| format!("Не удалось проверить хранилище: {error}"))?
+}
+
+#[tauri::command]
+async fn storage_cleanup_unused(
+    state: State<'_, AppState>,
+    names: Vec<String>,
+) -> Result<CleanupResult, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || cleanup_unused_screenshots(&state, names))
+        .await
+        .map_err(|error| format!("Не удалось очистить скриншоты: {error}"))?
 }
 
 #[tauri::command]
@@ -850,6 +1183,8 @@ pub fn run() {
             storage_restore,
             storage_restore_previous,
             storage_clear,
+            storage_health,
+            storage_cleanup_unused,
             screenshot_save,
             screenshot_load,
             data_info,
@@ -861,4 +1196,48 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running TradeJournal");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn screenshot_references_are_collected_from_nested_journal_data() {
+        let raw = json!({
+            "accounts": [
+                {
+                    "trades": [
+                        { "screenshot": "file:screenshots/abc-123.webp" },
+                        { "screenshot": "data:image/png;base64,AAAA" }
+                    ],
+                    "notes": [
+                        { "screenshot": "screenshots/note_shot.PNG" }
+                    ]
+                }
+            ],
+            "legacy": "old-shot.jpg"
+        });
+
+        let mut refs = std::collections::HashSet::new();
+        collect_screenshot_refs(&raw, &mut refs);
+
+        assert!(refs.contains("abc-123.webp"));
+        assert!(refs.contains("note_shot.png"));
+        assert!(refs.contains("old-shot.jpg"));
+        assert_eq!(refs.len(), 3);
+    }
+
+    #[test]
+    fn unsafe_or_unknown_screenshot_names_are_rejected() {
+        assert!(valid_screenshot_file_name("abc-123.webp"));
+        assert!(valid_screenshot_file_name("ABC_123.JPG"));
+        assert!(!valid_screenshot_file_name("../abc.png"));
+        assert!(!valid_screenshot_file_name("folder/abc.png"));
+        assert!(!valid_screenshot_file_name("abc.gif"));
+        assert!(!valid_screenshot_file_name("file:screenshots/abc.png"));
+        assert!(!valid_screenshot_file_name("abc.png.txt"));
+        assert!(screenshot_reference_name("data:image/png;base64,AAAA").is_none());
+    }
 }
