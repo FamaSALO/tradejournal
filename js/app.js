@@ -4,7 +4,7 @@
   const U = NS.utils;
   const store = NS.store;
   const desktop = window.tradeJournalDesktop || null;
-  const APP_VERSION = '2.2.1';
+  const APP_VERSION = '2.2.2';
   const DRAFT_PREFIX = 'tradejournal.draft.v1.';
   // Drafts live in localStorage even on desktop, so a full screenshot data URL
   // must not be duplicated there. Keep the draft small; the screenshot stays in
@@ -123,6 +123,7 @@
     $('#updateBannerTitle').textContent = title;
     $('#updateBannerText').textContent = text;
     $('#installUpdateBtn').textContent = actionLabel || 'Обновить';
+    $('#installUpdateBtn').disabled = false;
     banner.hidden = false;
   }
 
@@ -1787,6 +1788,7 @@
     $('#scanStorageBtn').addEventListener('click', function () { scanStorageHealth(true); });
     $('#cleanupScreenshotsBtn').addEventListener('click', cleanupUnusedScreenshots);
     $('#checkUpdateBtn').addEventListener('click', function () { checkDesktopUpdate(true); });
+    $('#downloadUpdateBtn').addEventListener('click', installDesktopUpdate);
     $('#desktopBackupsList').addEventListener('click', function (event) {
       const button = event.target.closest('button[data-backup]');
       if (!button) return;
@@ -1795,10 +1797,18 @@
     window.setTimeout(function () { checkDesktopUpdate(false); }, 2500);
   }
 
-  const desktopUpdate = { checking: false, available: false, version: '' };
+  const desktopUpdate = { checking: false, installing: false, available: false, version: '' };
+
+  function setDownloadUpdateButton(visible) {
+    const button = $('#downloadUpdateBtn');
+    if (!button) return;
+    button.hidden = !visible;
+    button.disabled = false;
+    button.textContent = 'Скачать и установить';
+  }
 
   async function checkDesktopUpdate(manual) {
-    if (!desktop || typeof desktop.checkUpdate !== 'function' || desktopUpdate.checking) return;
+    if (!desktop || typeof desktop.checkUpdate !== 'function' || desktopUpdate.checking || desktopUpdate.installing) return;
     desktopUpdate.checking = true;
     const button = $('#checkUpdateBtn');
     if (button) {
@@ -1813,7 +1823,8 @@
       desktopUpdate.available = !!(info && info.available);
       desktopUpdate.version = info && info.version ? String(info.version) : '';
       if (desktopUpdate.available) {
-        setDesktopUpdateStatus('Доступна версия ' + (desktopUpdate.version || '—') + '.', 'pos');
+        setDesktopUpdateStatus('Доступна версия ' + (desktopUpdate.version || '—') + '. Можно скачать и установить её здесь.', 'pos');
+        setDownloadUpdateButton(true);
         showUpdateBanner(
           'Доступно обновление TradeJournal',
           'Версия ' + (desktopUpdate.version || '') + ' готова к установке. Приложение скачает обновление и перезапустится.',
@@ -1821,6 +1832,7 @@
         );
       } else {
         setDesktopUpdateStatus('Установлена последняя версия (' + current + ').', 'pos');
+        setDownloadUpdateButton(false);
       }
     } catch (err) {
       const message = err && err.message ? err.message : String(err || 'неизвестная ошибка');
@@ -1835,28 +1847,51 @@
   }
 
   async function installDesktopUpdate() {
-    if (!desktop || typeof desktop.installUpdate !== 'function') return;
+    if (!desktop || typeof desktop.installUpdate !== 'function' || desktopUpdate.installing) return;
     if (!desktopUpdate.available) {
       checkDesktopUpdate(true);
       return;
     }
-    const button = $('#installUpdateBtn');
-    if (button) {
-      button.disabled = true;
-      button.textContent = 'Устанавливаем…';
+    desktopUpdate.installing = true;
+    const bannerButton = $('#installUpdateBtn');
+    const downloadButton = $('#downloadUpdateBtn');
+    const checkButton = $('#checkUpdateBtn');
+    if (bannerButton) {
+      bannerButton.disabled = true;
+      bannerButton.textContent = 'Устанавливаем…';
     }
+    if (downloadButton) {
+      downloadButton.disabled = true;
+      downloadButton.textContent = 'Скачиваем…';
+    }
+    if (checkButton) checkButton.disabled = true;
     setDesktopUpdateStatus('Скачиваем и устанавливаем обновление…');
     try {
       await desktop.installUpdate();
-      setDesktopUpdateStatus('Обновление установлено. Приложение перезапустится.');
+      desktopUpdate.available = false;
+      setDesktopUpdateStatus('Обновление установлено. Приложение перезапустится.', 'pos');
+      const banner = $('#updateBanner');
+      if (banner) banner.hidden = true;
+      setDownloadUpdateButton(false);
       toast('Обновление установлено. Приложение перезапустится.');
     } catch (err) {
       const message = err && err.message ? err.message : String(err || 'неизвестная ошибка');
       setDesktopUpdateStatus('Не удалось установить обновление: ' + message, 'neg');
       toast('Не удалось установить обновление: ' + message, 'error');
-      if (button) {
-        button.disabled = false;
-        button.textContent = 'Установить';
+      if (bannerButton) {
+        bannerButton.disabled = false;
+        bannerButton.textContent = 'Установить';
+      }
+      if (downloadButton) {
+        downloadButton.disabled = false;
+        downloadButton.textContent = 'Скачать и установить';
+      }
+    } finally {
+      desktopUpdate.installing = false;
+      if (checkButton) checkButton.disabled = false;
+      if (bannerButton && desktopUpdate.available) {
+        bannerButton.disabled = false;
+        bannerButton.textContent = 'Установить';
       }
     }
   }
