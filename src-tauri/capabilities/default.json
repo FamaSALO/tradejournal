@@ -3,5 +3,5 @@
   "identifier": "default",
   "description": "Основные разрешения окна TradeJournal",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": ["core:default", "updater:default"]
 }

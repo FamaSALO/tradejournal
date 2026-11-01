@@ -7,8 +7,12 @@
   // The storage key is intentionally kept as v1: existing web journals must be
   // discovered and migrated in place instead of being replaced with demo data.
   const KEY = 'tradejournal.v1';
-  const SCHEMA_VERSION = 2;
+  const SCHEMA_VERSION = 3;
   const DEFAULT_ACCOUNT_NAME = 'Основной счёт';
+  const MAX_EXITS = 50;
+  const MULTIPLIER_MIN = 0.000000001;
+  const MULTIPLIER_MAX = 1000000000;
+  const QTY_EPSILON = 1e-9;
   // Desktop exports can embed screenshots up to 7.2M chars (see app.js), so the
   // import limit must be at least that high or restoring a backup silently
   // drops screenshots. Web keeps a lower limit because localStorage is small.
@@ -130,6 +134,104 @@
     return [];
   }
 
+  function normalizeMultiplier(value) {
+    const parsed = U.parseNum(value);
+    if (parsed === null || !isFinite(parsed) || parsed <= 0) return 1;
+    return U.clamp(parsed, MULTIPLIER_MIN, MULTIPLIER_MAX);
+  }
+
+  function normalizeExitDate(value, fallback) {
+    return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value.slice(0, 10))
+      ? value.slice(0, 10)
+      : fallback;
+  }
+
+  function normalizeExit(raw, fallbackDate) {
+    if (!raw || typeof raw !== 'object') return null;
+    const qty = U.parseNum(raw.qty);
+    let price = U.parseNum(raw.price);
+    if (price === null && raw.price === undefined) price = U.parseNum(raw.exit);
+    if (qty === null || qty <= 0 || price === null) return null;
+    return {
+      id: raw.id ? String(raw.id) : U.uid(),
+      qty: qty,
+      price: price,
+      date: normalizeExitDate(raw.date, fallbackDate),
+      fees: Math.max(0, U.parseNum(raw.fees) || 0)
+    };
+  }
+
+  function allocateExitFees(exits, totalFees) {
+    if (!exits.length) return;
+    const total = Math.max(0, totalFees || 0);
+    const qtySum = exits.reduce(function (sum, exit) { return sum + exit.qty; }, 0);
+    if (qtySum <= QTY_EPSILON) {
+      exits.forEach(function (exit) { exit.fees = 0; });
+      return;
+    }
+    let assigned = 0;
+    exits.forEach(function (exit, index) {
+      if (index === exits.length - 1) {
+        exit.fees = Math.round(Math.max(0, total - assigned) * 1e8) / 1e8;
+        return;
+      }
+      const share = Math.round((total * exit.qty / qtySum) * 1e8) / 1e8;
+      exit.fees = share;
+      assigned += share;
+    });
+  }
+
+  function sumExitQty(exits) {
+    return (exits || []).reduce(function (sum, exit) {
+      const qty = U.parseNum(exit && exit.qty);
+      return sum + (qty !== null && qty > 0 ? qty : 0);
+    }, 0);
+  }
+
+  function weightedExitFromExits(exits) {
+    const list = exits || [];
+    let qtySum = 0;
+    let value = 0;
+    list.forEach(function (exit) {
+      const qty = U.parseNum(exit && exit.qty);
+      const price = U.parseNum(exit && exit.price);
+      if (qty === null || qty <= 0 || price === null) return;
+      qtySum += qty;
+      value += qty * price;
+    });
+    return qtySum > QTY_EPSILON ? value / qtySum : null;
+  }
+
+  function normalizeExits(raw, trade) {
+    const exits = [];
+    const seenIds = new Set();
+    const source = Array.isArray(raw.exits) ? raw.exits.slice(0, MAX_EXITS) : [];
+    source.forEach(function (item) {
+      const exit = normalizeExit(item, trade.date);
+      if (!exit) return;
+      if (seenIds.has(exit.id)) exit.id = U.uid();
+      seenIds.add(exit.id);
+      exits.push(exit);
+    });
+
+    const quantity = U.parseNum(raw.qty);
+    if (!exits.length && quantity !== null && quantity > 0) {
+      const legacyPrice = U.parseNum(raw.exit);
+      if (legacyPrice !== null) {
+        exits.push({
+          id: U.uid(),
+          qty: quantity,
+          price: legacyPrice,
+          date: trade.date,
+          fees: 0
+        });
+      }
+    }
+
+    allocateExitFees(exits, trade.fees);
+    return exits;
+  }
+
   function normalizeTrade(raw) {
     if (!raw || typeof raw !== 'object') return null;
     const date = typeof raw.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(raw.date.slice(0, 10))
@@ -148,6 +250,21 @@
         shot = raw.screenshot;
       }
     }
+    const qty = U.parseNum(raw.qty);
+    let fees = U.parseNum(raw.fees);
+    if (fees === null) {
+      fees = (Array.isArray(raw.exits) ? raw.exits : []).reduce(function (sum, exit) {
+        return sum + Math.max(0, U.parseNum(exit && exit.fees) || 0);
+      }, 0);
+    }
+    fees = Math.max(0, fees || 0);
+    const multiplier = normalizeMultiplier(raw.multiplier);
+    const exits = normalizeExits(raw, { date: date, qty: qty, fees: fees });
+    const fullyClosed = qty !== null && qty > 0 && sumExitQty(exits) >= qty - QTY_EPSILON;
+    // A malformed legacy trade may have an exit price but no quantity. Keep the
+    // original exit value instead of dropping data that cannot become a canonical exit.
+    const legacyExit = U.parseNum(raw.exit);
+    const keepLegacyExit = !exits.length && legacyExit !== null && (qty === null || qty <= 0);
     return {
       id: raw.id ? String(raw.id) : U.uid(),
       date: date,
@@ -155,12 +272,14 @@
       symbol: symbol,
       side: side,
       entry: U.parseNum(raw.entry),
-      exit: U.parseNum(raw.exit),
+      exit: fullyClosed ? weightedExitFromExits(exits) : (keepLegacyExit ? legacyExit : null),
       stop: U.parseNum(raw.stop),
       currentStop: U.parseNum(raw.currentStop),
       target: U.parseNum(raw.target),
-      qty: U.parseNum(raw.qty),
-      fees: U.parseNum(raw.fees) || 0,
+      qty: qty,
+      multiplier: multiplier,
+      fees: fees,
+      exits: exits,
       setup: String(raw.setup || '').trim(),
       emotion: String(raw.emotion || '').trim(),
       discipline: discipline,
@@ -262,7 +381,13 @@
       screenshotsDropped: 0,
       fileScreenshots: 0,
       invalidDates: 0,
-      missingSymbols: 0
+      missingSymbols: 0,
+      closedTrades: 0,
+      partialTrades: 0,
+      openTrades: 0,
+      exitRecords: 0,
+      multiplierTrades: 0,
+      invalidExits: 0
     };
     if (!isJournalData(raw)) return stats;
 
@@ -280,8 +405,22 @@
         if (!(typeof trade.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(trade.date.slice(0, 10)))) {
           stats.invalidDates++;
         }
-        if (!normalizeTrade(trade)) return;
+        const normalized = normalizeTrade(trade);
+        if (!normalized) return;
         stats.tradesAccepted++;
+        stats.exitRecords += normalized.exits.length;
+        if (normalized.multiplier !== 1) stats.multiplierTrades++;
+        if (isClosed(normalized)) stats.closedTrades++;
+        else if (isPartial(normalized)) stats.partialTrades++;
+        else stats.openTrades++;
+
+        const rawExits = Array.isArray(trade.exits) ? trade.exits : [];
+        if (rawExits.length) {
+          const validExits = rawExits.filter(function (exit) {
+            return !!normalizeExit(exit, normalized.date);
+          }).length;
+          stats.invalidExits += Math.max(0, rawExits.length - validExits);
+        }
 
         const shot = typeof trade.screenshot === 'string' ? trade.screenshot : '';
         if (!shot) return;
@@ -541,19 +680,80 @@
     return snapshot;
   }
 
+  function tradeExits(trade) {
+    if (!trade) return [];
+    if (Array.isArray(trade.exits) && trade.exits.length) return trade.exits;
+    const price = U.parseNum(trade.exit);
+    const quantity = U.parseNum(trade.qty);
+    if (price === null || quantity === null || quantity <= 0) return [];
+    return [{
+      id: 'legacy',
+      qty: quantity,
+      price: price,
+      date: trade.date || '',
+      fees: Math.max(0, U.parseNum(trade.fees) || 0)
+    }];
+  }
+
+  function exitedQty(trade) {
+    return sumExitQty(tradeExits(trade));
+  }
+
+  function remainingQty(trade) {
+    const quantity = U.parseNum(trade && trade.qty);
+    if (quantity === null) return null;
+    if (quantity <= 0) return 0;
+    return Math.max(0, quantity - exitedQty(trade));
+  }
+
   function isClosed(trade) {
-    return !!trade && U.parseNum(trade.exit) !== null;
+    if (!trade) return false;
+    const exits = tradeExits(trade);
+    if (!exits.length) return false;
+    const quantity = U.parseNum(trade.qty);
+    if (quantity === null || quantity <= 0) return true;
+    return remainingQty(trade) <= QTY_EPSILON;
+  }
+
+  function isPartial(trade) {
+    if (!trade) return false;
+    const quantity = U.parseNum(trade.qty);
+    const exits = tradeExits(trade);
+    if (quantity === null || quantity <= 0 || !exits.length) return false;
+    return remainingQty(trade) > QTY_EPSILON;
+  }
+
+  function weightedExit(trade) {
+    return weightedExitFromExits(tradeExits(trade));
   }
 
   function tradePnl(trade) {
     if (!trade) return null;
     const entry = U.parseNum(trade.entry);
-    const exit = U.parseNum(trade.exit);
     const quantity = U.parseNum(trade.qty);
-    if (entry === null || exit === null || quantity === null) return null;
+    const exits = tradeExits(trade);
+    if (entry === null || quantity === null || !exits.length) return null;
     const dir = trade.side === 'short' ? -1 : 1;
-    const fees = U.parseNum(trade.fees) || 0;
-    return (exit - entry) * quantity * dir - fees;
+    const multiplier = normalizeMultiplier(trade.multiplier);
+    let pnl = 0;
+    exits.forEach(function (exit) {
+      const exitQty = U.parseNum(exit.qty);
+      const exitPrice = U.parseNum(exit.price);
+      if (exitQty === null || exitQty <= 0 || exitPrice === null) return;
+      const fees = Math.max(0, U.parseNum(exit.fees) || 0);
+      pnl += (exitPrice - entry) * exitQty * multiplier * dir - fees;
+    });
+    return pnl;
+  }
+
+  function hasRealized(trade) {
+    return tradePnl(trade) !== null;
+  }
+
+  function tradeFees(trade) {
+    return tradeExits(trade).reduce(function (sum, exit) {
+      return sum + Math.max(0, U.parseNum(exit && exit.fees) || 0);
+    }, 0);
   }
 
   function tradeRisk(trade) {
@@ -562,8 +762,28 @@
     const stop = U.parseNum(trade.stop);
     const quantity = U.parseNum(trade.qty);
     if (entry === null || stop === null || quantity === null) return null;
-    const risk = Math.abs(entry - stop) * quantity;
+    const risk = Math.abs(entry - stop) * quantity * normalizeMultiplier(trade.multiplier);
     return risk > 0 ? risk : null;
+  }
+
+  function openRisk(trade) {
+    if (!trade) return null;
+    const remaining = remainingQty(trade);
+    if (remaining === null) return null;
+    if (remaining <= QTY_EPSILON) return 0;
+    const entry = U.parseNum(trade.entry);
+    const currentStop = U.parseNum(trade.currentStop);
+    const initialStop = U.parseNum(trade.stop);
+    const stop = currentStop !== null ? currentStop : initialStop;
+    if (entry === null || stop === null) return null;
+    const risk = Math.abs(entry - stop) * remaining * normalizeMultiplier(trade.multiplier);
+    return risk > 0 ? risk : null;
+  }
+
+  function tradeStatus(trade) {
+    if (isClosed(trade)) return 'closed';
+    if (isPartial(trade)) return 'partial';
+    return 'open';
   }
 
   function tradeR(trade) {
@@ -596,11 +816,14 @@
   }
 
   function metrics(trades, startBalance) {
-    const closed = sortTrades((trades || []).filter(isClosed), 'asc');
+    const realized = sortTrades((trades || []).filter(hasRealized), 'asc');
+    const closed = realized.filter(isClosed);
     const rows = [];
-    closed.forEach(function (trade) {
+    let partials = 0;
+    realized.forEach(function (trade) {
       const pnl = tradePnl(trade);
       if (pnl === null) return;
+      if (isPartial(trade)) partials++;
       rows.push({ trade: trade, pnl: pnl, r: tradeR(trade) });
     });
 
@@ -615,7 +838,7 @@
       if (pnl > 0.004) { wins++; grossProfit += pnl; }
       else if (pnl < -0.004) { losses++; grossLoss += pnl; }
       else be++;
-      fees += U.parseNum(row.trade.fees) || 0;
+      fees += tradeFees(row.trade);
       if (row.r !== null) { rSum += row.r; rCount++; }
       const disc = U.parseNum(row.trade.discipline);
       if (disc !== null && disc > 0) { discSum += disc; discCount++; }
@@ -654,6 +877,7 @@
       rows: rows,
       closed: closed,
       count: count,
+      partials: partials,
       wins: wins,
       losses: losses,
       be: be,
@@ -719,7 +943,7 @@
 
   function balanceAll() {
     let net = 0;
-    state.trades.filter(isClosed).forEach(function (trade) {
+    state.trades.forEach(function (trade) {
       const pnl = tradePnl(trade);
       if (pnl !== null) net += pnl;
     });
@@ -735,6 +959,10 @@
     SCHEMA_VERSION: SCHEMA_VERSION,
     DEFAULT_ACCOUNT_NAME: DEFAULT_ACCOUNT_NAME,
     DEFAULT_SETTINGS: DEFAULT_SETTINGS,
+    MAX_EXITS: MAX_EXITS,
+    MULTIPLIER_MIN: MULTIPLIER_MIN,
+    MULTIPLIER_MAX: MULTIPLIER_MAX,
+    QTY_EPSILON: QTY_EPSILON,
     get state() { return state; },
     get loadError() { return loadError; },
     get needsMigration() { return pendingMigration; },
@@ -758,10 +986,20 @@
     screenshotSource: screenshotSource,
     migrateScreenshots: migrateScreenshots,
     exportSnapshot: exportSnapshot,
+    tradeExits: tradeExits,
+    exitedQty: exitedQty,
+    remainingQty: remainingQty,
     isClosed: isClosed,
+    isPartial: isPartial,
+    hasRealized: hasRealized,
+    weightedExit: weightedExit,
     tradePnl: tradePnl,
+    tradeFees: tradeFees,
     tradeRisk: tradeRisk,
+    openRisk: openRisk,
+    tradeStatus: tradeStatus,
     tradeR: tradeR,
+    normalizeMultiplier: normalizeMultiplier,
     plannedRR: plannedRR,
     sortTrades: sortTrades,
     metrics: metrics,

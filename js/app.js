@@ -4,7 +4,7 @@
   const U = NS.utils;
   const store = NS.store;
   const desktop = window.tradeJournalDesktop || null;
-  const APP_VERSION = '2.1.2';
+  const APP_VERSION = '2.2.0';
   const DRAFT_PREFIX = 'tradejournal.draft.v1.';
   // Drafts live in localStorage even on desktop, so a full screenshot data URL
   // must not be duplicated there. Keep the draft small; the screenshot stays in
@@ -38,6 +38,8 @@
     period: 'all',
     filters: { search: '', side: 'all', result: 'all', setup: 'all' },
     sort: { key: 'date', dir: 'desc' },
+    page: 1,
+    pageSize: 25,
     calCursor: monthStart(new Date()),
     selectedDay: U.todayISO(),
     tradeId: null,
@@ -45,6 +47,8 @@
     tradeAccountId: null,
     tradeBaseline: null,
     tradeBaselineScreenshot: '',
+    tradeExits: [],
+    csvImport: null,
     tradeDirty: false,
     tradeSaving: false,
     tradeInitializing: false,
@@ -91,6 +95,9 @@
     refreshDatalists();
     bindEvents();
     initDesktopUi();
+    if (NS.pwa && typeof NS.pwa.init === 'function') {
+      NS.pwa.init({ onUpdate: showPwaUpdateBanner });
+    }
 
     const hashView = String(location.hash || '').replace('#', '');
     const initialView = VIEW_META[hashView] ? hashView : 'dashboard';
@@ -100,6 +107,35 @@
   function setVersionLabel(version) {
     const label = $('#appVersion');
     if (label) label.textContent = 'v' + (version || APP_VERSION);
+  }
+
+  function setDesktopVersionLabel(version) {
+    const label = $('#desktopVersion');
+    if (label) label.textContent = 'v' + (version || APP_VERSION);
+  }
+
+  function showUpdateBanner(title, text, actionLabel) {
+    const banner = $('#updateBanner');
+    if (!banner) return;
+    $('#updateBannerTitle').textContent = title;
+    $('#updateBannerText').textContent = text;
+    $('#installUpdateBtn').textContent = actionLabel || 'Обновить';
+    banner.hidden = false;
+  }
+
+  function showPwaUpdateBanner() {
+    showUpdateBanner(
+      'Доступно обновление',
+      'Новая версия TradeJournal загружена. Обновите страницу, чтобы применить изменения.',
+      'Обновить'
+    );
+  }
+
+  function setDesktopUpdateStatus(text, tone) {
+    const el = $('#updateStatus');
+    if (!el) return;
+    el.textContent = text;
+    el.className = 'muted small' + (tone ? ' ' + tone : '');
   }
 
   function showRecoveryScreen(rawData) {
@@ -318,7 +354,7 @@
     const today = U.todayISO();
     let todayPnl = 0;
     store.state.trades.forEach(function (trade) {
-      if (trade.date === today && store.isClosed(trade)) {
+      if (trade.date === today && store.hasRealized(trade)) {
         const pnl = store.tradePnl(trade);
         if (pnl !== null) todayPnl += pnl;
       }
@@ -458,7 +494,7 @@
   function buildPeriodMetrics() {
     const settings = store.state.settings;
     const range = currentRange();
-    const closedAll = store.sortTrades(store.state.trades.filter(store.isClosed), 'asc');
+    const closedAll = store.sortTrades(store.state.trades.filter(store.hasRealized), 'asc');
     const filtered = filterByRange(closedAll, range);
     let beforePnl = 0;
     if (range.from) {
@@ -626,7 +662,7 @@
     const settings = store.state.settings;
     const today = U.todayISO();
     const todayTrades = store.state.trades.filter(function (trade) { return trade.date === today; });
-    const closedToday = todayTrades.filter(store.isClosed);
+    const closedToday = todayTrades.filter(store.hasRealized);
     let dayPnl = 0;
     closedToday.forEach(function (trade) {
       const pnl = store.tradePnl(trade);
@@ -720,18 +756,23 @@
       return;
     }
     container.innerHTML = recent.map(function (trade) {
-      const open = !store.isClosed(trade);
+      const status = store.tradeStatus(trade);
       const pnl = store.tradePnl(trade);
       const r = store.tradeR(trade);
+      const pnlLabel = status === 'closed'
+        ? U.money(pnl, { sign: true })
+        : (status === 'partial' ? U.money(pnl, { sign: true }) : 'Открыта');
+      const statusLabel = status === 'closed'
+        ? (r !== null ? U.rfmt(r, { sign: true }) : '—')
+        : (status === 'partial' ? 'частично · остаток ' + U.qty(store.remainingQty(trade)) : 'без выхода');
       return '<div class="mini-row" data-open-trade="' + U.escapeHtml(trade.id) + '" tabindex="0">' +
         '<div class="mini-icon ' + trade.side + '">' + U.escapeHtml(trade.symbol.slice(0, 2)) + '</div>' +
         '<div class="mini-main"><strong>' + U.escapeHtml(trade.symbol) + '</strong><span>' +
         U.escapeHtml(U.formatDate(trade.date, 'med')) + (trade.time ? ' · ' + U.escapeHtml(trade.time) : '') +
         ' · ' + (trade.side === 'long' ? 'Long' : 'Short') + (trade.setup ? ' · ' + U.escapeHtml(trade.setup) : '') +
         '</span></div>' +
-        '<div class="mini-pnl"><strong class="' + (open ? '' : toneClass(pnl)) + '">' +
-        (open ? 'Открыта' : U.escapeHtml(U.money(pnl, { sign: true }))) + '</strong><span>' +
-        (open ? 'без выхода' : (r !== null ? U.escapeHtml(U.rfmt(r, { sign: true })) : '—')) +
+        '<div class="mini-pnl"><strong class="' + (status === 'open' ? '' : toneClass(pnl)) + '">' +
+        U.escapeHtml(pnlLabel) + '</strong><span>' + U.escapeHtml(statusLabel) +
         '</span></div></div>';
     }).join('');
   }
@@ -777,8 +818,10 @@
 
     if (filters.result !== 'all') {
       list = list.filter(function (trade) {
-        if (filters.result === 'open') return !store.isClosed(trade);
-        if (!store.isClosed(trade)) return false;
+        const status = store.tradeStatus(trade);
+        if (filters.result === 'open') return status === 'open';
+        if (filters.result === 'partial') return status === 'partial';
+        if (!store.hasRealized(trade)) return false;
         const pnl = store.tradePnl(trade);
         if (pnl === null) return false;
         if (filters.result === 'win') return pnl > 0.004;
@@ -802,8 +845,8 @@
         return av.localeCompare(bv, 'ru') * dir;
       }
       if (key === 'pnl') {
-        av = store.isClosed(a) ? store.tradePnl(a) : null;
-        bv = store.isClosed(b) ? store.tradePnl(b) : null;
+        av = store.hasRealized(a) ? store.tradePnl(a) : null;
+        bv = store.hasRealized(b) ? store.tradePnl(b) : null;
       } else if (key === 'r') {
         av = store.tradeR(a);
         bv = store.tradeR(b);
@@ -837,6 +880,83 @@
     }
   }
 
+  let thumbHydrationToken = 0;
+
+  function tradeRowHtml(trade) {
+    const status = store.tradeStatus(trade);
+    const pnl = store.tradePnl(trade);
+    const r = store.tradeR(trade);
+    const emotion = U.emotionMeta(trade.emotion);
+    const weighted = store.weightedExit(trade);
+    const remaining = store.remainingQty(trade);
+    const exitHtml = status === 'open'
+      ? '<span class="open-badge">Открыта</span>'
+      : '<span class="exit-value">' + U.escapeHtml(U.price(weighted)) + '</span>' +
+        (status === 'partial' ? '<small class="exit-remain">ост. ' + U.escapeHtml(U.qty(remaining)) + '</small>' : '');
+    const pnlHtml = pnl === null
+      ? '<span class="muted">—</span>'
+      : '<span class="' + toneClass(pnl) + '">' + U.escapeHtml(U.money(pnl, { sign: true })) + '</span>' +
+        (status === 'partial' ? '<small class="exit-remain">реализовано</small>' : '');
+    const statusHtml = status === 'partial'
+      ? '<span class="partial-badge">частично</span>'
+      : (status === 'open' ? '<span class="open-badge">открыта</span>' : '');
+    return '<tr data-open-trade="' + U.escapeHtml(trade.id) + '" tabindex="0">' +
+      '<td><div class="cell-date"><strong>' + U.escapeHtml(U.formatDate(trade.date, 'med')) + '</strong><span>' + U.escapeHtml(trade.time || '—') + '</span></div></td>' +
+      '<td><div class="symbol-cell"><div class="symbol-main">' +
+      '<button type="button" class="symbol-thumb' + (trade.screenshot ? ' has-shot' : '') + '"' +
+      (trade.screenshot ? ' data-open-shot="' + U.escapeHtml(trade.id) + '" title="Открыть скриншот"' : ' tabindex="-1" aria-hidden="true"') + '>' +
+      '<span class="thumb-empty"></span></button>' +
+      '<div class="symbol-line"><strong>' + U.escapeHtml(trade.symbol) + '</strong></div></div>' +
+      '<span class="side-badge ' + trade.side + '"><span class="arr">' + (trade.side === 'long' ? '↑' : '↓') + '</span>' + (trade.side === 'long' ? 'Long' : 'Short') + '</span>' +
+      statusHtml + '</div></td>' +
+      '<td class="num">' + U.escapeHtml(U.price(trade.entry)) + '</td>' +
+      '<td class="num exit-cell">' + exitHtml + '</td>' +
+      '<td class="num pnl-cell">' + pnlHtml + '</td>' +
+      '<td class="num ' + (r !== null ? toneClass(r) : '') + '">' + (r !== null ? U.escapeHtml(U.rfmt(r, { sign: true })) : '—') + '</td>' +
+      '<td>' + (trade.setup ? '<span class="setup-chip" title="' + U.escapeHtml(trade.setup) + '">' + U.escapeHtml(trade.setup) + '</span>' : '<span class="muted">—</span>') + '</td>' +
+      '<td><span class="emotion-cell" title="' + U.escapeHtml(emotion.label) + '">' + U.escapeHtml(emotion.emoji) + ' <span class="muted" style="font-size:10px">' + U.escapeHtml(emotion.label) + '</span></span></td>' +
+      '<td style="text-align:right"><span class="row-chevron">›</span></td>' +
+      '</tr>';
+  }
+
+  function hydrateTradeThumbnails(trades) {
+    const token = ++thumbHydrationToken;
+    const byId = new Map(trades.map(function (trade) { return [trade.id, trade]; }));
+    $$('#tradesTbody [data-open-shot]').forEach(function (button) {
+      const trade = byId.get(button.dataset.openShot);
+      if (!trade || !trade.screenshot) return;
+      store.screenshotSource(trade.screenshot).then(function (source) {
+        if (token !== thumbHydrationToken || !source || !document.contains(button)) return;
+        const image = document.createElement('img');
+        image.src = source;
+        image.alt = '';
+        image.loading = 'lazy';
+        button.innerHTML = '';
+        button.appendChild(image);
+      }).catch(function () { /* the placeholder stays */ });
+    });
+  }
+
+  function pagerHtml(page, totalPages) {
+    if (totalPages <= 1) return '';
+    const parts = ['<button type="button" data-page="' + (page - 1) + '"' + (page <= 1 ? ' disabled' : '') + ' aria-label="Предыдущая страница">‹</button>'];
+    const start = Math.max(1, page - 2);
+    const end = Math.min(totalPages, page + 2);
+    if (start > 1) {
+      parts.push('<button type="button" data-page="1">1</button>');
+      if (start > 2) parts.push('<span class="pager-info">…</span>');
+    }
+    for (let i = start; i <= end; i++) {
+      parts.push('<button type="button" data-page="' + i + '"' + (i === page ? ' class="active" aria-current="page"' : '') + '>' + i + '</button>');
+    }
+    if (end < totalPages) {
+      if (end < totalPages - 1) parts.push('<span class="pager-info">…</span>');
+      parts.push('<button type="button" data-page="' + totalPages + '">' + totalPages + '</button>');
+    }
+    parts.push('<button type="button" data-page="' + (page + 1) + '"' + (page >= totalPages ? ' disabled' : '') + ' aria-label="Следующая страница">›</button>');
+    return '<div class="pager">' + parts.join('') + '</div>';
+  }
+
   function renderTrades() {
     populateSetupFilter();
 
@@ -855,6 +975,8 @@
     });
 
     if (!list.length) {
+      state.page = 1;
+      thumbHydrationToken++;
       tbody.innerHTML = '';
       table.classList.add('hidden');
       empty.hidden = false;
@@ -869,49 +991,43 @@
       return;
     }
 
+    const totalPages = Math.max(1, Math.ceil(list.length / state.pageSize));
+    state.page = U.clamp(state.page || 1, 1, totalPages);
+    const startIndex = (state.page - 1) * state.pageSize;
+    const pageTrades = list.slice(startIndex, startIndex + state.pageSize);
+
     table.classList.remove('hidden');
     empty.hidden = true;
-    tbody.innerHTML = list.map(function (trade) {
-      const open = !store.isClosed(trade);
-      const pnl = store.tradePnl(trade);
-      const r = store.tradeR(trade);
-      const emotion = U.emotionMeta(trade.emotion);
-      return '<tr data-open-trade="' + U.escapeHtml(trade.id) + '" tabindex="0">' +
-        '<td><div class="cell-date"><strong>' + U.escapeHtml(U.formatDate(trade.date, 'med')) + '</strong><span>' + U.escapeHtml(trade.time || '—') + '</span></div></td>' +
-        '<td><div class="symbol-cell"><div class="symbol-line"><strong>' + U.escapeHtml(trade.symbol) + '</strong>' + (trade.screenshot ? '<span class="shot-dot" title="Есть скриншот"></span>' : '') + '</div>' +
-        '<span class="side-badge ' + trade.side + '"><span class="arr">' + (trade.side === 'long' ? '↑' : '↓') + '</span>' + (trade.side === 'long' ? 'Long' : 'Short') + '</span></div></td>' +
-        '<td class="num">' + U.escapeHtml(U.price(trade.entry)) + '</td>' +
-        '<td class="num">' + (open ? '—' : U.escapeHtml(U.price(trade.exit))) + '</td>' +
-        '<td class="num pnl-cell">' + (open ? '<span class="open-badge">Открыта</span>' : '<span class="' + toneClass(pnl) + '">' + U.escapeHtml(U.money(pnl, { sign: true })) + '</span>') + '</td>' +
-        '<td class="num ' + (r !== null ? toneClass(r) : '') + '">' + (r !== null ? U.escapeHtml(U.rfmt(r, { sign: true })) : '—') + '</td>' +
-        '<td>' + (trade.setup ? '<span class="setup-chip" title="' + U.escapeHtml(trade.setup) + '">' + U.escapeHtml(trade.setup) + '</span>' : '<span class="muted">—</span>') + '</td>' +
-        '<td><span class="emotion-cell" title="' + U.escapeHtml(emotion.label) + '">' + U.escapeHtml(emotion.emoji) + ' <span class="muted" style="font-size:10px">' + U.escapeHtml(emotion.label) + '</span></span></td>' +
-        '<td style="text-align:right"><span class="row-chevron">›</span></td>' +
-        '</tr>';
-    }).join('');
+    tbody.innerHTML = pageTrades.map(tradeRowHtml).join('');
+    hydrateTradeThumbnails(pageTrades);
 
     $('#tradesCountLabel').textContent = list.length + ' ' + pluralTrades(list.length);
 
     let net = 0;
     let rSum = 0;
     let rCount = 0;
-    let closedCount = 0;
+    let realizedCount = 0;
     list.forEach(function (trade) {
-      if (!store.isClosed(trade)) return;
+      if (!store.hasRealized(trade)) return;
       const pnl = store.tradePnl(trade);
       const r = store.tradeR(trade);
-      if (pnl !== null) { net += pnl; closedCount++; }
+      if (pnl !== null) { net += pnl; realizedCount++; }
       if (r !== null) { rSum += r; rCount++; }
     });
 
-    $('#tradesFooter').innerHTML = '<span>Показано <b>' + list.length + '</b> из <b>' + store.state.trades.length + '</b></span>' +
+    const from = startIndex + 1;
+    const to = startIndex + pageTrades.length;
+    $('#tradesFooter').innerHTML = '<span>Показано <b>' + from + '–' + to + '</b> из <b>' + list.length + '</b></span>' +
       '<span class="dot-sep">·</span><span>Итого по фильтру: <b class="' + toneClass(net) + '">' + U.escapeHtml(U.money(net, { sign: true })) + '</b></span>' +
+      (realizedCount !== list.length ? '<span class="dot-sep">·</span><span>с результатом: <b>' + realizedCount + '</b></span>' : '') +
       (rCount ? '<span class="dot-sep">·</span><span>Средний R: <b class="' + toneClass(rSum / rCount) + '">' + U.escapeHtml(U.rfmt(rSum / rCount, { sign: true })) + '</b></span>' : '') +
+      pagerHtml(state.page, totalPages) +
       '<span class="table-foot-hint">Клик по строке — редактирование</span>';
   }
 
   function resetFilters() {
     state.filters = { search: '', side: 'all', result: 'all', setup: 'all' };
+    state.page = 1;
     $('#tradeSearch').value = '';
     $('#filterSide').value = 'all';
     $('#filterResult').value = 'all';
@@ -932,13 +1048,13 @@
     $('#calWeekdays').innerHTML = NS.WEEKDAY_LABELS.map(function (label) { return '<span>' + label + '</span>'; }).join('');
 
     const monthTrades = store.state.trades.filter(function (trade) { return (trade.date || '').slice(0, 7) === prefix; });
-    const closedMonth = monthTrades.filter(store.isClosed);
+    const closedMonth = monthTrades.filter(store.hasRealized);
     const pnlMap = {};
     const countMap = {};
 
     monthTrades.forEach(function (trade) {
       countMap[trade.date] = (countMap[trade.date] || 0) + 1;
-      if (!store.isClosed(trade)) return;
+      if (!store.hasRealized(trade)) return;
       const pnl = store.tradePnl(trade);
       if (pnl !== null) pnlMap[trade.date] = (pnlMap[trade.date] || 0) + pnl;
     });
@@ -1018,7 +1134,7 @@
     const dayTrades = store.state.trades
       .filter(function (trade) { return trade.date === day; })
       .sort(function (a, b) { return (a.time || '').localeCompare(b.time || ''); });
-    const closedTrades = dayTrades.filter(store.isClosed);
+    const closedTrades = dayTrades.filter(store.hasRealized);
     let dayPnl = 0;
     closedTrades.forEach(function (trade) {
       const pnl = store.tradePnl(trade);
@@ -1037,13 +1153,14 @@
       tradesHtml = '<div class="day-empty">В этот день сделок нет.<br>Можно добавить сделку или записать наблюдение.</div>';
     } else {
       tradesHtml = '<div class="day-sub">Сделки дня</div>' + dayTrades.map(function (trade) {
-        const open = !store.isClosed(trade);
+        const status = store.tradeStatus(trade);
         const pnl = store.tradePnl(trade);
         return '<div class="day-trade" data-open-trade="' + U.escapeHtml(trade.id) + '" tabindex="0">' +
           '<span class="day-trade-symbol">' + U.escapeHtml(trade.symbol) +
-          ' <span class="day-trade-side">' + (trade.side === 'long' ? 'long' : 'short') + '</span></span>' +
-          '<span class="day-trade-pnl ' + (open ? 'neutral' : toneClass(pnl)) + '">' +
-          (open ? 'открыта' : U.escapeHtml(U.money(pnl, { sign: true }))) + '</span></div>';
+          ' <span class="day-trade-side">' + (trade.side === 'long' ? 'long' : 'short') + '</span>' +
+          (status === 'partial' ? ' <span class="partial-badge">частично</span>' : '') + '</span>' +
+          '<span class="day-trade-pnl ' + (status === 'open' ? 'neutral' : toneClass(pnl)) + '">' +
+          (status === 'open' ? 'открыта' : U.escapeHtml(U.money(pnl, { sign: true }))) + '</span></div>';
       }).join('');
     }
 
@@ -1432,7 +1549,7 @@
 
     const dayStats = new Map();
     store.state.trades.forEach(function (trade) {
-      if (!store.isClosed(trade)) {
+      if (!store.hasRealized(trade)) {
         let item = dayStats.get(trade.date);
         if (!item) { item = { pnl: 0, count: 0 }; dayStats.set(trade.date, item); }
         item.count++;
@@ -1655,16 +1772,85 @@
     const card = $('#desktopDataCard');
     if (!card) return;
     card.hidden = false;
+    setDesktopVersionLabel(APP_VERSION);
     loadDesktopDataInfo();
     refreshDesktopBackups();
     $('#openDataFolderBtn').addEventListener('click', openDesktopDataFolder);
     $('#backupNowBtn').addEventListener('click', createDesktopBackup);
     $('#refreshBackupsBtn').addEventListener('click', refreshDesktopBackups);
+    $('#checkUpdateBtn').addEventListener('click', function () { checkDesktopUpdate(true); });
     $('#desktopBackupsList').addEventListener('click', function (event) {
       const button = event.target.closest('button[data-backup]');
       if (!button) return;
       restoreDesktopBackup(button.dataset.backup);
     });
+    window.setTimeout(function () { checkDesktopUpdate(false); }, 2500);
+  }
+
+  const desktopUpdate = { checking: false, available: false, version: '' };
+
+  async function checkDesktopUpdate(manual) {
+    if (!desktop || typeof desktop.checkUpdate !== 'function' || desktopUpdate.checking) return;
+    desktopUpdate.checking = true;
+    const button = $('#checkUpdateBtn');
+    if (button) {
+      button.disabled = true;
+      button.textContent = 'Проверяем…';
+    }
+    if (manual) setDesktopUpdateStatus('Проверяем обновления…');
+    try {
+      const info = await desktop.checkUpdate();
+      const current = info && info.currentVersion ? String(info.currentVersion) : APP_VERSION;
+      setDesktopVersionLabel(current);
+      desktopUpdate.available = !!(info && info.available);
+      desktopUpdate.version = info && info.version ? String(info.version) : '';
+      if (desktopUpdate.available) {
+        setDesktopUpdateStatus('Доступна версия ' + (desktopUpdate.version || '—') + '.', 'pos');
+        showUpdateBanner(
+          'Доступно обновление TradeJournal',
+          'Версия ' + (desktopUpdate.version || '') + ' готова к установке. Приложение скачает обновление и перезапустится.',
+          'Установить'
+        );
+      } else {
+        setDesktopUpdateStatus('Установлена последняя версия (' + current + ').', 'pos');
+      }
+    } catch (err) {
+      const message = err && err.message ? err.message : String(err || 'неизвестная ошибка');
+      setDesktopUpdateStatus('Не удалось проверить обновления: ' + message, 'neg');
+    } finally {
+      desktopUpdate.checking = false;
+      if (button) {
+        button.disabled = false;
+        button.textContent = 'Проверить обновления';
+      }
+    }
+  }
+
+  async function installDesktopUpdate() {
+    if (!desktop || typeof desktop.installUpdate !== 'function') return;
+    if (!desktopUpdate.available) {
+      checkDesktopUpdate(true);
+      return;
+    }
+    const button = $('#installUpdateBtn');
+    if (button) {
+      button.disabled = true;
+      button.textContent = 'Устанавливаем…';
+    }
+    setDesktopUpdateStatus('Скачиваем и устанавливаем обновление…');
+    try {
+      await desktop.installUpdate();
+      setDesktopUpdateStatus('Обновление установлено. Приложение перезапустится.');
+      toast('Обновление установлено. Приложение перезапустится.');
+    } catch (err) {
+      const message = err && err.message ? err.message : String(err || 'неизвестная ошибка');
+      setDesktopUpdateStatus('Не удалось установить обновление: ' + message, 'neg');
+      toast('Не удалось установить обновление: ' + message, 'error');
+      if (button) {
+        button.disabled = false;
+        button.textContent = 'Установить';
+      }
+    }
   }
 
   async function loadDesktopDataInfo() {
@@ -1676,7 +1862,7 @@
         $('#desktopDataPath').textContent = path;
         $('#desktopDataPath').title = path;
       }
-      if (info && info.version) setVersionLabel(info.version);
+      if (info && info.version) setDesktopVersionLabel(info.version);
     } catch (err) {
       $('#desktopDataPath').textContent = 'Не удалось получить путь к данным';
     }
@@ -2005,26 +2191,48 @@
     return num.toFixed(digits === undefined ? 2 : digits).replace('.', ',');
   }
 
+  function plainNumber(value) {
+    const num = U.parseNum(value);
+    return num === null ? '' : String(num);
+  }
+
+  function exitsForCsv(trade) {
+    return store.tradeExits(trade).map(function (exit) {
+      const date = exit.date && exit.date !== trade.date ? '@' + exit.date : '';
+      return plainNumber(exit.qty) + '@' + plainNumber(exit.price) + date;
+    }).join('|');
+  }
+
   function exportCSV() {
     const trades = store.sortTrades(store.state.trades, 'desc');
-    const headers = ['Дата', 'Время', 'Инструмент', 'Направление', 'Вход', 'Выход', 'Стоп при входе', 'Текущий стоп', 'Тейк', 'Количество', 'Комиссия', 'P&L', 'R', 'Сетап', 'Эмоция', 'Дисциплина', 'Теги', 'Заметка'];
+    const headers = [
+      'Дата', 'Время', 'Инструмент', 'Направление', 'Вход', 'Выход', 'Стоп при входе',
+      'Текущий стоп', 'Тейк', 'Количество', 'Множитель', 'Комиссия', 'Выходы',
+      'Остаток', 'Статус', 'P&L', 'R', 'Сетап', 'Эмоция', 'Дисциплина', 'Теги', 'Заметка'
+    ];
     const lines = [headers.map(csvCell).join(';')];
+    const statusLabels = { closed: 'Закрыта', partial: 'Частично закрыта', open: 'Открыта' };
     trades.forEach(function (trade) {
       const emotion = U.emotionMeta(trade.emotion);
-      const pnl = store.isClosed(trade) ? store.tradePnl(trade) : null;
-      const r = store.isClosed(trade) ? store.tradeR(trade) : null;
+      const pnl = store.hasRealized(trade) ? store.tradePnl(trade) : null;
+      const r = store.hasRealized(trade) ? store.tradeR(trade) : null;
+      const status = store.tradeStatus(trade);
       const row = [
         csvText(trade.date),
         csvText(trade.time),
         csvText(trade.symbol),
         csvText(trade.side === 'long' ? 'Long' : 'Short'),
         csvNumber(trade.entry, 6),
-        trade.exit === null ? '' : csvNumber(trade.exit, 6),
+        store.weightedExit(trade) === null ? '' : csvNumber(store.weightedExit(trade), 6),
         trade.stop === null ? '' : csvNumber(trade.stop, 6),
         trade.currentStop === null ? '' : csvNumber(trade.currentStop, 6),
         trade.target === null ? '' : csvNumber(trade.target, 6),
         csvNumber(trade.qty, 4),
+        csvNumber(trade.multiplier, 8),
         csvNumber(trade.fees, 2),
+        csvText(exitsForCsv(trade)),
+        store.remainingQty(trade) === null ? '' : csvNumber(store.remainingQty(trade), 4),
+        csvText(statusLabels[status] || status),
         pnl === null ? '' : csvNumber(pnl, 2),
         r === null ? '' : csvNumber(r, 2),
         csvText(trade.setup),
@@ -2037,6 +2245,186 @@
     });
     U.download('tradejournal-trades-' + U.todayISO() + '.csv', '\uFEFF' + lines.join('\r\n'), 'text/csv;charset=utf-8');
     toast('Таблица сделок скачана в CSV');
+  }
+
+  async function exportZIP() {
+    try {
+      const snapshot = await store.exportSnapshot();
+      const exportedAt = new Date().toISOString();
+      const payload = Object.assign({}, snapshot, {
+        app: 'TradeJournal',
+        appVersion: APP_VERSION,
+        exportedAt: exportedAt
+      });
+      const accounts = Array.isArray(payload.accounts) ? payload.accounts : [];
+      const tradeCount = accounts.reduce(function (sum, account) { return sum + (account.trades ? account.trades.length : 0); }, 0);
+      const noteCount = accounts.reduce(function (sum, account) { return sum + (account.notes ? account.notes.length : 0); }, 0);
+      const shotCount = accounts.reduce(function (sum, account) {
+        return sum + (account.trades || []).filter(function (trade) { return !!trade.screenshot; }).length;
+      }, 0);
+      const readme = [
+        'TradeJournal — резервная копия',
+        '',
+        'Версия приложения: ' + APP_VERSION,
+        'Дата экспорта: ' + exportedAt,
+        'Счетов: ' + accounts.length + ', сделок: ' + tradeCount + ', записей журнала: ' + noteCount + ', скриншотов: ' + shotCount + '.',
+        '',
+        'Файл journal.json содержит все счета, сделки, записи и скриншоты.',
+        'Скриншоты встроены в JSON, поэтому архив можно перенести на другое устройство.',
+        '',
+        'Как восстановить:',
+        '1. Откройте TradeJournal.',
+        '2. Настройки → «Импорт JSON».',
+        '3. Выберите journal.json из этого архива.',
+        '',
+        'Импорт заменяет текущие данные журнала. Перед восстановлением сделайте резервную копию текущего состояния.',
+        ''
+      ].join('\r\n');
+      const archive = NS.zip.create([
+        { name: 'journal.json', data: JSON.stringify(payload, null, 2), date: new Date() },
+        { name: 'README.txt', data: readme, date: new Date() }
+      ]);
+      U.downloadBytes('tradejournal-backup-' + U.todayISO() + '.zip', archive, 'application/zip');
+      toast('ZIP-архив со скриншотами скачан');
+    } catch (err) {
+      toast('Не удалось подготовить ZIP-архив: ' + (err && err.message ? err.message : err), 'error');
+    }
+  }
+
+  function importCSVFile(file) {
+    if (!file) return;
+    if (file.size > 15 * 1024 * 1024) {
+      toast('CSV-файл слишком большой: максимум 15 МБ.', 'error');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = function () {
+      const text = String(reader.result || '');
+      const result = NS.csv.analyze(text, store.state.trades);
+      state.csvImport = { fileName: file.name, result: result };
+      renderCsvPreview();
+      openModal('csvModal', '#confirmCsvImport');
+    };
+    reader.onerror = function () { toast('Не удалось прочитать CSV-файл.', 'error'); };
+    reader.readAsText(file, 'utf-8');
+  }
+
+  function renderCsvPreview() {
+    const data = state.csvImport;
+    const summary = $('#csvSummary');
+    const alerts = $('#csvAlerts');
+    const body = $('#csvPreviewBody');
+    const confirm = $('#confirmCsvImport');
+    if (!data) return;
+    const result = data.result;
+    const stats = result.stats || {};
+    const delimiterLabels = { ';': 'точка с запятой', ',': 'запятая', '\t': 'табуляция' };
+    summary.innerHTML = [
+      ['Файл', data.fileName],
+      ['Строк', stats.rows || 0],
+      ['К импорту', result.trades.length],
+      ['Дубликаты', result.duplicates || 0],
+      ['Выходы', stats.exits || 0],
+      ['Разделитель', delimiterLabels[result.delimiter] || result.delimiter]
+    ].map(function (item) {
+      return '<span class="chip"><b>' + U.escapeHtml(item[0]) + ':</b> ' + U.escapeHtml(item[1]) + '</span>';
+    }).join('');
+
+    const alertHtml = [];
+    if (result.errors.length) {
+      alertHtml.push('<div class="csv-alert error"><b>Ошибки (' + result.errors.length + '):</b> ' +
+        U.escapeHtml(result.errors.slice(0, 6).join(' ')) +
+        (result.errors.length > 6 ? ' …' : '') + '</div>');
+    }
+    if (result.warnings.length) {
+      alertHtml.push('<div class="csv-alert warn"><b>Предупреждения (' + result.warnings.length + '):</b> ' +
+        U.escapeHtml(result.warnings.slice(0, 5).join(' ')) +
+        (result.warnings.length > 5 ? ' …' : '') + '</div>');
+    }
+    const account = store.activeAccount();
+    alertHtml.push('<div class="csv-alert info">Сделки будут добавлены в активный счёт «' +
+      U.escapeHtml(account ? account.name : '—') + '». Существующие сделки не изменятся.</div>');
+    if (!result.trades.length) {
+      alertHtml.push('<div class="csv-alert warn">Нет строк, готовых к импорту. Исправьте файл и попробуйте снова.</div>');
+    }
+    alerts.innerHTML = alertHtml.join('');
+
+    if (!result.trades.length) {
+      body.innerHTML = '<tr><td colspan="8" class="csv-empty">Нет данных для предпросмотра</td></tr>';
+    } else {
+      body.innerHTML = result.trades.slice(0, 200).map(function (raw) {
+        const trade = store.normalizeTrade(raw);
+        if (!trade) return '';
+        const pnl = store.tradePnl(trade);
+        const exitText = store.tradeExits(trade).map(function (exit) {
+          return U.qty(exit.qty) + '@' + U.price(exit.price);
+        }).join(' | ');
+        return '<tr>' +
+          '<td>' + U.escapeHtml(U.formatDate(trade.date, 'med')) + '</td>' +
+          '<td><b>' + U.escapeHtml(trade.symbol) + '</b></td>' +
+          '<td><span class="side-badge ' + trade.side + '">' + (trade.side === 'long' ? 'Long' : 'Short') + '</span></td>' +
+          '<td class="num">' + U.escapeHtml(U.price(trade.entry)) + '</td>' +
+          '<td class="num">' + U.escapeHtml(exitText || '—') + '</td>' +
+          '<td class="num">' + U.escapeHtml(U.qty(trade.qty)) + '</td>' +
+          '<td class="num ' + (pnl !== null ? toneClass(pnl) : '') + '">' + (pnl !== null ? U.escapeHtml(U.money(pnl, { sign: true })) : '—') + '</td>' +
+          '<td>' + U.escapeHtml(trade.setup || '—') + '</td>' +
+          '</tr>';
+      }).join('') + (result.trades.length > 200 ? '<tr><td colspan="8" class="csv-empty">Показаны первые 200 из ' + result.trades.length + ' строк</td></tr>' : '');
+    }
+    if (confirm) {
+      confirm.disabled = !result.trades.length;
+      confirm.textContent = result.trades.length ? 'Импортировать ' + result.trades.length : 'Импортировать';
+    }
+  }
+
+  async function confirmCsvImport() {
+    const data = state.csvImport;
+    if (!data || !data.result.trades.length) return;
+    const account = store.activeAccount();
+    if (!account) return;
+    const before = JSON.parse(JSON.stringify(store.state));
+    const existing = new Set(account.trades.map(function (trade) { return NS.csv.fingerprint(trade); }).filter(Boolean));
+    let added = 0;
+    let skipped = 0;
+    data.result.trades.forEach(function (raw) {
+      const trade = store.normalizeTrade(raw);
+      if (!trade) return;
+      const fingerprint = NS.csv.fingerprint(trade);
+      if (fingerprint && existing.has(fingerprint)) {
+        skipped++;
+        return;
+      }
+      if (fingerprint) existing.add(fingerprint);
+      account.trades.push(trade);
+      added++;
+    });
+    if (!added) {
+      toast('Новые сделки не найдены: все строки уже есть в журнале.', 'warn');
+      closeModal('csvModal');
+      return;
+    }
+    store.state.demo = false;
+    const ok = await persist();
+    if (!ok) {
+      await store.replaceData(before);
+      renderAll();
+      toast('Импорт не сохранён: журнал оставлен прежним.', 'error');
+      return;
+    }
+    closeModal('csvModal');
+    state.csvImport = null;
+    state.page = 1;
+    applyCurrency();
+    renderAll();
+    toast('Импортировано сделок: ' + added + (skipped ? '. Пропущено дубликатов: ' + skipped : ''), 'success', {
+      label: 'Отменить',
+      onClick: async function () {
+        const restored = await store.replaceData(before);
+        applyCurrency();
+        renderAll();
+        toast(restored ? 'Импорт CSV отменён' : 'Не удалось отменить импорт', restored ? 'success' : 'error');
+      }
+    });
   }
 
   function importJSONFile(file) {
@@ -2203,7 +2591,7 @@
     }).join('');
   }
 
-  const TRADE_FIELD_KEYS = ['date', 'time', 'symbol', 'entry', 'exit', 'stop', 'currentStop', 'target', 'qty', 'fees', 'setup', 'emotion', 'discipline', 'tags', 'notes', 'side'];
+  const TRADE_FIELD_KEYS = ['date', 'time', 'symbol', 'entry', 'stop', 'currentStop', 'target', 'qty', 'multiplier', 'fees', 'setup', 'emotion', 'discipline', 'tags', 'notes', 'side', 'exits'];
 
   function tradeDraftKey(accountId, tradeId) {
     return DRAFT_PREFIX + String(accountId || '') + '.' + (tradeId || 'new');
@@ -2215,24 +2603,58 @@
       || /^file:screenshots\/[a-z0-9_-]{1,80}\.(?:jpe?g|png|webp)$/i.test(value);
   }
 
+  function normalizeExitRows(rows) {
+    const result = [];
+    (Array.isArray(rows) ? rows : []).slice(0, store.MAX_EXITS || 50).forEach(function (row) {
+      if (!row || typeof row !== 'object') return;
+      const qty = row.qty === null || row.qty === undefined ? '' : String(row.qty).slice(0, 40);
+      const price = row.price === null || row.price === undefined ? '' : String(row.price).slice(0, 40);
+      const date = typeof row.date === 'string' ? row.date.slice(0, 10) : '';
+      result.push({
+        id: row.id ? String(row.id) : U.uid(),
+        qty: qty,
+        price: price,
+        date: /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : ''
+      });
+    });
+    return result;
+  }
+
+  function exitsFromField(value) {
+    if (!value) return [];
+    try {
+      const parsed = typeof value === 'string' ? JSON.parse(value) : value;
+      return normalizeExitRows(parsed);
+    } catch (err) {
+      return [];
+    }
+  }
+
+  function exitsToField(rows) {
+    return JSON.stringify(normalizeExitRows(rows).map(function (row) {
+      return { qty: row.qty, price: row.price, date: row.date };
+    }));
+  }
+
   function tradeFieldsFromTrade(trade, presetDate) {
     return {
       date: trade ? trade.date : (presetDate || U.todayISO()),
       time: trade ? (trade.time || '') : U.nowTime(),
       symbol: trade ? trade.symbol : '',
       entry: trade && trade.entry !== null && trade.entry !== undefined ? String(trade.entry) : '',
-      exit: trade && trade.exit !== null && trade.exit !== undefined ? String(trade.exit) : '',
       stop: trade && trade.stop !== null && trade.stop !== undefined ? String(trade.stop) : '',
       currentStop: trade && trade.currentStop !== null && trade.currentStop !== undefined ? String(trade.currentStop) : '',
       target: trade && trade.target !== null && trade.target !== undefined ? String(trade.target) : '',
       qty: trade && trade.qty !== null && trade.qty !== undefined ? String(trade.qty) : '',
+      multiplier: String(trade && trade.multiplier !== null && trade.multiplier !== undefined ? trade.multiplier : 1),
       fees: trade && trade.fees !== null && trade.fees !== undefined ? String(trade.fees) : '',
       setup: trade ? (trade.setup || '') : '',
       emotion: trade ? (trade.emotion || '') : '',
       discipline: String(trade ? (trade.discipline || 0) : 0),
       tags: trade ? trade.tags.join(', ') : '',
       notes: trade ? (trade.notes || '') : '',
-      side: trade ? trade.side : 'long'
+      side: trade ? trade.side : 'long',
+      exits: exitsToField(trade ? store.tradeExits(trade) : [])
     };
   }
 
@@ -2242,18 +2664,19 @@
       time: $('#tradeTime').value,
       symbol: $('#tradeSymbol').value,
       entry: $('#tradeEntry').value,
-      exit: $('#tradeExit').value,
       stop: $('#tradeStop').value,
       currentStop: $('#tradeCurrentStop').value,
       target: $('#tradeTarget').value,
       qty: $('#tradeQty').value,
+      multiplier: $('#tradeMultiplier').value,
       fees: $('#tradeFees').value,
       setup: $('#tradeSetup').value,
       emotion: $('#tradeEmotion').value,
       discipline: $('#tradeDiscipline').value,
       tags: $('#tradeTags').value,
       notes: $('#tradeNotes').value,
-      side: $('#tradeSide').value
+      side: $('#tradeSide').value,
+      exits: exitsToField(state.tradeExits)
     };
   }
 
@@ -2269,12 +2692,77 @@
     if (!fields || typeof fields !== 'object') return result;
     TRADE_FIELD_KEYS.forEach(function (key) {
       if (typeof fields[key] !== 'string') return;
-      const max = key === 'notes' ? 20000 : (key === 'tags' ? 2000 : 200);
+      const max = key === 'notes' ? 20000 : (key === 'tags' ? 2000 : (key === 'exits' ? 20000 : 200));
       result[key] = fields[key].slice(0, max);
     });
+    result.exits = exitsToField(exitsFromField(result.exits));
+    result.multiplier = result.multiplier || '1';
     result.side = result.side === 'short' ? 'short' : 'long';
     result.discipline = String(U.clamp(Math.round(U.parseNum(result.discipline) || 0), 0, 5));
     return result;
+  }
+
+  function setTradeExits(rows) {
+    state.tradeExits = normalizeExitRows(rows);
+  }
+
+  function renderExitsEditor() {
+    const editor = $('#exitsEditor');
+    if (!editor) return;
+    if (!state.tradeExits.length) {
+      editor.innerHTML = '<div class="exits-empty">Выходов пока нет — позиция открыта</div>';
+      updateExitsSummary();
+      return;
+    }
+    editor.innerHTML = state.tradeExits.map(function (row, index) {
+      return '<div class="exit-row" data-exit-index="' + index + '">' +
+        '<input type="number" step="any" min="0" inputmode="decimal" data-exit-field="qty" value="' + U.escapeHtml(row.qty) + '" placeholder="Количество" aria-label="Количество выхода ' + (index + 1) + '">' +
+        '<input type="number" step="any" inputmode="decimal" data-exit-field="price" value="' + U.escapeHtml(row.price) + '" placeholder="Цена выхода" aria-label="Цена выхода ' + (index + 1) + '">' +
+        '<input type="date" data-exit-field="date" data-exit-date value="' + U.escapeHtml(row.date) + '" aria-label="Дата выхода ' + (index + 1) + '">' +
+        '<button type="button" class="icon-btn exit-remove" data-remove-exit="' + index + '" title="Удалить выход" aria-label="Удалить выход">×</button>' +
+        '</div>';
+    }).join('');
+    updateExitsSummary();
+  }
+
+  function exitRowsTotals() {
+    let qty = 0;
+    let fees = 0;
+    const quantity = U.parseNum($('#tradeQty') ? $('#tradeQty').value : null);
+    state.tradeExits.forEach(function (row) {
+      const value = U.parseNum(row.qty);
+      if (value !== null && value > 0) qty += value;
+    });
+    fees = U.parseNum($('#tradeFees') ? $('#tradeFees').value : null) || 0;
+    return { qty: qty, remaining: quantity === null ? null : quantity - qty, fees: fees };
+  }
+
+  function updateExitsSummary() {
+    const hint = $('#exitsHint');
+    const closeButton = $('#closeRemainingBtn');
+    if (!hint) return;
+    const totals = exitRowsTotals();
+    const quantity = U.parseNum($('#tradeQty') ? $('#tradeQty').value : null);
+    const epsilon = store.QTY_EPSILON || 1e-9;
+    let text;
+    if (!state.tradeExits.length) {
+      text = 'Выходов нет — позиция открыта. Добавьте один или несколько частичных выходов; комиссия распределится пропорционально.';
+    } else if (quantity === null || quantity <= 0) {
+      text = 'Укажите количество в сделке, чтобы рассчитать остаток позиции.';
+    } else if (totals.qty > quantity + epsilon) {
+      text = 'Сумма выходов ' + U.qty(totals.qty) + ' больше количества ' + U.qty(quantity) + '. Уменьшите объём выходов.';
+    } else if (totals.remaining <= epsilon) {
+      text = 'Позиция закрыта полностью: ' + U.qty(totals.qty) + ' из ' + U.qty(quantity) + '.';
+    } else {
+      text = 'Закрыто ' + U.qty(totals.qty) + ' из ' + U.qty(quantity) + ', остаток ' + U.qty(totals.remaining) + '. Сделка останется частично открытой.';
+    }
+    if (totals.fees > 0 && state.tradeExits.length) {
+      text += ' Комиссия ' + U.money(totals.fees) + ' распределится между выходами пропорционально количеству.';
+    }
+    hint.textContent = text;
+    if (closeButton) {
+      closeButton.disabled = quantity === null || quantity <= 0 || totals.remaining <= epsilon;
+    }
   }
 
   function applyTradeFields(fields) {
@@ -2282,18 +2770,63 @@
     $('#tradeTime').value = fields.time || '';
     $('#tradeSymbol').value = fields.symbol || '';
     $('#tradeEntry').value = fields.entry || '';
-    $('#tradeExit').value = fields.exit || '';
     $('#tradeStop').value = fields.stop || '';
     $('#tradeCurrentStop').value = fields.currentStop || '';
     $('#tradeTarget').value = fields.target || '';
     $('#tradeQty').value = fields.qty || '';
+    $('#tradeMultiplier').value = fields.multiplier || '1';
     $('#tradeFees').value = fields.fees || '';
     $('#tradeSetup').value = fields.setup || '';
     $('#tradeEmotion').value = fields.emotion || '';
     $('#tradeTags').value = fields.tags || '';
     $('#tradeNotes').value = fields.notes || '';
+    setTradeExits(exitsFromField(fields.exits));
+    renderExitsEditor();
     setSide(fields.side);
     setDiscipline(Number(fields.discipline) || 0);
+  }
+
+  function addExitRow(qty, price) {
+    if (state.tradeExits.length >= (store.MAX_EXITS || 50)) {
+      toast('Слишком много выходов: максимум ' + (store.MAX_EXITS || 50) + '.', 'warn');
+      return;
+    }
+    state.tradeExits.push({
+      id: U.uid(),
+      qty: qty === undefined || qty === null ? '' : String(qty),
+      price: price === undefined || price === null ? '' : String(price),
+      date: $('#tradeDate').value || U.todayISO()
+    });
+    renderExitsEditor();
+    const row = $('#exitsEditor .exit-row:last-child');
+    const target = row && row.querySelector(qty === undefined ? '[data-exit-field="qty"]' : '[data-exit-field="price"]');
+    if (target) target.focus();
+    updateTradePreview();
+    syncTradeDirty();
+  }
+
+  function closeRemainingExit() {
+    const quantity = U.parseNum($('#tradeQty').value);
+    if (quantity === null || quantity <= 0) {
+      toast('Сначала укажите количество в сделке.', 'warn');
+      return;
+    }
+    const totals = exitRowsTotals();
+    const epsilon = store.QTY_EPSILON || 1e-9;
+    if (totals.remaining <= epsilon) {
+      toast('Позиция уже закрыта полностью.', 'warn');
+      return;
+    }
+    const lastPrice = state.tradeExits.length ? state.tradeExits[state.tradeExits.length - 1].price : '';
+    addExitRow(totals.remaining, lastPrice);
+  }
+
+  function removeExitRow(index) {
+    if (index < 0 || index >= state.tradeExits.length) return;
+    state.tradeExits.splice(index, 1);
+    renderExitsEditor();
+    updateTradePreview();
+    syncTradeDirty();
   }
 
   function updateDraftUi() {
@@ -2548,27 +3081,45 @@
     });
   }
 
-  function openShotLightbox() {
-    if (!state.screenshot) return;
+  function openScreenshotLightbox(value, focusElement) {
+    if (!value) return;
     const lightbox = $('#shotLightbox');
     const image = $('#shotLightboxImage');
     if (!lightbox || !image) return;
-    state.shotFocus = document.activeElement;
+    state.shotFocus = focusElement || document.activeElement;
     const token = ++shotLightboxToken;
     image.removeAttribute('src');
     image.alt = 'Загрузка скриншота';
     lightbox.hidden = false;
     $('#shotLightboxClose').focus();
-    if (state.screenshotPreview) {
-      image.src = state.screenshotPreview;
-      image.alt = 'Скриншот сделки';
-      return;
-    }
-    store.screenshotSource(state.screenshot).then(function (source) {
+    store.screenshotSource(value).then(function (source) {
       if (token !== shotLightboxToken || lightbox.hidden || !source) return;
       image.src = source;
       image.alt = 'Скриншот сделки';
     });
+  }
+
+  function openShotLightbox() {
+    if (!state.screenshot) return;
+    if (state.screenshotPreview) {
+      const lightbox = $('#shotLightbox');
+      const image = $('#shotLightboxImage');
+      if (!lightbox || !image) return;
+      state.shotFocus = document.activeElement;
+      shotLightboxToken++;
+      image.src = state.screenshotPreview;
+      image.alt = 'Скриншот сделки';
+      lightbox.hidden = false;
+      $('#shotLightboxClose').focus();
+      return;
+    }
+    openScreenshotLightbox(state.screenshot, document.activeElement);
+  }
+
+  function openTradeScreenshot(tradeId, focusElement) {
+    const trade = store.state.trades.find(function (item) { return item.id === tradeId; });
+    if (!trade || !trade.screenshot) return;
+    openScreenshotLightbox(trade.screenshot, focusElement);
   }
 
   function closeShotLightbox() {
@@ -2721,21 +3272,44 @@
   function updateTradePreview() {
     const side = $('#tradeSide').value;
     const entry = U.parseNum($('#tradeEntry').value);
-    const exit = $('#tradeExit').value.trim() === '' ? null : U.parseNum($('#tradeExit').value);
-    const stop = $('#tradeStop').value.trim() === '' ? null : U.parseNum($('#tradeStop').value);
-    const target = $('#tradeTarget').value.trim() === '' ? null : U.parseNum($('#tradeTarget').value);
+    const stop = U.parseNum($('#tradeStop').value);
+    const target = U.parseNum($('#tradeTarget').value);
     const qty = U.parseNum($('#tradeQty').value);
+    const multiplier = store.normalizeMultiplier($('#tradeMultiplier').value);
     const fees = U.parseNum($('#tradeFees').value) || 0;
+    const exits = [];
+    state.tradeExits.forEach(function (row) {
+      const exitQty = U.parseNum(row.qty);
+      const exitPrice = U.parseNum(row.price);
+      if (exitQty !== null && exitQty > 0 && exitPrice !== null) {
+        exits.push({ qty: exitQty, price: exitPrice, date: row.date || '' });
+      }
+    });
 
-    const preview = { side: side, entry: entry, exit: exit, stop: stop, target: target, qty: qty, fees: fees };
-    const pnl = store.tradePnl(preview);
-    const r = store.tradeR(preview);
+    const preview = {
+      side: side,
+      entry: entry,
+      exit: null,
+      stop: stop,
+      target: target,
+      qty: qty,
+      multiplier: multiplier,
+      fees: fees,
+      exits: exits
+    };
+    // The preview exits do not carry allocated fees yet, so subtract the
+    // trade-level commission here to match the P&L that will be saved.
+    const grossPnl = store.tradePnl(preview);
+    const pnl = grossPnl === null ? null : grossPnl - Math.max(0, fees);
+    const risk = store.tradeRisk(preview);
+    const r = pnl !== null && risk !== null && risk > 0 ? pnl / risk : null;
     const rr = store.plannedRR(preview);
+    const remaining = qty !== null ? qty - exits.reduce(function (sum, exit) { return sum + exit.qty; }, 0) : null;
 
     const pnlEl = $('#previewPnl');
-    if (exit === null) {
+    if (!exits.length) {
       pnlEl.textContent = entry !== null && qty !== null ? 'Открыта' : '—';
-      pnlEl.className = exit === null && entry !== null && qty !== null ? 'neutral' : '';
+      pnlEl.className = entry !== null && qty !== null ? 'neutral' : '';
     } else if (pnl !== null) {
       pnlEl.textContent = U.money(pnl, { sign: true });
       pnlEl.className = toneClass(pnl);
@@ -2750,6 +3324,38 @@
 
     $('#previewRR').textContent = rr !== null ? '1 : ' + rr.toFixed(2).replace('.', ',') : '—';
     $('#previewRR').className = '';
+
+    const remainingEl = $('#previewRemaining');
+    if (remainingEl) {
+      const epsilon = store.QTY_EPSILON || 1e-9;
+      if (qty === null || qty <= 0) remainingEl.textContent = '—';
+      else if (!exits.length) remainingEl.textContent = U.qty(qty) + ' открыто';
+      else if (remaining <= epsilon) remainingEl.textContent = 'Закрыта';
+      else remainingEl.textContent = U.qty(remaining) + ' остаток';
+      remainingEl.className = remaining !== null && remaining > epsilon && exits.length ? 'neutral' : '';
+    }
+    updateExitsSummary();
+  }
+
+  function collectExitRows(tradeDate) {
+    const exits = [];
+    for (let i = 0; i < state.tradeExits.length; i++) {
+      const row = state.tradeExits[i];
+      const qtyRaw = String(row.qty === undefined || row.qty === null ? '' : row.qty).trim();
+      const priceRaw = String(row.price === undefined || row.price === null ? '' : row.price).trim();
+      if (!qtyRaw && !priceRaw && !row.date) continue;
+      const qty = U.parseNum(qtyRaw);
+      const price = U.parseNum(priceRaw);
+      if (qty === null || qty <= 0) return { error: 'Выход ' + (i + 1) + ': количество должно быть больше нуля.' };
+      if (price === null) return { error: 'Выход ' + (i + 1) + ': укажите цену выхода.' };
+      exits.push({
+        id: row.id,
+        qty: qty,
+        price: price,
+        date: row.date || tradeDate
+      });
+    }
+    return { exits: exits };
   }
 
   async function saveTrade(event) {
@@ -2764,28 +3370,34 @@
     const symbol = $('#tradeSymbol').value.trim().toUpperCase();
     const entry = U.parseNum($('#tradeEntry').value);
     const qty = U.parseNum($('#tradeQty').value);
-    const exitRaw = $('#tradeExit').value.trim();
+    const multiplierRaw = $('#tradeMultiplier').value.trim();
+    const multiplier = multiplierRaw === '' ? 1 : U.parseNum(multiplierRaw);
     const stopRaw = $('#tradeStop').value.trim();
     const currentStopRaw = $('#tradeCurrentStop').value.trim();
     const targetRaw = $('#tradeTarget').value.trim();
-    const exit = exitRaw === '' ? null : U.parseNum(exitRaw);
     const stop = stopRaw === '' ? null : U.parseNum(stopRaw);
     const currentStop = currentStopRaw === '' ? null : U.parseNum(currentStopRaw);
     const target = targetRaw === '' ? null : U.parseNum(targetRaw);
     const fees = U.parseNum($('#tradeFees').value) || 0;
     const side = $('#tradeSide').value === 'short' ? 'short' : 'long';
+    const collected = collectExitRows(date);
+    const exits = collected.exits || [];
 
-    let error = '';
-    if (!date) error = 'Укажите дату сделки.';
-    else if (!symbol) error = 'Укажите инструмент (например, EURUSD).';
-    else if (entry === null) error = 'Укажите цену входа.';
-    else if (qty === null || qty <= 0) error = 'Количество должно быть больше нуля.';
-    else if (fees < 0) error = 'Комиссия не может быть отрицательной.';
-    else if (stop !== null && Math.abs(stop - entry) < 1e-12) error = 'Стоп при входе не может совпадать с ценой входа.';
-    else if (stop !== null && side === 'long' && stop > entry) error = 'Для Long стоп при входе должен быть ниже цены входа.';
-    else if (stop !== null && side === 'short' && stop < entry) error = 'Для Short стоп при входе должен быть выше цены входа.';
-    else if (target !== null && side === 'long' && target <= entry) error = 'Для Long тейк-профит должен быть выше цены входа.';
-    else if (target !== null && side === 'short' && target >= entry) error = 'Для Short тейк-профит должен быть ниже цены входа.';
+    let error = collected.error || '';
+    if (!error && !date) error = 'Укажите дату сделки.';
+    else if (!error && !symbol) error = 'Укажите инструмент (например, EURUSD).';
+    else if (!error && entry === null) error = 'Укажите цену входа.';
+    else if (!error && (qty === null || qty <= 0)) error = 'Количество должно быть больше нуля.';
+    else if (!error && (multiplier === null || multiplier <= 0)) error = 'Множитель контракта должен быть больше нуля.';
+    else if (!error && fees < 0) error = 'Комиссия не может быть отрицательной.';
+    else if (!error && stop !== null && Math.abs(stop - entry) < 1e-12) error = 'Стоп при входе не может совпадать с ценой входа.';
+    else if (!error && stop !== null && side === 'long' && stop > entry) error = 'Для Long стоп при входе должен быть ниже цены входа.';
+    else if (!error && stop !== null && side === 'short' && stop < entry) error = 'Для Short стоп при входе должен быть выше цены входа.';
+    else if (!error && target !== null && side === 'long' && target <= entry) error = 'Для Long тейк-профит должен быть выше цены входа.';
+    else if (!error && target !== null && side === 'short' && target >= entry) error = 'Для Short тейк-профит должен быть ниже цены входа.';
+    else if (!error && exits.reduce(function (sum, exit) { return sum + exit.qty; }, 0) > qty + (store.QTY_EPSILON || 1e-9)) {
+      error = 'Сумма частичных выходов больше количества в сделке.';
+    }
 
     if (error) {
       $('#tradeError').hidden = false;
@@ -2821,26 +3433,29 @@
         renderShotPreview();
       }
 
-      const trade = {
+      const trade = store.normalizeTrade({
         id: existing ? existing.id : U.uid(),
         date: date,
         time: $('#tradeTime').value,
         symbol: symbol,
         side: side,
         entry: entry,
-        exit: exit,
+        exit: null,
         stop: stop,
         currentStop: currentStop,
         target: target,
         qty: qty,
+        multiplier: multiplier,
         fees: fees,
+        exits: exits,
         setup: $('#tradeSetup').value.trim(),
         emotion: $('#tradeEmotion').value,
         discipline: Number($('#tradeDiscipline').value) || 0,
         tags: splitTags($('#tradeTags').value),
         notes: $('#tradeNotes').value.trim(),
         screenshot: screenshot
-      };
+      });
+      if (!trade) throw new Error('Не удалось подготовить сделку к сохранению.');
 
       if (existing) {
         const index = store.state.trades.findIndex(function (t) { return t.id === existing.id; });
@@ -3172,6 +3787,14 @@
       toast(event.detail || 'Не удалось сохранить файл.', 'error');
     });
 
+    $('#installUpdateBtn').addEventListener('click', function () {
+      if (desktop && typeof desktop.installUpdate === 'function') installDesktopUpdate();
+      else if (NS.pwa && typeof NS.pwa.applyUpdate === 'function') NS.pwa.applyUpdate();
+    });
+    $('#dismissUpdateBtn').addEventListener('click', function () {
+      $('#updateBanner').hidden = true;
+    });
+
     $('#newTradeBtn').addEventListener('click', function () { openTradeModal(); });
     $('#newNoteBtn').addEventListener('click', function () { openNoteModal(); });
     $('#emptyNewTrade').addEventListener('click', function () { openTradeModal(); });
@@ -3214,11 +3837,12 @@
 
     $('#tradeSearch').addEventListener('input', U.debounce(function (event) {
       state.filters.search = event.target.value.trim().toLowerCase();
+      state.page = 1;
       renderTrades();
     }, 160));
-    $('#filterSide').addEventListener('change', function (event) { state.filters.side = event.target.value; renderTrades(); });
-    $('#filterResult').addEventListener('change', function (event) { state.filters.result = event.target.value; renderTrades(); });
-    $('#filterSetup').addEventListener('change', function (event) { state.filters.setup = event.target.value; renderTrades(); });
+    $('#filterSide').addEventListener('change', function (event) { state.filters.side = event.target.value; state.page = 1; renderTrades(); });
+    $('#filterResult').addEventListener('change', function (event) { state.filters.result = event.target.value; state.page = 1; renderTrades(); });
+    $('#filterSetup').addEventListener('change', function (event) { state.filters.setup = event.target.value; state.page = 1; renderTrades(); });
     $('#clearFilters').addEventListener('click', resetFilters);
     $('#tradesTable').querySelector('thead').addEventListener('click', function (event) {
       const th = event.target.closest('th[data-sort]');
@@ -3226,6 +3850,13 @@
       const key = th.dataset.sort;
       if (state.sort.key === key) state.sort.dir = state.sort.dir === 'desc' ? 'asc' : 'desc';
       else { state.sort.key = key; state.sort.dir = 'desc'; }
+      state.page = 1;
+      renderTrades();
+    });
+    $('#tradesFooter').addEventListener('click', function (event) {
+      const button = event.target.closest('button[data-page]');
+      if (!button || button.disabled) return;
+      state.page = Math.max(1, Number(button.dataset.page) || 1);
       renderTrades();
     });
     $('#tradesTbody').addEventListener('keydown', function (event) {
@@ -3245,6 +3876,20 @@
     });
     $('#exportCsvBtn').addEventListener('click', exportCSV);
     $('#exportCsvBtn2').addEventListener('click', exportCSV);
+    $('#exportZipBtn').addEventListener('click', exportZIP);
+    $('#importCsvBtn').addEventListener('click', function () { $('#importCsvFile').click(); });
+    $('#importCsvBtn2').addEventListener('click', function () { $('#importCsvFile2').click(); });
+    $('#importCsvFile').addEventListener('change', function (event) {
+      const file = event.target.files && event.target.files[0];
+      importCSVFile(file);
+      event.target.value = '';
+    });
+    $('#importCsvFile2').addEventListener('change', function (event) {
+      const file = event.target.files && event.target.files[0];
+      importCSVFile(file);
+      event.target.value = '';
+    });
+    $('#confirmCsvImport').addEventListener('click', confirmCsvImport);
 
     $('#calPrev').addEventListener('click', function () { changeMonth(-1); });
     $('#calNext').addEventListener('click', function () { changeMonth(1); });
@@ -3292,6 +3937,33 @@
       if (!button) return;
       setSide(button.dataset.side);
       syncTradeDirty();
+    });
+    $('#addExitBtn').addEventListener('click', function () { addExitRow(); });
+    $('#closeRemainingBtn').addEventListener('click', closeRemainingExit);
+    $('#exitsEditor').addEventListener('input', function (event) {
+      const row = event.target.closest('[data-exit-index]');
+      const field = event.target.dataset.exitField;
+      if (!row || !field) return;
+      const index = Number(row.dataset.exitIndex);
+      if (!state.tradeExits[index]) return;
+      state.tradeExits[index][field] = event.target.value;
+      updateTradePreview();
+      syncTradeDirty();
+    });
+    $('#exitsEditor').addEventListener('change', function (event) {
+      const row = event.target.closest('[data-exit-index]');
+      const field = event.target.dataset.exitField;
+      if (!row || !field) return;
+      const index = Number(row.dataset.exitIndex);
+      if (!state.tradeExits[index]) return;
+      state.tradeExits[index][field] = event.target.value;
+      updateTradePreview();
+      syncTradeDirty();
+    });
+    $('#exitsEditor').addEventListener('click', function (event) {
+      const button = event.target.closest('[data-remove-exit]');
+      if (!button) return;
+      removeExitRow(Number(button.dataset.removeExit));
     });
     $('#disciplineStars').addEventListener('click', function (event) {
       const star = event.target.closest('.star');
@@ -3390,6 +4062,13 @@
       const action = actionEl.dataset.action;
       if (action === 'new-trade') { openTradeModal(null, actionEl.dataset.date); return; }
       if (action === 'new-note') { openNoteModal(null, actionEl.dataset.date); return; }
+    }
+
+    const shotEl = event.target.closest('[data-open-shot]');
+    if (shotEl) {
+      event.preventDefault();
+      openTradeScreenshot(shotEl.dataset.openShot, shotEl);
+      return;
     }
 
     const openTradeEl = event.target.closest('[data-open-trade]');

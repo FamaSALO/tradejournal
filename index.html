@@ -8,6 +8,9 @@
   <title>TradeJournal — дневник трейдера</title>
   <meta name="description" content="Личный дневник трейдера: сделки, статистика, календарь прибыли, аналитика и риск-менеджмент.">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230b1118'/%3E%3Cpath d='M6 22l6-6 4 3 9-10' stroke='%2334e3ac' stroke-width='2.6' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M19 9h6v6' stroke='%2334e3ac' stroke-width='2.6' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="apple-touch-icon" href="assets/icons/apple-touch-icon.png">
+  <meta name="theme-color" content="#080d13">
   <link rel="stylesheet" href="css/styles.css">
 </head>
 <body>
@@ -106,6 +109,17 @@
         </button>
       </div>
     </header>
+
+    <div class="update-banner" id="updateBanner" hidden>
+      <div class="update-banner-text">
+        <strong id="updateBannerTitle">Доступно обновление</strong>
+        <span id="updateBannerText">Новая версия TradeJournal готова к установке.</span>
+      </div>
+      <div class="update-banner-actions">
+        <button class="btn btn-primary btn-sm" id="installUpdateBtn">Обновить</button>
+        <button class="btn btn-ghost btn-sm" id="dismissUpdateBtn">Позже</button>
+      </div>
+    </div>
 
     <div class="content" id="content">
 
@@ -213,7 +227,7 @@
               <input type="search" id="tradeSearch" placeholder="Поиск: символ, сетап, тег…" autocomplete="off">
             </label>
             <label class="select-wrap"><select id="filterSide" aria-label="Направление"><option value="all">Все стороны</option><option value="long">Long</option><option value="short">Short</option></select></label>
-            <label class="select-wrap"><select id="filterResult" aria-label="Результат"><option value="all">Все результаты</option><option value="win">Прибыльные</option><option value="loss">Убыточные</option><option value="be">Безубыток</option><option value="open">Открытые</option></select></label>
+            <label class="select-wrap"><select id="filterResult" aria-label="Результат"><option value="all">Все результаты</option><option value="win">Прибыльные</option><option value="loss">Убыточные</option><option value="be">Безубыток</option><option value="open">Открытые</option><option value="partial">Частично закрытые</option></select></label>
             <label class="select-wrap"><select id="filterSetup" aria-label="Сетап"><option value="all">Все сетапы</option></select></label>
             <button class="btn btn-ghost btn-sm" id="clearFilters">Сбросить</button>
             <div class="toolbar-spacer"></div>
@@ -222,6 +236,11 @@
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M4 20h16"/></svg>
               CSV
             </button>
+            <button class="btn btn-ghost btn-sm" id="importCsvBtn" title="Импортировать сделки из CSV">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V3"/><path d="m7 8 5-5 5 5"/><path d="M4 20h16"/></svg>
+              Импорт
+            </button>
+            <input type="file" id="importCsvFile" accept=".csv,text/csv" hidden>
           </div>
 
           <div class="table-wrap">
@@ -549,11 +568,20 @@
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M4 20h16"/></svg>
                 Экспорт CSV
               </button>
+              <button class="btn btn-ghost" id="exportZipBtn">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16v13H4z"/><path d="M4 7l3-3h10l3 3"/><path d="M10 11h4"/></svg>
+                Экспорт ZIP
+              </button>
               <button class="btn btn-ghost" id="importJsonBtn">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 6 5-5 5 5"/><path d="M4 20h16"/></svg>
                 Импорт JSON
               </button>
+              <button class="btn btn-ghost" id="importCsvBtn2">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 6 5-5 5 5"/><path d="M4 20h16"/></svg>
+                Импорт CSV
+              </button>
               <input type="file" id="importFile" accept=".json,application/json" hidden>
+              <input type="file" id="importCsvFile2" accept=".csv,text/csv" hidden>
             </div>
 
             <div class="storage-block">
@@ -598,6 +626,15 @@
 
             <p class="muted small desktop-transfer-note">Перенос из веб-версии: сделайте «Экспорт JSON» в браузере и выберите «Импорт JSON» здесь. Скриншоты в экспорте встроены в файл.</p>
 
+            <div class="desktop-update">
+              <div>
+                <span class="desktop-label">Версия приложения</span>
+                <strong id="desktopVersion">—</strong>
+              </div>
+              <button type="button" class="btn btn-ghost btn-sm" id="checkUpdateBtn">Проверить обновления</button>
+              <p class="muted small" id="updateStatus" role="status">Обновления проверяются автоматически при запуске.</p>
+            </div>
+
             <div class="desktop-backups">
               <div class="storage-head">
                 <span>Последние резервные копии</span>
@@ -612,7 +649,7 @@
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17.5 8.5 12l4 3L21 6"/><path d="M15 6h6v6"/></svg>
             </div>
             <div>
-              <h3>TradeJournal <span class="version" id="appVersion">v2.1.2</span></h3>
+              <h3>TradeJournal <span class="version" id="appVersion">v2.2.0</span></h3>
               <p>Локальный дневник трейдера без серверов и регистрации. Сделки, календарь P&L, аналитика по сетапам и эмоциям, журнал наблюдений и калькулятор риска — всё в одном приложении. <span class="kbd">N</span> — новая сделка, <span class="kbd">Esc</span> — закрыть окно.</p>
             </div>
           </article>
@@ -665,10 +702,6 @@
             <input type="number" id="tradeEntry" step="any" inputmode="decimal" placeholder="0.00000" required>
           </label>
           <label class="field">
-            <span>Цена выхода</span>
-            <input type="number" id="tradeExit" step="any" inputmode="decimal" placeholder="Пусто — сделка открыта">
-          </label>
-          <label class="field">
             <span>Стоп при входе</span>
             <input type="number" id="tradeStop" step="any" inputmode="decimal" placeholder="От него считается R">
           </label>
@@ -685,6 +718,11 @@
             <input type="number" id="tradeQty" step="any" min="0" inputmode="decimal" placeholder="100" required>
           </label>
           <label class="field">
+            <span>Множитель контракта</span>
+            <input type="number" id="tradeMultiplier" step="any" min="0" inputmode="decimal" placeholder="1">
+            <small class="field-hint">Для фьючерсов и опционов: сколько единиц актива в одном контракте</small>
+          </label>
+          <label class="field">
             <span>Комиссия</span>
             <input type="number" id="tradeFees" step="any" min="0" inputmode="decimal" placeholder="0">
           </label>
@@ -697,6 +735,17 @@
             <span>Эмоция</span>
             <select id="tradeEmotion"></select>
           </label>
+          <div class="field span-2 exits-field">
+            <div class="exits-head">
+              <span>Выходы <em>частичные или полный</em></span>
+              <div class="exits-actions">
+                <button type="button" class="btn btn-ghost btn-sm" id="addExitBtn">+ Добавить выход</button>
+                <button type="button" class="btn btn-ghost btn-sm" id="closeRemainingBtn">Закрыть остаток</button>
+              </div>
+            </div>
+            <div class="exits-editor" id="exitsEditor"></div>
+            <p class="field-hint" id="exitsHint">Выходов нет — позиция открыта. Добавьте один или несколько частичных выходов; комиссия распределится пропорционально.</p>
+          </div>
           <div class="field span-2">
             <span>Дисциплина</span>
             <div class="stars" id="disciplineStars" role="group" aria-label="Оценка дисциплины">
@@ -737,6 +786,7 @@
           <div class="cs-item"><span>P&L</span><strong id="previewPnl">—</strong></div>
           <div class="cs-item"><span>Результат в R</span><strong id="previewR">—</strong></div>
           <div class="cs-item"><span>Плановый R:R</span><strong id="previewRR">—</strong></div>
+          <div class="cs-item"><span>Остаток</span><strong id="previewRemaining">—</strong></div>
         </div>
         <p class="form-error" id="tradeError" hidden></p>
       </div>
@@ -748,6 +798,38 @@
         <button type="submit" class="btn btn-primary" id="saveTradeBtn">Сохранить</button>
       </footer>
     </form>
+  </div>
+</div>
+
+<!-- ================= CSV IMPORT MODAL ================= -->
+<div class="modal" id="csvModal" hidden>
+  <div class="modal-backdrop" data-close="csvModal"></div>
+  <div class="modal-panel modal-wide" role="dialog" aria-modal="true" aria-labelledby="csvModalTitle">
+    <header class="modal-head">
+      <div>
+        <h2 id="csvModalTitle">Импорт сделок из CSV</h2>
+        <p>Проверьте данные перед добавлением в активный счёт</p>
+      </div>
+      <button type="button" class="icon-btn" data-close="csvModal" aria-label="Закрыть">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>
+      </button>
+    </header>
+    <div class="modal-body">
+      <div class="csv-summary" id="csvSummary"></div>
+      <div class="csv-alerts" id="csvAlerts"></div>
+      <div class="csv-preview-wrap">
+        <table class="data-table csv-preview-table">
+          <thead><tr><th>Дата</th><th>Инструмент</th><th>Сторона</th><th class="num">Вход</th><th class="num">Выходы</th><th class="num">Кол-во</th><th class="num">P&L</th><th>Сетап</th></tr></thead>
+          <tbody id="csvPreviewBody"></tbody>
+        </table>
+      </div>
+      <p class="field-hint">Поддерживаются разделители «;», «,» и табуляция, русские и английские заголовки. Выходы можно указать в колонке «Выходы» в формате <b>4@105|6@110</b>.</p>
+    </div>
+    <footer class="modal-foot">
+      <div class="spacer"></div>
+      <button type="button" class="btn btn-ghost" data-close="csvModal">Отмена</button>
+      <button type="button" class="btn btn-primary" id="confirmCsvImport">Импортировать</button>
+    </footer>
   </div>
 </div>
 
@@ -868,6 +950,9 @@
 <script src="js/utils.js"></script>
 <script src="js/store.js"></script>
 <script src="js/sample.js"></script>
+<script src="js/csv.js"></script>
+<script src="js/zip.js"></script>
+<script src="js/pwa.js"></script>
 <script src="js/charts.js"></script>
 <script src="js/app.js"></script>
 </body>

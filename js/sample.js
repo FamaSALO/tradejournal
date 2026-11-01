@@ -174,6 +174,29 @@
 
     const notes = rand() < 0.2 ? NOTES_POOL[Math.floor(rand() * NOTES_POOL.length)] : '';
 
+    const exits = [];
+    if (opts.partial) {
+      const share = opts.partialShare || 0.4;
+      const firstQty = round(spec.qty * share, 4);
+      const partialR = opts.partialR !== undefined ? opts.partialR : R * 0.6;
+      exits.push({
+        id: U.uid(),
+        qty: firstQty,
+        price: round(entry + dir * spec.stop * partialR, spec.digits),
+        date: dateISO
+      });
+      if (!opts.open) {
+        exits.push({
+          id: U.uid(),
+          qty: round(spec.qty - firstQty, 4),
+          price: exit,
+          date: dateISO
+        });
+      }
+    } else if (exit !== null) {
+      exits.push({ id: U.uid(), qty: spec.qty, price: exit, date: dateISO });
+    }
+
     return {
       id: U.uid(),
       date: dateISO,
@@ -181,11 +204,13 @@
       symbol: spec.symbol,
       side: side,
       entry: entry,
-      exit: exit,
+      exit: opts.open ? null : exit,
       stop: stop,
       target: target,
       qty: spec.qty,
+      multiplier: opts.multiplier || 1,
       fees: beTrade ? 0 : Math.round((1.5 + rand() * 4) * 100) / 100,
+      exits: exits,
       setup: setup,
       emotion: emotion,
       discipline: discipline,
@@ -214,9 +239,11 @@
     }
 
     // Пара свежих сделок, чтобы «сегодня» на дашборде было живым
-    trades.push(makeTrade(today, { symbol: 'XAUUSD', side: 'long', setup: 'Откат к уровню', emotion: 'calm', R: 1.85, time: '10:25', discipline: 5 }));
+    trades.push(makeTrade(today, { symbol: 'XAUUSD', side: 'long', setup: 'Откат к уровню', emotion: 'calm', R: 1.85, time: '10:25', discipline: 5, partial: true, partialR: 2.2 }));
     trades.push(makeTrade(today, { symbol: 'NAS100', side: 'short', setup: 'Пробой уровня', emotion: 'confident', R: -0.9, time: '14:10', discipline: 4 }));
+    trades.push(makeTrade(today, { symbol: 'EURUSD', side: 'long', setup: 'Ретест', emotion: 'confident', R: 1.2, time: '11:05', discipline: 4, partial: true, partialR: 1.8 }));
     trades.push(makeTrade(U.addDaysISO(today, -1), { symbol: 'BTCUSD', side: 'long', setup: 'Тренд по старшему ТФ', emotion: 'calm', open: true, time: '16:40', discipline: 4 }));
+    trades.push(makeTrade(U.addDaysISO(today, -2), { symbol: 'XAUUSD', side: 'long', setup: 'Пробой уровня', emotion: 'calm', open: true, partial: true, partialR: 1.4, time: '15:20', discipline: 5 }));
     trades.push(makeTrade(U.addDaysISO(today, -4), { symbol: 'AAPL', side: 'long', setup: 'Ретест', emotion: 'fomo', open: true, time: '17:05', discipline: 2 }));
 
     trades.sort(function (a, b) {

@@ -104,6 +104,18 @@
 
     saveDownload: function (filename, content) {
       return call('save_download', { filename: filename, content: content });
+    },
+
+    saveDownloadBytes: function (filename, base64Content) {
+      return call('save_download_bytes', { filename: filename, content: base64Content });
+    },
+
+    checkUpdate: function () {
+      return call('update_check');
+    },
+
+    installUpdate: function () {
+      return call('update_install');
     }
   };
 })();

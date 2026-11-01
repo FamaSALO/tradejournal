@@ -68,6 +68,16 @@ struct SaveDownloadResult {
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateInfo {
+    available: bool,
+    current_version: String,
+    version: Option<String>,
+    notes: Option<String>,
+    date: Option<String>,
+}
+
+#[derive(Serialize)]
 struct OkResult {
     ok: bool,
 }
@@ -677,13 +687,8 @@ fn open_data_folder(state: State<'_, AppState>) -> Result<OkResult, String> {
         .map_err(|error| format!("Не удалось открыть папку данных: {error}"))
 }
 
-#[tauri::command]
-fn save_download(
-    app: tauri::AppHandle,
-    filename: String,
-    content: String,
-) -> Result<SaveDownloadResult, String> {
-    let file_name = Path::new(&filename)
+fn choose_download_path(app: &tauri::AppHandle, filename: &str) -> Option<PathBuf> {
+    let file_name = Path::new(filename)
         .file_name()
         .and_then(|name| name.to_str())
         .filter(|name| !name.is_empty())
@@ -702,9 +707,20 @@ fn save_download(
         dialog = dialog.add_filter("JSON", &["json"]);
     } else if extension == "csv" {
         dialog = dialog.add_filter("CSV", &["csv"]);
+    } else if extension == "zip" {
+        dialog = dialog.add_filter("ZIP", &["zip"]);
     }
 
-    let Some(path) = dialog.save_file() else {
+    dialog.save_file()
+}
+
+#[tauri::command]
+fn save_download(
+    app: tauri::AppHandle,
+    filename: String,
+    content: String,
+) -> Result<SaveDownloadResult, String> {
+    let Some(path) = choose_download_path(&app, &filename) else {
         return Ok(SaveDownloadResult {
             ok: true,
             canceled: true,
@@ -722,8 +738,90 @@ fn save_download(
     })
 }
 
+#[tauri::command]
+fn save_download_bytes(
+    app: tauri::AppHandle,
+    filename: String,
+    content: String,
+) -> Result<SaveDownloadResult, String> {
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(content.as_bytes())
+        .map_err(|_| "Не удалось декодировать данные файла.".to_string())?;
+
+    let Some(path) = choose_download_path(&app, &filename) else {
+        return Ok(SaveDownloadResult {
+            ok: true,
+            canceled: true,
+            path: None,
+        });
+    };
+
+    fs::write(&path, &bytes).map_err(|error| format!("Не удалось сохранить файл: {error}"))?;
+
+    Ok(SaveDownloadResult {
+        ok: true,
+        canceled: false,
+        path: Some(path.to_string_lossy().to_string()),
+    })
+}
+
+#[tauri::command]
+async fn update_check(app: tauri::AppHandle) -> Result<UpdateInfo, String> {
+    use tauri_plugin_updater::UpdaterExt;
+
+    let current_version = app.package_info().version.to_string();
+    let updater = app
+        .updater()
+        .map_err(|error| format!("Не удалось подготовить проверку обновлений: {error}"))?;
+    let update = updater
+        .check()
+        .await
+        .map_err(|error| format!("Не удалось проверить обновления: {error}"))?;
+
+    match update {
+        Some(update) => Ok(UpdateInfo {
+            available: true,
+            current_version: update.current_version,
+            version: Some(update.version),
+            notes: update.body,
+            date: update.date.map(|date| date.to_string()),
+        }),
+        None => Ok(UpdateInfo {
+            available: false,
+            current_version,
+            version: None,
+            notes: None,
+            date: None,
+        }),
+    }
+}
+
+#[tauri::command]
+async fn update_install(app: tauri::AppHandle) -> Result<OkResult, String> {
+    use tauri_plugin_updater::UpdaterExt;
+
+    let updater = app
+        .updater()
+        .map_err(|error| format!("Не удалось подготовить установку обновления: {error}"))?;
+    let update = updater
+        .check()
+        .await
+        .map_err(|error| format!("Не удалось проверить обновления: {error}"))?;
+    let Some(update) = update else {
+        return Err("Обновление не найдено. Возможно, установлена последняя версия.".to_string());
+    };
+
+    update
+        .download_and_install(|_chunk_length, _content_length| {}, || {})
+        .await
+        .map_err(|error| format!("Не удалось установить обновление: {error}"))?;
+
+    Ok(OkResult { ok: true })
+}
+
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.show();
@@ -756,7 +854,10 @@ pub fn run() {
             screenshot_load,
             data_info,
             open_data_folder,
-            save_download
+            save_download,
+            save_download_bytes,
+            update_check,
+            update_install
         ])
         .run(tauri::generate_context!())
         .expect("error while running TradeJournal");

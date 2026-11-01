@@ -239,6 +239,17 @@
     };
   }
 
+  function saveWebBlob(filename, blob) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+  }
+
   function download(filename, content, mime) {
     const desktop = window.tradeJournalDesktop;
     if (desktop && typeof desktop.saveDownload === 'function') {
@@ -249,15 +260,37 @@
       return;
     }
 
-    const blob = new Blob([content], { type: mime || 'text/plain;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+    saveWebBlob(filename, new Blob([content], { type: mime || 'text/plain;charset=utf-8' }));
+  }
+
+  function bytesToBase64(bytes) {
+    const data = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+    let binary = '';
+    const chunk = 0x8000;
+    for (let i = 0; i < data.length; i += chunk) {
+      binary += String.fromCharCode.apply(null, data.subarray(i, i + chunk));
+    }
+    return btoa(binary);
+  }
+
+  function downloadBytes(filename, bytes, mime) {
+    const data = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+    const desktop = window.tradeJournalDesktop;
+    if (desktop && typeof desktop.saveDownloadBytes === 'function') {
+      let encoded;
+      try {
+        encoded = bytesToBase64(data);
+      } catch (err) {
+        window.dispatchEvent(new CustomEvent('tj:download-error', { detail: 'Не удалось подготовить файл для сохранения.' }));
+        return;
+      }
+      desktop.saveDownloadBytes(filename, encoded, mime || '').catch(function (err) {
+        const message = err && err.message ? err.message : String(err || 'Не удалось сохранить файл.');
+        window.dispatchEvent(new CustomEvent('tj:download-error', { detail: message }));
+      });
+      return;
+    }
+    saveWebBlob(filename, new Blob([data], { type: mime || 'application/octet-stream' }));
   }
 
   function bytes(value) {
@@ -299,6 +332,8 @@
     clamp: clamp,
     debounce: debounce,
     download: download,
+    downloadBytes: downloadBytes,
+    bytesToBase64: bytesToBase64,
     bytes: bytes,
     truncate: truncate
   };
