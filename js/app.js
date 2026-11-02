@@ -4,7 +4,7 @@
   const U = NS.utils;
   const store = NS.store;
   const desktop = window.tradeJournalDesktop || null;
-  const APP_VERSION = '2.2.2';
+  const APP_VERSION = '2.3.0';
   const DRAFT_PREFIX = 'tradejournal.draft.v1.';
   // Drafts live in localStorage even on desktop, so a full screenshot data URL
   // must not be duplicated there. Keep the draft small; the screenshot stays in
@@ -93,6 +93,7 @@
     }
     applyCurrency();
     setVersionLabel(APP_VERSION);
+    state.selectedDay = todayInAccount();
     buildMoodPicker();
     buildEmotionSelect();
     refreshDatalists();
@@ -278,6 +279,14 @@
     NS.config.currency = (store.state.settings.currency || '$').slice(0, 3);
   }
 
+  function accountTimeZone() {
+    return store.state.settings.timezone || U.systemTimeZone();
+  }
+
+  function todayInAccount() {
+    return U.todayISO(accountTimeZone());
+  }
+
   function monthStart(date) {
     return new Date(date.getFullYear(), date.getMonth(), 1);
   }
@@ -311,7 +320,7 @@
     if (view === 'calculator') ensureCalcDefaults();
     if (view === 'calendar') {
       state.calCursor = monthStart(state.calCursor || new Date());
-      if (!state.selectedDay) state.selectedDay = U.todayISO();
+      if (!state.selectedDay) state.selectedDay = todayInAccount();
     }
 
     renderCurrentView();
@@ -358,7 +367,7 @@
     delta.classList.toggle('neg', roi < -0.004);
     delta.classList.toggle('pos', roi > 0.004);
 
-    const today = U.todayISO();
+    const today = todayInAccount();
     let todayPnl = 0;
     store.state.trades.forEach(function (trade) {
       if (trade.date === today && store.hasRealized(trade)) {
@@ -481,7 +490,7 @@
      ============================================================ */
 
   function currentRange() {
-    const today = U.todayISO();
+    const today = todayInAccount();
     switch (state.period) {
       case '30': return { from: U.addDaysISO(today, -29), to: today };
       case '90': return { from: U.addDaysISO(today, -89), to: today };
@@ -566,7 +575,7 @@
     renderRecentTrades();
     renderTopSymbols(m.rows);
 
-    $('#todayDate').textContent = U.capitalize(U.formatDate(U.todayISO(), 'full'));
+    $('#todayDate').textContent = U.capitalize(U.formatDate(todayInAccount(), 'full'));
   }
 
   function renderKpis(m, base) {
@@ -667,7 +676,7 @@
 
   function disciplineSnapshot() {
     const settings = store.state.settings;
-    const today = U.todayISO();
+    const today = todayInAccount();
     const todayTrades = store.state.trades.filter(function (trade) { return trade.date === today; });
     const closedToday = todayTrades.filter(store.hasRealized);
     let dayPnl = 0;
@@ -691,7 +700,7 @@
   }
 
   function dailyLimitWarning(date) {
-    if (date !== U.todayISO()) return null;
+    if (date !== todayInAccount()) return null;
     const snapshot = disciplineSnapshot();
     const messages = [];
     let title = 'Дневной лимит превышен';
@@ -1090,7 +1099,7 @@
     const first = new Date(year, month, 1);
     const offset = (first.getDay() + 6) % 7;
     const gridStart = new Date(year, month, 1 - offset);
-    const today = U.todayISO();
+    const today = todayInAccount();
     const maxAbs = dayValues.length ? Math.max.apply(null, dayValues.map(Math.abs)) : 0;
 
     let html = '';
@@ -1208,7 +1217,7 @@
 
   function defaultDayForMonth(cursor) {
     const now = new Date();
-    if (cursor.getFullYear() === now.getFullYear() && cursor.getMonth() === now.getMonth()) return U.todayISO();
+    if (cursor.getFullYear() === now.getFullYear() && cursor.getMonth() === now.getMonth()) return todayInAccount();
     const prefix = cursor.getFullYear() + '-' + pad2(cursor.getMonth() + 1);
     const days = store.state.trades
       .filter(function (trade) { return (trade.date || '').slice(0, 7) === prefix; })
@@ -1305,8 +1314,9 @@
       empty: 'Эмоции не указаны'
     });
 
-    const sessionGroups = store.groupRows(rows, function (t) { return U.sessionOf(t.time); });
-    const sessionOrder = ['Азия', 'Лондон', 'Нью-Йорк', 'Вечер', 'Без времени'];
+    const sessions = store.state.settings.sessions;
+    const sessionGroups = store.groupRows(rows, function (t) { return U.sessionOf(t.time, sessions); });
+    const sessionOrder = U.sessionNames(sessions).concat('Без времени');
     sessionGroups.sort(function (a, b) { return sessionOrder.indexOf(a.key) - sessionOrder.indexOf(b.key); });
     renderBreakdown($('#sessionBreakdown'), sessionGroups, { preserveOrder: true, empty: 'Нет сделок за период' });
 
@@ -1690,11 +1700,71 @@
      Settings & data
      ============================================================ */
 
+  function fillTimezoneOptions() {
+    const list = $('#timezoneList');
+    if (!list || list.dataset.filled === '1') return;
+    const common = [
+      'UTC',
+      'Europe/Moscow',
+      'Europe/London',
+      'Europe/Berlin',
+      'Europe/Kiev',
+      'Europe/Istanbul',
+      'Asia/Almaty',
+      'Asia/Dubai',
+      'Asia/Tokyo',
+      'Asia/Shanghai',
+      'Asia/Singapore',
+      'America/New_York',
+      'America/Chicago',
+      'America/Los_Angeles',
+      'Australia/Sydney'
+    ];
+    let zones = [];
+    try {
+      if (typeof Intl.supportedValuesOf === 'function') zones = Intl.supportedValuesOf('timeZone');
+    } catch (err) { zones = []; }
+    const seen = new Set();
+    const all = common.concat(zones).filter(function (zone) {
+      if (!zone || seen.has(zone)) return false;
+      seen.add(zone);
+      return true;
+    });
+    list.innerHTML = all.map(function (zone) {
+      return '<option value="' + U.escapeHtml(zone) + '"></option>';
+    }).join('');
+    list.dataset.filled = '1';
+  }
+
+  function renderSessionSettings() {
+    const box = $('#sessionSettings');
+    if (!box) return;
+    const sessions = store.state.settings.sessions || U.normalizeSessions();
+    box.innerHTML = sessions.map(function (session) {
+      return '<div class="session-setting-row" data-session-key="' + U.escapeHtml(session.key) + '">' +
+        '<input type="text" data-session-name maxlength="24" value="' + U.escapeHtml(session.name) + '" aria-label="Название сессии" autocomplete="off">' +
+        '<span class="session-dash">с</span>' +
+        '<input type="time" data-session-start value="' + U.escapeHtml(session.start) + '" aria-label="Начало сессии ' + U.escapeHtml(session.name) + '">' +
+        '</div>';
+    }).join('');
+  }
+
+  function readSessionSettings() {
+    const rows = $$('#sessionSettings .session-setting-row');
+    if (!rows.length) return store.state.settings.sessions;
+    return rows.map(function (row) {
+      const name = row.querySelector('[data-session-name]').value.trim();
+      const start = row.querySelector('[data-session-start]').value;
+      return { key: row.dataset.sessionKey, name: name, start: start };
+    });
+  }
+
   function renderSettings() {
     const settings = store.state.settings;
     const account = store.activeAccount();
     const profile = store.state.profile || {};
 
+    fillTimezoneOptions();
     $('#profileName').value = profile.name || '';
     state.profileAvatarDraft = profile.avatar || '';
     renderProfileAvatar();
@@ -1719,6 +1789,8 @@
     $('#settingRisk').value = settings.riskPercent;
     $('#settingDailyLimit').value = settings.dailyLossLimit;
     $('#settingMaxTrades').value = settings.maxTradesPerDay;
+    $('#settingTimezone').value = settings.timezone || U.systemTimeZone();
+    renderSessionSettings();
     $('#settingsSavedAt').textContent = '';
     setVersionLabel(APP_VERSION);
 
@@ -2135,7 +2207,7 @@
         clearAllDrafts();
         applyCurrency();
         state.calCursor = monthStart(new Date());
-        state.selectedDay = U.todayISO();
+        state.selectedDay = todayInAccount();
         renderAll();
         refreshDesktopBackups();
         toast('Резервная копия восстановлена');
@@ -2152,19 +2224,42 @@
     const risk = U.parseNum($('#settingRisk').value);
     const daily = U.parseNum($('#settingDailyLimit').value);
     const maxTrades = U.parseNum($('#settingMaxTrades').value);
+    const timezone = $('#settingTimezone').value.trim();
+    const sessions = readSessionSettings();
 
     if (balance === null || balance < 0) return toast('Стартовый баланс должен быть неотрицательным числом.', 'error');
     if (risk === null || risk < 0 || risk > 100) return toast('Риск на сделку должен быть от 0 до 100%.', 'error');
     if (daily === null || daily < 0 || daily > 100) return toast('Дневной лимит убытка должен быть от 0 до 100%.', 'error');
     if (maxTrades === null || maxTrades < 0) return toast('Максимум сделок в день должен быть неотрицательным.', 'error');
+    if (!U.validTimeZone(timezone)) {
+      return toast('Часовой пояс не распознан. Укажите зону IANA, например Europe/Moscow или America/New_York.', 'error');
+    }
+
+    const seenNames = new Set();
+    const seenStarts = new Set();
+    for (const session of sessions) {
+      const name = String(session.name || '').trim();
+      if (!name) return toast('У каждой торговой сессии должно быть название.', 'error');
+      if (seenNames.has(name.toLowerCase())) return toast('Названия торговых сессий должны быть разными.', 'error');
+      if (!U.validTimeHM(session.start)) return toast('Укажите время начала для сессии «' + name + '».', 'error');
+      if (seenStarts.has(session.start)) return toast('Время начала торговых сессий должно быть разным.', 'error');
+      seenNames.add(name.toLowerCase());
+      seenStarts.add(session.start);
+    }
+    sessions.sort(function (a, b) { return a.start.localeCompare(b.start); });
 
     store.state.settings = {
       currency: currency,
       startBalance: balance,
       riskPercent: risk,
       dailyLossLimit: daily,
-      maxTradesPerDay: Math.round(maxTrades)
+      maxTradesPerDay: Math.round(maxTrades),
+      timezone: timezone,
+      sessions: sessions.map(function (session) {
+        return { key: session.key, name: String(session.name).trim(), start: session.start };
+      })
     };
+    state.selectedDay = todayInAccount();
     store.state.demo = false;
     applyCurrency();
     const ok = await persist();
@@ -2271,7 +2366,7 @@
     closeModal('accountModal');
     applyCurrency();
     state.calCursor = monthStart(new Date());
-    state.selectedDay = U.todayISO();
+    state.selectedDay = todayInAccount();
     renderAll();
     toast(rename ? 'Счёт переименован' : 'Счёт создан');
   }
@@ -2299,7 +2394,7 @@
     }
     applyCurrency();
     state.calCursor = monthStart(new Date());
-    state.selectedDay = U.todayISO();
+    state.selectedDay = todayInAccount();
     renderAll();
     const account = store.activeAccount();
     toast('Активный счёт: ' + (account ? account.name : '—'));
@@ -2334,7 +2429,7 @@
       clearAccountDrafts(id);
       applyCurrency();
       state.calCursor = monthStart(new Date());
-      state.selectedDay = U.todayISO();
+      state.selectedDay = todayInAccount();
       renderAll();
       toast('Счёт удалён', 'success', {
         label: 'Отменить',
@@ -2342,7 +2437,7 @@
           const restored = await store.replaceData(before);
           applyCurrency();
           state.calCursor = monthStart(new Date());
-          state.selectedDay = U.todayISO();
+          state.selectedDay = todayInAccount();
           renderAll();
           toast(restored ? 'Счёт восстановлен' : 'Не удалось восстановить счёт', restored ? 'success' : 'error');
         }
@@ -2490,7 +2585,7 @@
     const reader = new FileReader();
     reader.onload = function () {
       const text = String(reader.result || '');
-      const result = NS.csv.analyze(text, store.state.trades);
+      const result = NS.csv.analyze(text, store.state.trades, { timeZone: accountTimeZone() });
       state.csvImport = { fileName: file.name, result: result };
       renderCsvPreview();
       openModal('csvModal', '#confirmCsvImport');
@@ -2543,7 +2638,7 @@
       body.innerHTML = '<tr><td colspan="8" class="csv-empty">Нет данных для предпросмотра</td></tr>';
     } else {
       body.innerHTML = result.trades.slice(0, 200).map(function (raw) {
-        const trade = store.normalizeTrade(raw);
+        const trade = store.normalizeTrade(raw, { timeZone: accountTimeZone() });
         if (!trade) return '';
         const pnl = store.tradePnl(trade);
         const exitText = store.tradeExits(trade).map(function (exit) {
@@ -2577,7 +2672,7 @@
     let added = 0;
     let skipped = 0;
     data.result.trades.forEach(function (raw) {
-      const trade = store.normalizeTrade(raw);
+      const trade = store.normalizeTrade(raw, { timeZone: accountTimeZone() });
       if (!trade) return;
       const fingerprint = NS.csv.fingerprint(trade);
       if (fingerprint && existing.has(fingerprint)) {
@@ -2635,14 +2730,21 @@
       const stats = store.analyzeImport(data);
       const currentTrades = store.state.accounts.reduce(function (sum, account) { return sum + account.trades.length; }, 0);
       const currentNotes = store.state.accounts.reduce(function (sum, account) { return sum + account.notes.length; }, 0);
+      const dropReasons = [];
+      if (stats.missingSymbols) dropReasons.push('без символа: ' + stats.missingSymbols);
+      if (stats.invalidDates) dropReasons.push('битая дата: ' + stats.invalidDates);
+      const replacementSummary = 'Будет заменено ' + currentTrades + ' ' + pluralTrades(currentTrades) +
+        ', ' + stats.tradesDropped + ' ' + pluralTrades(stats.tradesDropped) + ' отброшено' +
+        (dropReasons.length ? ' (' + dropReasons.join(', ') + ')' : '') + '.';
       const details = [
         'Все счета, сделки и записи будут заменены данными из файла. Рекомендуем сначала сделать экспорт текущего журнала.',
+        replacementSummary,
         'Сейчас: счетов ' + store.state.accounts.length + ', сделок ' + currentTrades + ', записей ' + currentNotes + '.',
         'В файле: счетов ' + stats.accounts + ', сделок ' + stats.trades + ', записей ' + stats.notes + ', скриншотов ' + stats.screenshots + '.',
         'Будет импортировано: сделок ' + stats.tradesAccepted + ', записей ' + stats.notesAccepted + ', скриншотов ' + stats.screenshotsAccepted + '.'
       ];
       if (stats.tradesDropped) {
-        details.push('Не будет импортировано сделок: ' + stats.tradesDropped + (stats.missingSymbols ? ' (без инструмента: ' + stats.missingSymbols + ')' : '') + '.');
+        details.push('Отброшенные сделки не попадут в журнал: без символа импортировать нельзя, а битую дату не подменяем сегодняшней.');
       }
       if (stats.notesDropped) {
         details.push('Не будет импортировано записей: ' + stats.notesDropped + '.');
@@ -2658,9 +2760,6 @@
       if (stats.fileScreenshots) {
         details.push('Скриншотов-ссылок на файлы: ' + stats.fileScreenshots + '. Они откроются только на ПК, где создан бэкап.');
       }
-      if (stats.invalidDates) {
-        details.push('Сделок с некорректной датой: ' + stats.invalidDates + ' — дата будет заменена на сегодняшнюю.');
-      }
       details.push('Сразу после импорта действие можно будет отменить.');
 
       askConfirm({
@@ -2670,7 +2769,7 @@
       }).then(async function (confirmed) {
         if (!confirmed) return;
         const before = JSON.parse(JSON.stringify(store.state));
-        const ok = await store.replaceData(data);
+        const ok = await store.replaceData(data, { strictDate: true });
         if (!ok) {
           await store.replaceData(before);
           applyCurrency();
@@ -2682,7 +2781,7 @@
         clearAllDrafts();
         applyCurrency();
         state.calCursor = monthStart(new Date());
-        state.selectedDay = U.todayISO();
+        state.selectedDay = todayInAccount();
         renderAll();
         const importedAccounts = store.state.accounts.length;
         const importedTrades = store.state.accounts.reduce(function (sum, account) { return sum + account.trades.length; }, 0);
@@ -2698,7 +2797,7 @@
             clearAllDrafts();
             applyCurrency();
             state.calCursor = monthStart(new Date());
-            state.selectedDay = U.todayISO();
+            state.selectedDay = todayInAccount();
             renderAll();
             toast(restored ? 'Импорт отменён, прежние данные восстановлены' : 'Не удалось сохранить откат', restored ? 'success' : 'error');
           }
@@ -2727,7 +2826,7 @@
       clearAccountDrafts(store.state.activeAccountId);
       applyCurrency();
       state.calCursor = monthStart(new Date());
-      state.selectedDay = U.todayISO();
+      state.selectedDay = todayInAccount();
       renderAll();
       toast('Демо-данные загружены', 'success', {
         label: 'Отменить',
@@ -2736,7 +2835,7 @@
           clearAccountDrafts(store.state.activeAccountId);
           applyCurrency();
           state.calCursor = monthStart(new Date());
-          state.selectedDay = U.todayISO();
+          state.selectedDay = todayInAccount();
           renderAll();
           toast(restored ? 'Демо-данные убраны, прежние восстановлены' : 'Не удалось сохранить откат', restored ? 'success' : 'error');
         }
@@ -2762,7 +2861,7 @@
       clearAccountDrafts(store.state.activeAccountId);
       applyCurrency();
       state.calCursor = monthStart(new Date());
-      state.selectedDay = U.todayISO();
+      state.selectedDay = todayInAccount();
       renderAll();
       toast('Журнал очищен. Начинаем с чистого листа.', 'success', {
         label: 'Отменить',
@@ -2771,7 +2870,7 @@
           clearAccountDrafts(store.state.activeAccountId);
           applyCurrency();
           state.calCursor = monthStart(new Date());
-          state.selectedDay = U.todayISO();
+          state.selectedDay = todayInAccount();
           renderAll();
           toast(restored ? 'Очистка отменена, данные восстановлены' : 'Не удалось сохранить откат', restored ? 'success' : 'error');
         }
@@ -2836,9 +2935,10 @@
   }
 
   function tradeFieldsFromTrade(trade, presetDate) {
+    const timeZone = accountTimeZone();
     return {
-      date: trade ? trade.date : (presetDate || U.todayISO()),
-      time: trade ? (trade.time || '') : U.nowTime(),
+      date: trade ? trade.date : (presetDate || U.todayISO(timeZone)),
+      time: trade ? (trade.time || '') : U.nowTime(timeZone),
       symbol: trade ? trade.symbol : '',
       entry: trade && trade.entry !== null && trade.entry !== undefined ? String(trade.entry) : '',
       stop: trade && trade.stop !== null && trade.stop !== undefined ? String(trade.stop) : '',
@@ -2994,7 +3094,7 @@
       id: U.uid(),
       qty: qty === undefined || qty === null ? '' : String(qty),
       price: price === undefined || price === null ? '' : String(price),
-      date: $('#tradeDate').value || U.todayISO()
+      date: $('#tradeDate').value || U.todayISO(accountTimeZone())
     });
     renderExitsEditor();
     const row = $('#exitsEditor .exit-row:last-child');
@@ -3653,7 +3753,7 @@
         tags: splitTags($('#tradeTags').value),
         notes: $('#tradeNotes').value.trim(),
         screenshot: screenshot
-      });
+      }, { timeZone: accountTimeZone() });
       if (!trade) throw new Error('Не удалось подготовить сделку к сохранению.');
 
       if (existing) {
@@ -3805,7 +3905,7 @@
     const note = id ? store.state.notes.find(function (n) { return n.id === id; }) : null;
     state.noteId = note ? note.id : null;
     $('#noteModalTitle').textContent = note ? 'Редактировать запись' : 'Новая запись';
-    $('#noteDate').value = note ? note.date : (presetDate || U.todayISO());
+    $('#noteDate').value = note ? note.date : (presetDate || todayInAccount());
     $('#noteTitle').value = note ? (note.title || '') : '';
     $('#noteText').value = note ? note.text : '';
     $('#noteTags').value = note ? note.tags.join(', ') : '';
@@ -4028,7 +4128,7 @@
         }
         clearAccountDrafts(store.state.activeAccountId);
         state.calCursor = monthStart(new Date());
-        state.selectedDay = U.todayISO();
+        state.selectedDay = todayInAccount();
         renderAll();
         toast('Демо-данные удалены. Добро пожаловать в собственный журнал!');
       });
@@ -4094,7 +4194,7 @@
     $('#calNext').addEventListener('click', function () { changeMonth(1); });
     $('#calToday').addEventListener('click', function () {
       state.calCursor = monthStart(new Date());
-      state.selectedDay = U.todayISO();
+      state.selectedDay = todayInAccount();
       renderCalendar();
     });
 

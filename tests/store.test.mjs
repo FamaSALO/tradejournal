@@ -4,6 +4,7 @@ import { loadTradeJournal } from './helpers/load-tj.mjs';
 
 const { TJ } = loadTradeJournal();
 const store = TJ.store;
+const U = TJ.utils;
 
 function trade(overrides) {
   return store.normalizeTrade(Object.assign({
@@ -23,7 +24,7 @@ function trade(overrides) {
 
 test('legacy exit migrates to a single canonical exit', function () {
   const normalized = trade({ exit: 110, fees: 5 });
-  assert.equal(store.SCHEMA_VERSION, 3);
+  assert.equal(store.SCHEMA_VERSION, 4);
   assert.equal(normalized.exits.length, 1);
   assert.equal(normalized.exits[0].qty, 10);
   assert.equal(normalized.exits[0].price, 110);
@@ -205,4 +206,147 @@ test('metrics include realized partial trades and count partials separately', fu
   assert.equal(m.endBalance, 1188);
   assert.equal(m.rows.length, 2);
   assert.equal(m.fees, 12);
+});
+
+test('converts wall-clock time between UTC and IANA timezones', function () {
+  assert.equal(U.zonedToUtc('2026-01-15', '14:30', 'Europe/Moscow'), '2026-01-15T11:30:00.000Z');
+  const zoned = U.utcToZoned('2026-01-15T11:30:00.000Z', 'Europe/Moscow');
+  assert.equal(zoned.date, '2026-01-15');
+  assert.equal(zoned.time, '14:30');
+  assert.equal(U.zonedToUtc('2026-07-15', '10:30', 'America/New_York'), '2026-07-15T14:30:00.000Z');
+  assert.equal(U.zonedToUtc('2026-01-15', '10:30', 'America/New_York'), '2026-01-15T15:30:00.000Z');
+  assert.equal(U.validTimeZone('Europe/Moscow'), true);
+  assert.equal(U.validTimeZone('Not/AZone'), false);
+});
+
+test('trade time is stored in UTC and rendered in the account timezone', function () {
+  const normalized = store.normalizeTrade({
+    id: 'tz-1',
+    date: '2026-01-15',
+    time: '14:30',
+    symbol: 'EURUSD',
+    side: 'long',
+    entry: 1,
+    qty: 1
+  }, { timeZone: 'Europe/Moscow' });
+
+  assert.equal(normalized.timeUtc, '2026-01-15T11:30:00.000Z');
+  assert.equal(normalized.date, '2026-01-15');
+  assert.equal(normalized.time, '14:30');
+
+  const shifted = store.normalizeTrade(normalized, { timeZone: 'America/New_York' });
+  assert.equal(shifted.timeUtc, '2026-01-15T11:30:00.000Z');
+  assert.equal(shifted.date, '2026-01-15');
+  assert.equal(shifted.time, '06:30');
+});
+
+test('session boundaries are configurable and wrap around midnight', function () {
+  assert.equal(U.sessionOf('08:59'), 'Азия');
+  assert.equal(U.sessionOf('09:00'), 'Лондон');
+  assert.equal(U.sessionOf('13:00'), 'Нью-Йорк');
+  assert.equal(U.sessionOf('18:00'), 'Вечер');
+  assert.equal(U.sessionOf(''), 'Без времени');
+
+  const custom = [
+    { key: 'asia', name: 'Азия', start: '01:00' },
+    { key: 'london', name: 'Лондон', start: '08:00' },
+    { key: 'newYork', name: 'Нью-Йорк', start: '14:00' },
+    { key: 'evening', name: 'Вечер', start: '21:00' }
+  ];
+  assert.equal(U.sessionOf('00:30', custom), 'Вечер');
+  assert.equal(U.sessionOf('01:00', custom), 'Азия');
+  assert.equal(U.sessionOf('09:15', custom), 'Лондон');
+  assert.equal(U.sessionNames(custom).join(','), 'Азия,Лондон,Нью-Йорк,Вечер');
+});
+
+test('import drops broken dates instead of replacing them with today', async function () {
+  const raw = {
+    accounts: [{
+      settings: { timezone: 'Europe/Moscow' },
+      trades: [
+        { id: 'ok', date: '2026-01-15', time: '14:30', symbol: 'EURUSD', side: 'long', entry: 1, qty: 1 },
+        { id: 'bad-date', date: '2026-02-31', time: '10:00', symbol: 'BTCUSD', side: 'long', entry: 1, qty: 1 },
+        { id: 'no-symbol', date: '2026-01-15', symbol: '', side: 'long', entry: 1, qty: 1 },
+        { id: 'ok-2', date: '2026-01-16', symbol: 'ETHUSD', side: 'short', entry: 2, qty: 2 }
+      ],
+      notes: []
+    }]
+  };
+
+  const stats = store.analyzeImport(raw);
+  assert.equal(stats.trades, 4);
+  assert.equal(stats.tradesAccepted, 2);
+  assert.equal(stats.tradesDropped, 2);
+  assert.equal(stats.invalidDates, 1);
+  assert.equal(stats.missingSymbols, 1);
+
+  const { TJ: fresh } = loadTradeJournal();
+  assert.equal(await fresh.store.replaceData(raw, { strictDate: true }), true);
+  assert.equal(fresh.store.state.trades.length, 2);
+  assert.equal(fresh.store.state.trades[0].timeUtc, '2026-01-15T11:30:00.000Z');
+  assert.equal(fresh.store.state.trades[0].date, '2026-01-15');
+});
+
+test('schema v3 journal migrates to v4 with UTC time and keeps the timezone', async function () {
+  const { TJ: fresh, storage } = loadTradeJournal();
+  storage.setItem(fresh.store.KEY, JSON.stringify({
+    version: 3,
+    accounts: [{
+      id: 'acc',
+      name: 'Основной счёт',
+      settings: { currency: '$', timezone: 'Europe/Moscow' },
+      trades: [{
+        id: 'legacy',
+        date: '2026-01-15',
+        time: '01:30',
+        symbol: 'EURUSD',
+        side: 'long',
+        entry: 1,
+        qty: 1
+      }],
+      notes: []
+    }]
+  }));
+
+  assert.equal(await fresh.store.load(), true);
+  assert.equal(fresh.store.state.version, 4);
+  assert.equal(fresh.store.state.settings.timezone, 'Europe/Moscow');
+  const migrated = fresh.store.state.trades[0];
+  assert.equal(migrated.timeUtc, '2026-01-14T22:30:00.000Z');
+  assert.equal(migrated.date, '2026-01-15');
+  assert.equal(migrated.time, '01:30');
+
+  fresh.store.state.settings = Object.assign({}, fresh.store.state.settings, {
+    timezone: 'America/New_York'
+  });
+  assert.equal(migrated.date, '2026-01-14');
+  assert.equal(migrated.time, '17:30');
+});
+
+test('v3 trade without a timezone keeps its wall-clock date and time after migration', async function () {
+  const { TJ: fresh, storage } = loadTradeJournal();
+  const systemZone = fresh.utils.systemTimeZone();
+  storage.setItem(fresh.store.KEY, JSON.stringify({
+    version: 3,
+    accounts: [{
+      id: 'acc',
+      name: 'Основной счёт',
+      settings: { currency: '$' },
+      trades: [{
+        id: 'legacy',
+        date: '2026-01-15',
+        time: '10:30',
+        symbol: 'EURUSD',
+        side: 'long',
+        entry: 1,
+        qty: 1
+      }],
+      notes: []
+    }]
+  }));
+  assert.equal(await fresh.store.load(), true);
+  const migrated = fresh.store.state.trades[0];
+  assert.equal(migrated.date, '2026-01-15');
+  assert.equal(migrated.time, '10:30');
+  assert.equal(migrated.timeUtc, fresh.utils.zonedToUtc('2026-01-15', '10:30', systemZone));
 });

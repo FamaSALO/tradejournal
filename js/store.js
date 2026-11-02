@@ -7,7 +7,7 @@
   // The storage key is intentionally kept as v1: existing web journals must be
   // discovered and migrated in place instead of being replaced with demo data.
   const KEY = 'tradejournal.v1';
-  const SCHEMA_VERSION = 3;
+  const SCHEMA_VERSION = 4;
   const DEFAULT_ACCOUNT_NAME = 'Основной счёт';
   const MAX_EXITS = 50;
   const MULTIPLIER_MIN = 0.000000001;
@@ -26,7 +26,9 @@
     startBalance: 10000,
     riskPercent: 1,
     dailyLossLimit: 3,
-    maxTradesPerDay: 3
+    maxTradesPerDay: 3,
+    timezone: U.systemTimeZone(),
+    sessions: U.normalizeSessions()
   };
 
   let root = blankRoot();
@@ -60,7 +62,12 @@
     },
     settings: {
       get: function () { const account = activeAccount(); return account ? account.settings : DEFAULT_SETTINGS; },
-      set: function (value) { const account = activeAccount(); if (account) account.settings = normalizeSettings(value); }
+      set: function (value) {
+        const account = activeAccount();
+        if (!account) return;
+        account.settings = normalizeSettings(value);
+        retimeAccountTrades(account);
+      }
     },
     trades: {
       get: function () { const account = activeAccount(); return account ? account.trades : []; },
@@ -232,16 +239,38 @@
     return exits;
   }
 
-  function normalizeTrade(raw) {
+  function normalizeTrade(raw, options) {
     if (!raw || typeof raw !== 'object') return null;
-    const date = typeof raw.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(raw.date.slice(0, 10))
-      ? raw.date.slice(0, 10)
-      : U.todayISO();
+    options = options || {};
+    const timeZone = U.validTimeZone(options.timeZone) ? options.timeZone : U.systemTimeZone();
+    const rawDate = U.validDateISO(raw.date);
+    const rawTime = U.validTimeHM(raw.time);
+    let timeUtc = U.normalizeUtc(raw.timeUtc);
+    let date = rawDate;
+    let time = rawTime;
+
+    if (timeUtc) {
+      const zoned = U.utcToZoned(timeUtc, timeZone);
+      if (zoned) {
+        date = zoned.date;
+        time = zoned.time;
+      } else {
+        timeUtc = null;
+      }
+    }
+
+    if (!date) {
+      // A broken date is data loss on import, so strict mode drops the trade
+      // instead of silently moving it to today.
+      if (options.strictDate) return null;
+      date = U.todayISO(timeZone);
+    }
+    if (!timeUtc && date && time) timeUtc = U.zonedToUtc(date, time, timeZone);
+
     const symbol = String(raw.symbol || '').trim().toUpperCase();
     if (!symbol) return null;
     const side = raw.side === 'short' ? 'short' : 'long';
     const discipline = U.clamp(Math.round(U.parseNum(raw.discipline) || 0), 0, 5);
-    const time = typeof raw.time === 'string' && /^\d{2}:\d{2}/.test(raw.time) ? raw.time.slice(0, 5) : '';
     let shot = '';
     if (typeof raw.screenshot === 'string') {
       if (SAFE_SCREENSHOT_FILE_RE.test(raw.screenshot)) {
@@ -269,6 +298,7 @@
       id: raw.id ? String(raw.id) : U.uid(),
       date: date,
       time: time,
+      timeUtc: timeUtc,
       symbol: symbol,
       side: side,
       entry: U.parseNum(raw.entry),
@@ -308,6 +338,18 @@
     };
   }
 
+  function retimeAccountTrades(account) {
+    if (!account || !account.settings || !Array.isArray(account.trades)) return;
+    const timeZone = account.settings.timezone;
+    account.trades.forEach(function (trade) {
+      if (!trade || !trade.timeUtc) return;
+      const zoned = U.utcToZoned(trade.timeUtc, timeZone);
+      if (!zoned) return;
+      trade.date = zoned.date;
+      trade.time = zoned.time;
+    });
+  }
+
   function normalizeSettings(raw) {
     raw = raw || {};
     const currency = String(raw.currency || '$').slice(0, 3);
@@ -320,7 +362,9 @@
       startBalance: startBalance !== null && startBalance >= 0 ? startBalance : 10000,
       riskPercent: risk !== null && risk >= 0 ? U.clamp(risk, 0, 100) : 1,
       dailyLossLimit: daily !== null && daily >= 0 ? U.clamp(daily, 0, 100) : 3,
-      maxTradesPerDay: maxTrades !== null && maxTrades >= 0 ? U.clamp(Math.round(maxTrades), 0, 100) : 3
+      maxTradesPerDay: maxTrades !== null && maxTrades >= 0 ? U.clamp(Math.round(maxTrades), 0, 100) : 3,
+      timezone: U.validTimeZone(raw.timezone) ? raw.timezone : U.systemTimeZone(),
+      sessions: U.normalizeSessions(raw.sessions)
     };
   }
 
@@ -332,15 +376,22 @@
     return { name: name, avatar: avatar };
   }
 
-  function normalizeAccount(raw, index, legacy) {
+  function normalizeAccount(raw, index, legacy, options) {
     raw = raw || {};
     legacy = legacy || {};
     const settingsSource = raw.settings !== undefined ? raw.settings : legacy.settings;
     const tradesSource = raw.trades !== undefined ? raw.trades : legacy.trades;
     const notesSource = raw.notes !== undefined ? raw.notes : legacy.notes;
+    const settings = normalizeSettings(settingsSource);
+    const tradeOptions = {
+      timeZone: settings.timezone,
+      strictDate: !!(options && options.strictDate)
+    };
 
     const seenTradeIds = new Set();
-    const trades = (Array.isArray(tradesSource) ? tradesSource : []).map(normalizeTrade).filter(Boolean).map(function (trade) {
+    const trades = (Array.isArray(tradesSource) ? tradesSource : []).map(function (rawTrade) {
+      return normalizeTrade(rawTrade, tradeOptions);
+    }).filter(Boolean).map(function (trade) {
       if (seenTradeIds.has(trade.id)) trade.id = U.uid();
       seenTradeIds.add(trade.id);
       return trade;
@@ -358,7 +409,7 @@
       name: accountName(raw.name, index),
       createdAt: raw.createdAt ? String(raw.createdAt) : new Date().toISOString(),
       demo: raw.demo !== undefined ? !!raw.demo : !!legacy.demo,
-      settings: normalizeSettings(settingsSource),
+      settings: settings,
       trades: trades,
       notes: notes
     };
@@ -401,15 +452,23 @@
 
     accounts.forEach(function (account) {
       stats.accounts++;
+      const settings = normalizeSettings(
+        account && account.settings !== undefined ? account.settings : raw.settings
+      );
       const trades = account && Array.isArray(account.trades) ? account.trades : [];
       trades.forEach(function (trade) {
         if (!trade || typeof trade !== 'object') return;
         stats.trades++;
-        if (!String(trade.symbol || '').trim()) stats.missingSymbols++;
-        if (!(typeof trade.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(trade.date.slice(0, 10)))) {
-          stats.invalidDates++;
-        }
-        const normalized = normalizeTrade(trade);
+        const symbol = String(trade.symbol || '').trim();
+        const hasDate = !!U.validDateISO(trade.date);
+        const hasUtc = !!U.normalizeUtc(trade.timeUtc);
+        if (!symbol) stats.missingSymbols++;
+        else if (!hasDate && !hasUtc) stats.invalidDates++;
+
+        const normalized = normalizeTrade(trade, {
+          timeZone: settings.timezone,
+          strictDate: true
+        });
         if (!normalized) return;
         stats.tradesAccepted++;
         stats.exitRecords += normalized.exits.length;
@@ -449,19 +508,19 @@
       });
     });
 
-    stats.tradesDropped = stats.trades - stats.tradesAccepted;
+    stats.tradesDropped = stats.missingSymbols + stats.invalidDates;
     stats.notesDropped = stats.notes - stats.notesAccepted;
     return stats;
   }
 
-  function normalizeData(raw) {
+  function normalizeData(raw, options) {
     raw = raw || {};
     const isV2 = Array.isArray(raw.accounts);
     let accounts = [];
 
     if (isV2) {
       accounts = raw.accounts.map(function (account, index) {
-        return normalizeAccount(account, index);
+        return normalizeAccount(account, index, null, options);
       });
     } else {
       accounts = [normalizeAccount({}, 0, {
@@ -469,7 +528,7 @@
         trades: raw.trades,
         notes: raw.notes,
         demo: raw.demo
-      })];
+      }, options)];
     }
 
     if (!accounts.length) {
@@ -555,20 +614,27 @@
     }
   }
 
-  function replaceData(raw) {
+  function replaceData(raw, options) {
     if (!isJournalData(raw)) return false;
-    root = normalizeData(raw);
+    root = normalizeData(raw, options);
     return save();
   }
 
   function setDemo(data) {
-    const normalized = normalizeData(data);
-    const source = normalized.accounts[0];
     const account = activeAccount();
-    if (!source || !account) return Promise.resolve(false);
-    account.settings = normalizeSettings(source.settings);
-    account.trades = source.trades;
-    account.notes = source.notes;
+    const source = data && Array.isArray(data.accounts) ? data.accounts[0] : data;
+    if (!account || !source || typeof source !== 'object') return Promise.resolve(false);
+    // Demo values may change risk settings, but the account timezone and
+    // session boundaries stay under the user's control.
+    const settings = normalizeSettings(Object.assign({}, source.settings || {}, {
+      timezone: account.settings.timezone,
+      sessions: account.settings.sessions
+    }));
+    account.settings = settings;
+    account.trades = (Array.isArray(source.trades) ? source.trades : [])
+      .map(function (raw) { return normalizeTrade(raw, { timeZone: settings.timezone }); })
+      .filter(Boolean);
+    account.notes = (Array.isArray(source.notes) ? source.notes : []).map(normalizeNote).filter(Boolean);
     account.demo = true;
     return save();
   }
@@ -596,7 +662,7 @@
 
   function addAccount(name) {
     const current = activeAccount();
-    const settings = Object.assign({}, DEFAULT_SETTINGS, current ? { currency: current.settings.currency } : {});
+    const settings = Object.assign({}, DEFAULT_SETTINGS, current ? current.settings : {});
     const account = createAccount(name, settings, root.accounts.length);
     root.accounts.push(account);
     root.activeAccountId = account.id;

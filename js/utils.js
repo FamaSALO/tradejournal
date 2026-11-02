@@ -45,6 +45,199 @@
 
   const WEEKDAY_LABELS = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
 
+  // Session boundaries are stored as start times in the account's timezone.
+  // The last session wraps around midnight and lasts until the first one.
+  const DEFAULT_SESSIONS = [
+    { key: 'asia', name: 'Азия', start: '00:00' },
+    { key: 'london', name: 'Лондон', start: '09:00' },
+    { key: 'newYork', name: 'Нью-Йорк', start: '13:00' },
+    { key: 'evening', name: 'Вечер', start: '18:00' }
+  ];
+
+  const zoneValidity = new Map();
+  const zoneFormatters = new Map();
+  let sessionCacheKey = '';
+  let sessionCache = null;
+
+  function systemTimeZone() {
+    try {
+      return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+    } catch (err) {
+      return 'UTC';
+    }
+  }
+
+  function validTimeZone(value) {
+    if (!value || typeof value !== 'string') return false;
+    const name = value.trim();
+    if (!name) return false;
+    if (zoneValidity.has(name)) return zoneValidity.get(name);
+    let valid = false;
+    try {
+      new Intl.DateTimeFormat('en-US', { timeZone: name }).format(new Date());
+      valid = true;
+    } catch (err) {
+      valid = false;
+    }
+    zoneValidity.set(name, valid);
+    return valid;
+  }
+
+  function zoneFormatter(timeZone) {
+    const zone = validTimeZone(timeZone) ? timeZone : systemTimeZone();
+    if (!zoneFormatters.has(zone)) {
+      zoneFormatters.set(zone, new Intl.DateTimeFormat('en-CA', {
+        timeZone: zone,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hourCycle: 'h23'
+      }));
+    }
+    return zoneFormatters.get(zone);
+  }
+
+  function zonedParts(epochMs, timeZone) {
+    const parts = zoneFormatter(timeZone).formatToParts(new Date(epochMs));
+    const values = {};
+    parts.forEach(function (part) {
+      if (part.type !== 'literal') values[part.type] = part.value;
+    });
+    let hour = Number(values.hour);
+    if (hour === 24) hour = 0;
+    return {
+      year: Number(values.year),
+      month: Number(values.month),
+      day: Number(values.day),
+      hour: hour,
+      minute: Number(values.minute),
+      second: Number(values.second || 0)
+    };
+  }
+
+  function utcToZoned(iso, timeZone) {
+    if (typeof iso !== 'string' || !iso) return null;
+    const ms = Date.parse(iso);
+    if (!Number.isFinite(ms)) return null;
+    const parts = zonedParts(ms, timeZone);
+    return {
+      date: parts.year + '-' + pad(parts.month) + '-' + pad(parts.day),
+      time: pad(parts.hour) + ':' + pad(parts.minute)
+    };
+  }
+
+  function validDateISO(value) {
+    if (typeof value !== 'string') return '';
+    const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(value);
+    if (!match) return '';
+    const year = Number(match[1]);
+    const month = Number(match[2]);
+    const day = Number(match[3]);
+    const date = new Date(Date.UTC(year, month - 1, day));
+    if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) return '';
+    return match[0].slice(0, 10);
+  }
+
+  function validTimeHM(value) {
+    if (typeof value !== 'string') return '';
+    const match = /^(\d{1,2}):(\d{2})/.exec(value.trim());
+    if (!match) return '';
+    const hours = Number(match[1]);
+    const minutes = Number(match[2]);
+    if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) return '';
+    return pad(hours) + ':' + pad(minutes);
+  }
+
+  function normalizeUtc(value) {
+    if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}T/.test(value)) return null;
+    const ms = Date.parse(value);
+    return Number.isFinite(ms) ? new Date(ms).toISOString() : null;
+  }
+
+  // Converts a wall-clock date/time in the selected IANA timezone to a UTC
+  // instant. Two passes cover DST offsets; a third settles unusual zones.
+  function zonedToUtc(dateISO, timeHM, timeZone) {
+    const date = validDateISO(dateISO);
+    const time = validTimeHM(timeHM);
+    if (!date || !time) return null;
+    const year = Number(date.slice(0, 4));
+    const month = Number(date.slice(5, 7));
+    const day = Number(date.slice(8, 10));
+    const hours = Number(time.slice(0, 2));
+    const minutes = Number(time.slice(3, 5));
+    const desired = Date.UTC(year, month - 1, day, hours, minutes, 0, 0);
+    let guess = desired;
+    for (let i = 0; i < 4; i++) {
+      const parts = zonedParts(guess, timeZone);
+      const actual = Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute, parts.second || 0);
+      const diff = desired - actual;
+      if (diff === 0) break;
+      guess += diff;
+    }
+    return new Date(guess).toISOString();
+  }
+
+  function sessionList(sessions) {
+    const source = Array.isArray(sessions) ? sessions : [];
+    const key = JSON.stringify(source);
+    if (sessionCache && key === sessionCacheKey) return sessionCache;
+    const byKey = {};
+    source.forEach(function (item, index) {
+      if (!item || typeof item !== 'object') return;
+      const fallback = DEFAULT_SESSIONS[index];
+      const keyName = DEFAULT_SESSIONS.some(function (session) { return session.key === item.key; })
+        ? item.key
+        : (fallback ? fallback.key : '');
+      if (!keyName) return;
+      const definition = DEFAULT_SESSIONS.find(function (session) { return session.key === keyName; });
+      byKey[keyName] = {
+        key: keyName,
+        name: String(item.name || '').trim().slice(0, 24) || definition.name,
+        start: validTimeHM(item.start) || definition.start
+      };
+    });
+    const list = DEFAULT_SESSIONS.map(function (definition) {
+      return byKey[definition.key] || { key: definition.key, name: definition.name, start: definition.start };
+    });
+    list.sort(function (a, b) {
+      return a.start.localeCompare(b.start) || DEFAULT_SESSIONS.findIndex(function (s) { return s.key === a.key; })
+        - DEFAULT_SESSIONS.findIndex(function (s) { return s.key === b.key; });
+    });
+    sessionCacheKey = key;
+    sessionCache = list;
+    return list;
+  }
+
+  function normalizeSessions(sessions) {
+    return sessionList(sessions).map(function (session) {
+      return { key: session.key, name: session.name, start: session.start };
+    });
+  }
+
+  function sessionStartMinutes(session) {
+    return Number(session.start.slice(0, 2)) * 60 + Number(session.start.slice(3, 5));
+  }
+
+  function sessionOf(time, sessions) {
+    if (!time || typeof time !== 'string') return 'Без времени';
+    const value = validTimeHM(time);
+    if (!value) return 'Без времени';
+    const minutes = Number(value.slice(0, 2)) * 60 + Number(value.slice(3, 5));
+    const list = sessionList(sessions);
+    let current = list[list.length - 1];
+    list.forEach(function (session) {
+      if (minutes >= sessionStartMinutes(session)) current = session;
+    });
+    return current.name;
+  }
+
+  function sessionNames(sessions) {
+    return sessionList(sessions).map(function (session) { return session.name; });
+  }
+
   function symbol() {
     return (NS.config && NS.config.currency) || '$';
   }
@@ -134,7 +327,13 @@
     return date.getFullYear() + '-' + pad(date.getMonth() + 1) + '-' + pad(date.getDate());
   }
 
-  function todayISO() { return isoOf(new Date()); }
+  function todayISO(timeZone) {
+    if (timeZone) {
+      const zoned = utcToZoned(new Date().toISOString(), timeZone);
+      if (zoned) return zoned.date;
+    }
+    return isoOf(new Date());
+  }
 
   function parseISO(iso) {
     if (!iso || typeof iso !== 'string') return null;
@@ -179,7 +378,11 @@
     return str ? str.charAt(0).toUpperCase() + str.slice(1) : str;
   }
 
-  function nowTime() {
+  function nowTime(timeZone) {
+    if (timeZone) {
+      const zoned = utcToZoned(new Date().toISOString(), timeZone);
+      if (zoned) return zoned.time;
+    }
     const d = new Date();
     return pad(d.getHours()) + ':' + pad(d.getMinutes());
   }
@@ -198,16 +401,6 @@
     if (last > 1 && last < 5) return forms[1];
     if (last === 1) return forms[0];
     return forms[2];
-  }
-
-  function sessionOf(time) {
-    if (!time || typeof time !== 'string') return 'Без времени';
-    const hour = Number(time.slice(0, 2));
-    if (isNaN(hour)) return 'Без времени';
-    if (hour < 9) return 'Азия';
-    if (hour < 13) return 'Лондон';
-    if (hour < 18) return 'Нью-Йорк';
-    return 'Вечер';
   }
 
   function emotionMeta(key) {
@@ -326,6 +519,15 @@
     uid: uid,
     plural: plural,
     sessionOf: sessionOf,
+    sessionNames: sessionNames,
+    normalizeSessions: normalizeSessions,
+    systemTimeZone: systemTimeZone,
+    validTimeZone: validTimeZone,
+    validDateISO: validDateISO,
+    validTimeHM: validTimeHM,
+    normalizeUtc: normalizeUtc,
+    utcToZoned: utcToZoned,
+    zonedToUtc: zonedToUtc,
     emotionMeta: emotionMeta,
     moodMeta: moodMeta,
     sum: sum,
@@ -342,5 +544,6 @@
   NS.EMOTIONS = EMOTIONS;
   NS.SETUPS = SETUPS;
   NS.WEEKDAY_LABELS = WEEKDAY_LABELS;
+  NS.DEFAULT_SESSIONS = DEFAULT_SESSIONS;
   NS.config = { currency: '$' };
 })();

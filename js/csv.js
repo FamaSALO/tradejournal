@@ -41,8 +41,8 @@
     'эйфория': 'euphoria'
   };
 
-  function todayISO() {
-    if (U && typeof U.todayISO === 'function') return U.todayISO();
+  function todayISO(timeZone) {
+    if (U && typeof U.todayISO === 'function') return U.todayISO(timeZone);
     const now = new Date();
     return now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0');
   }
@@ -301,7 +301,8 @@
     ].join('~');
   }
 
-  function analyze(text, existingTrades) {
+  function analyze(text, existingTrades, options) {
+    options = options || {};
     const parsed = parse(text);
     const result = {
       delimiter: parsed.delimiter,
@@ -359,7 +360,7 @@
       if (rawDate && !tradeDate) {
         result.warnings.push('Строка ' + line + ': дата «' + rawDate + '» не распознана, использована сегодняшняя.');
       }
-      if (!tradeDate) tradeDate = todayISO();
+      if (!tradeDate) tradeDate = todayISO(options.timeZone);
 
       const tradeTime = time(cell(row, result.mapping, 'time'));
       const tradeSide = side(cell(row, result.mapping, 'side'));

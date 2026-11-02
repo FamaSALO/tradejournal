@@ -548,6 +548,17 @@
                 <span>Максимум сделок в день</span>
                 <input type="number" id="settingMaxTrades" step="1" min="0" max="100" inputmode="numeric">
               </label>
+              <label class="field span-2">
+                <span>Часовой пояс</span>
+                <input type="text" id="settingTimezone" list="timezoneList" placeholder="Europe/Moscow" autocomplete="off" spellcheck="false">
+                <small class="field-hint">Время сделок хранится в UTC и показывается в этом поясе. Укажите зону IANA, например Europe/Moscow или America/New_York.</small>
+              </label>
+              <div class="field span-2">
+                <span>Границы торговых сессий</span>
+                <div class="session-settings" id="sessionSettings"></div>
+                <small class="field-hint">Время начала сессий в выбранном часовом поясе. Сессия длится до начала следующей, последняя — до первой. Порядок строк не важен: сессии сортируются по времени.</small>
+              </div>
+              <datalist id="timezoneList"></datalist>
               <div class="form-actions span-2">
                 <button type="submit" class="btn btn-primary">Сохранить настройки</button>
                 <span class="muted" id="settingsSavedAt"></span>
@@ -689,7 +700,7 @@
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17.5 8.5 12l4 3L21 6"/><path d="M15 6h6v6"/></svg>
             </div>
             <div>
-              <h3>TradeJournal <span class="version" id="appVersion">v2.2.2</span></h3>
+              <h3>TradeJournal <span class="version" id="appVersion">v2.3.0</span></h3>
               <p>Локальный дневник трейдера без серверов и регистрации. Сделки, календарь P&L, аналитика по сетапам и эмоциям, журнал наблюдений и калькулятор риска — всё в одном приложении. <span class="kbd">N</span> — новая сделка, <span class="kbd">Esc</span> — закрыть окно.</p>
             </div>
           </article>
