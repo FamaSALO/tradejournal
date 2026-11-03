@@ -154,7 +154,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
         run: |
-          existing=$(gh release list --limit 100 --json tagName,isDraft \
+          set -euo pipefail
+          existing=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 100 --json tagName,isDraft \
             --jq ".[] | select(.tagName == \"${GITHUB_REF_NAME}\") | .isDraft")
           if [ -n "$existing" ]; then
             if [ "$existing" = "true" ]; then
@@ -170,7 +171,15 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
         run: |
-          gh release create "${GITHUB_REF_NAME}" artifacts/* \
+          set -euo pipefail
+          shopt -s nullglob
+          assets=(artifacts/*)
+          if [ "${#assets[@]}" -eq 0 ]; then
+            echo "::error::No release assets were downloaded."
+            exit 1
+          fi
+          gh release create "${GITHUB_REF_NAME}" "${assets[@]}" \
+            --repo "$GITHUB_REPOSITORY" \
             --title "TradeJournal ${GITHUB_REF_NAME}" \
             --draft \
             --generate-notes \
