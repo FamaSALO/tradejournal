@@ -820,6 +820,80 @@
     return pnl;
   }
 
+  // Daily views are based on the day a position was exited. A trade can
+  // contribute to several days when it is scaled out, while the sum of its
+  // events always matches tradePnl().
+  function tradePnlEvents(trade) {
+    if (!trade) return [];
+    const entry = U.parseNum(trade.entry);
+    const quantity = U.parseNum(trade.qty);
+    const exits = tradeExits(trade);
+    if (entry === null || quantity === null || !exits.length) return [];
+    const dir = trade.side === 'short' ? -1 : 1;
+    const multiplier = normalizeMultiplier(trade.multiplier);
+    const events = [];
+    exits.forEach(function (exit) {
+      const exitQty = U.parseNum(exit.qty);
+      const exitPrice = U.parseNum(exit.price);
+      if (exitQty === null || exitQty <= 0 || exitPrice === null) return;
+      const fees = Math.max(0, U.parseNum(exit.fees) || 0);
+      events.push({
+        date: exit.date || trade.date || '',
+        pnl: (exitPrice - entry) * exitQty * multiplier * dir - fees,
+        exitId: exit.id ? String(exit.id) : ''
+      });
+    });
+    return events;
+  }
+
+  // Counts distinct trades that were opened or exited on each day.
+  function dayPnlMap(trades) {
+    const map = new Map();
+    (trades || []).forEach(function (trade) {
+      if (!trade) return;
+      const days = new Set();
+      if (trade.date) days.add(trade.date);
+      tradePnlEvents(trade).forEach(function (event) {
+        if (!event.date) return;
+        days.add(event.date);
+        let item = map.get(event.date);
+        if (!item) { item = { pnl: 0, count: 0 }; map.set(event.date, item); }
+        item.pnl += event.pnl;
+      });
+      days.forEach(function (day) {
+        let item = map.get(day);
+        if (!item) { item = { pnl: 0, count: 0 }; map.set(day, item); }
+        item.count++;
+      });
+    });
+    return map;
+  }
+
+  // Stable exit-event order used by the equity curve and drawdown.
+  function pnlEventRows(trades) {
+    const rows = [];
+    (trades || []).forEach(function (trade) {
+      tradePnlEvents(trade).forEach(function (event, index) {
+        rows.push({
+          date: event.date || trade.date || '',
+          time: trade.time || '00:00',
+          tradeId: trade.id || '',
+          exitId: event.exitId || '',
+          index: index,
+          pnl: event.pnl
+        });
+      });
+    });
+    rows.sort(function (a, b) {
+      return (a.date || '').localeCompare(b.date || '') ||
+        (a.time || '').localeCompare(b.time || '') ||
+        (a.tradeId || '').localeCompare(b.tradeId || '') ||
+        (a.exitId || '').localeCompare(b.exitId || '') ||
+        a.index - b.index;
+    });
+    return rows;
+  }
+
   function hasRealized(trade) {
     return tradePnl(trade) !== null;
   }
@@ -925,8 +999,8 @@
     const base = U.parseNum(startBalance) || 0;
 
     let equity = 0, peak = 0, maxDD = 0, maxDDPct = 0;
-    rows.forEach(function (row) {
-      equity += row.pnl;
+    pnlEventRows(realized).forEach(function (event) {
+      equity += event.pnl;
       if (equity > peak) peak = equity;
       const dd = peak - equity;
       if (dd > maxDD) {
@@ -1068,6 +1142,8 @@
     hasRealized: hasRealized,
     weightedExit: weightedExit,
     tradePnl: tradePnl,
+    tradePnlEvents: tradePnlEvents,
+    dayPnlMap: dayPnlMap,
     tradeFees: tradeFees,
     tradeRisk: tradeRisk,
     openRisk: openRisk,

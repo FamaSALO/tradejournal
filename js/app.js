@@ -368,13 +368,8 @@
     delta.classList.toggle('pos', roi > 0.004);
 
     const today = todayInAccount();
-    let todayPnl = 0;
-    store.state.trades.forEach(function (trade) {
-      if (trade.date === today && store.hasRealized(trade)) {
-        const pnl = store.tradePnl(trade);
-        if (pnl !== null) todayPnl += pnl;
-      }
-    });
+    const todayInfo = store.dayPnlMap(store.state.trades).get(today);
+    const todayPnl = todayInfo ? todayInfo.pnl : 0;
     const todayEl = $('#sidebarToday');
     todayEl.innerHTML = 'сегодня <b class="' + toneClass(todayPnl) + '">' + U.escapeHtml(U.money(todayPnl, { sign: true })) + '</b>';
 
@@ -632,17 +627,40 @@
     }).join('');
   }
 
+  function orderedPnlEvents(trades) {
+    const events = [];
+    (trades || []).forEach(function (trade) {
+      store.tradePnlEvents(trade).forEach(function (event, index) {
+        events.push({
+          date: event.date || trade.date || '',
+          time: trade.time || '00:00',
+          tradeId: trade.id || '',
+          exitId: event.exitId || '',
+          index: index,
+          pnl: event.pnl,
+          trade: trade
+        });
+      });
+    });
+    events.sort(function (a, b) {
+      return (a.date || '').localeCompare(b.date || '') ||
+        (a.time || '').localeCompare(b.time || '') ||
+        (a.tradeId || '').localeCompare(b.tradeId || '') ||
+        (a.exitId || '').localeCompare(b.exitId || '') ||
+        a.index - b.index;
+    });
+    return events;
+  }
+
   function buildEquityPoints(closedAsc, base) {
     let balance = base;
     const points = [{ label: 'Старт', value: balance, meta: 'Начало периода' }];
-    closedAsc.forEach(function (trade) {
-      const pnl = store.tradePnl(trade);
-      if (pnl === null) return;
-      balance += pnl;
+    orderedPnlEvents(closedAsc).forEach(function (event) {
+      balance += event.pnl;
       points.push({
-        label: trade.date,
+        label: event.date,
         value: balance,
-        meta: trade.symbol + ' · ' + U.money(pnl, { sign: true })
+        meta: event.trade.symbol + ' · ' + U.money(event.pnl, { sign: true })
       });
     });
 
@@ -656,13 +674,15 @@
 
   function dailySeries(trades, limit) {
     const map = new Map();
-    trades.forEach(function (trade) {
-      const pnl = store.tradePnl(trade);
-      if (pnl === null) return;
-      let item = map.get(trade.date);
-      if (!item) { item = { value: 0, count: 0 }; map.set(trade.date, item); }
-      item.value += pnl;
-      item.count++;
+    (trades || []).forEach(function (trade) {
+      const seen = new Set();
+      store.tradePnlEvents(trade).forEach(function (event) {
+        if (!event.date) return;
+        let item = map.get(event.date);
+        if (!item) { item = { value: 0, count: 0, trades: new Set() }; map.set(event.date, item); }
+        item.value += event.pnl;
+        if (!item.trades.has(trade.id)) { item.trades.add(trade.id); item.count++; }
+      });
     });
     const list = Array.from(map.entries()).map(function (entry) {
       return {
@@ -678,12 +698,8 @@
     const settings = store.state.settings;
     const today = todayInAccount();
     const todayTrades = store.state.trades.filter(function (trade) { return trade.date === today; });
-    const closedToday = todayTrades.filter(store.hasRealized);
-    let dayPnl = 0;
-    closedToday.forEach(function (trade) {
-      const pnl = store.tradePnl(trade);
-      if (pnl !== null) dayPnl += pnl;
-    });
+    const todayInfo = store.dayPnlMap(store.state.trades).get(today);
+    const dayPnl = todayInfo ? todayInfo.pnl : 0;
 
     const balance = store.balanceAll();
     const startOfDayBalance = Math.max(0, balance - dayPnl);
@@ -691,7 +707,6 @@
     const maxTrades = U.parseNum(settings.maxTradesPerDay) || 0;
     return {
       todayTrades: todayTrades,
-      closedToday: closedToday,
       dayPnl: dayPnl,
       startOfDayBalance: startOfDayBalance,
       lossLimit: lossLimit,
@@ -1063,16 +1078,23 @@
     $('#calTitle').textContent = U.monthTitle(year, month);
     $('#calWeekdays').innerHTML = NS.WEEKDAY_LABELS.map(function (label) { return '<span>' + label + '</span>'; }).join('');
 
-    const monthTrades = store.state.trades.filter(function (trade) { return (trade.date || '').slice(0, 7) === prefix; });
+    const dayMap = store.dayPnlMap(store.state.trades);
+    const monthTrades = store.state.trades.filter(function (trade) {
+      return store.tradePnlEvents(trade).some(function (event) {
+        return (event.date || '').slice(0, 7) === prefix;
+      });
+    });
     const closedMonth = monthTrades.filter(store.hasRealized);
-    const pnlMap = {};
-    const countMap = {};
-
-    monthTrades.forEach(function (trade) {
-      countMap[trade.date] = (countMap[trade.date] || 0) + 1;
-      if (!store.hasRealized(trade)) return;
-      const pnl = store.tradePnl(trade);
-      if (pnl !== null) pnlMap[trade.date] = (pnlMap[trade.date] || 0) + pnl;
+    const monthKeys = Array.from(dayMap.keys()).filter(function (key) {
+      return key.slice(0, 7) === prefix;
+    });
+    const monthPnl = monthKeys.reduce(function (sum, key) {
+      return sum + dayMap.get(key).pnl;
+    }, 0);
+    let bestDay = null;
+    monthKeys.forEach(function (key) {
+      const value = dayMap.get(key).pnl;
+      if (!bestDay || value > bestDay.value) bestDay = { date: key, value: value };
     });
 
     const notesByDate = {};
@@ -1083,12 +1105,7 @@
 
     const settings = store.state.settings;
     const monthMetrics = store.metrics(closedMonth, U.parseNum(settings.startBalance) || 0);
-    const dayValues = Object.keys(pnlMap).map(function (key) { return pnlMap[key]; });
-    const monthPnl = U.sum(dayValues);
-    let bestDay = null;
-    Object.keys(pnlMap).forEach(function (key) {
-      if (!bestDay || pnlMap[key] > bestDay.value) bestDay = { date: key, value: pnlMap[key] };
-    });
+    const dayValues = monthKeys.map(function (key) { return dayMap.get(key).pnl; });
 
     $('#calSummary').innerHTML =
       '<span class="chip ' + toneClass(monthPnl) + '">' + U.escapeHtml(U.money(monthPnl, { sign: true })) + '</span>' +
@@ -1107,8 +1124,9 @@
       const date = new Date(gridStart.getFullYear(), gridStart.getMonth(), gridStart.getDate() + i);
       const iso = U.isoOf(date);
       const inMonth = date.getMonth() === month;
-      const dayPnl = pnlMap[iso] || 0;
-      const count = countMap[iso] || 0;
+      const dayInfo = dayMap.get(iso);
+      const dayPnl = dayInfo ? dayInfo.pnl : 0;
+      const count = dayInfo ? dayInfo.count : 0;
       const hasNote = notesByDate[iso] && notesByDate[iso].length > 0;
       const ratio = maxAbs > 0 ? Math.abs(dayPnl) / maxAbs : 0;
       let style = '';
@@ -1147,22 +1165,26 @@
       return;
     }
 
+    const dayInfo = store.dayPnlMap(store.state.trades).get(day) || { pnl: 0, count: 0 };
+    const dayPnl = dayInfo.pnl;
+    const dayEventPnl = new Map();
     const dayTrades = store.state.trades
-      .filter(function (trade) { return trade.date === day; })
+      .filter(function (trade) {
+        if (trade.date === day) return true;
+        const events = store.tradePnlEvents(trade).filter(function (event) { return event.date === day; });
+        if (!events.length) return false;
+        dayEventPnl.set(trade.id, events.reduce(function (sum, event) { return sum + event.pnl; }, 0));
+        return true;
+      })
       .sort(function (a, b) { return (a.time || '').localeCompare(b.time || ''); });
-    const closedTrades = dayTrades.filter(store.hasRealized);
-    let dayPnl = 0;
-    closedTrades.forEach(function (trade) {
-      const pnl = store.tradePnl(trade);
-      if (pnl !== null) dayPnl += pnl;
-    });
+    const closedTrades = dayTrades.filter(function (trade) { return dayEventPnl.has(trade.id); });
 
     const dayNotes = store.state.notes
       .filter(function (note) { return note.date === day; })
       .sort(function (a, b) { return String(b.createdAt).localeCompare(String(a.createdAt)); });
 
-    const wins = closedTrades.filter(function (trade) { return (store.tradePnl(trade) || 0) > 0.004; }).length;
-    const losses = closedTrades.filter(function (trade) { return (store.tradePnl(trade) || 0) < -0.004; }).length;
+    const wins = closedTrades.filter(function (trade) { return dayEventPnl.get(trade.id) > 0.004; }).length;
+    const losses = closedTrades.filter(function (trade) { return dayEventPnl.get(trade.id) < -0.004; }).length;
 
     let tradesHtml = '';
     if (!dayTrades.length) {
@@ -1170,13 +1192,14 @@
     } else {
       tradesHtml = '<div class="day-sub">Сделки дня</div>' + dayTrades.map(function (trade) {
         const status = store.tradeStatus(trade);
-        const pnl = store.tradePnl(trade);
+        const hasEvent = dayEventPnl.has(trade.id);
+        const pnl = hasEvent ? dayEventPnl.get(trade.id) : null;
         return '<div class="day-trade" data-open-trade="' + U.escapeHtml(trade.id) + '" tabindex="0">' +
           '<span class="day-trade-symbol">' + U.escapeHtml(trade.symbol) +
           ' <span class="day-trade-side">' + (trade.side === 'long' ? 'long' : 'short') + '</span>' +
           (status === 'partial' ? ' <span class="partial-badge">частично</span>' : '') + '</span>' +
-          '<span class="day-trade-pnl ' + (status === 'open' ? 'neutral' : toneClass(pnl)) + '">' +
-          (status === 'open' ? 'открыта' : U.escapeHtml(U.money(pnl, { sign: true }))) + '</span></div>';
+          '<span class="day-trade-pnl ' + (hasEvent ? toneClass(pnl) : 'neutral') + '">' +
+          (status === 'open' ? 'открыта' : (hasEvent ? U.escapeHtml(U.money(pnl, { sign: true })) : '—')) + '</span></div>';
       }).join('');
     }
 
@@ -1219,9 +1242,8 @@
     const now = new Date();
     if (cursor.getFullYear() === now.getFullYear() && cursor.getMonth() === now.getMonth()) return todayInAccount();
     const prefix = cursor.getFullYear() + '-' + pad2(cursor.getMonth() + 1);
-    const days = store.state.trades
-      .filter(function (trade) { return (trade.date || '').slice(0, 7) === prefix; })
-      .map(function (trade) { return trade.date; })
+    const days = Array.from(store.dayPnlMap(store.state.trades).keys())
+      .filter(function (day) { return day.slice(0, 7) === prefix; })
       .sort();
     return days[0] || prefix + '-01';
   }
@@ -1353,8 +1375,18 @@
       }
     }
 
-    const weekdayGroups = store.groupRows(rows, function (t) { return String(U.weekdayIndex(t.date)); })
-      .filter(function (g) { return g.count >= 2; })
+    const weekdayMap = new Map();
+    rows.forEach(function (trade) {
+      store.tradePnlEvents(trade).forEach(function (event) {
+        const key = String(U.weekdayIndex(event.date));
+        let group = weekdayMap.get(key);
+        if (!group) { group = { key: key, count: 0, pnl: 0, trades: new Set() }; weekdayMap.set(key, group); }
+        group.pnl += event.pnl;
+        if (!group.trades.has(trade.id)) { group.trades.add(trade.id); group.count++; }
+      });
+    });
+    const weekdayGroups = Array.from(weekdayMap.values())
+      .filter(function (group) { return group.count >= 2; })
       .sort(function (a, b) { return a.pnl - b.pnl; });
     if (weekdayGroups.length > 1) {
       const worstDay = weekdayGroups[0];
@@ -1564,21 +1596,7 @@
       return;
     }
 
-    const dayStats = new Map();
-    store.state.trades.forEach(function (trade) {
-      if (!store.hasRealized(trade)) {
-        let item = dayStats.get(trade.date);
-        if (!item) { item = { pnl: 0, count: 0 }; dayStats.set(trade.date, item); }
-        item.count++;
-        return;
-      }
-      const pnl = store.tradePnl(trade);
-      if (pnl === null) return;
-      let item = dayStats.get(trade.date);
-      if (!item) { item = { pnl: 0, count: 0 }; dayStats.set(trade.date, item); }
-      item.pnl += pnl;
-      item.count++;
-    });
+    const dayStats = store.dayPnlMap(store.state.trades);
 
     container.innerHTML = notes.map(function (note) {
       const mood = U.moodMeta(note.mood);

@@ -89,6 +89,103 @@ test('open trades have no realized P&L and no exit price', function () {
   assert.equal(store.openRisk(normalized), 50);
 });
 
+test('daily P&L events split a Monday-to-Wednesday trade across exit dates', function () {
+  const normalized = trade({
+    id: 'split',
+    date: '2026-01-05',
+    qty: 10,
+    exits: [
+      { id: 'tue', qty: 4, price: 110, date: '2026-01-06' },
+      { id: 'wed', qty: 6, price: 120, date: '2026-01-07' }
+    ]
+  });
+  const events = store.tradePnlEvents(normalized);
+  assert.equal(events.length, 2);
+  assert.equal(events[0].date, '2026-01-06');
+  assert.equal(events[0].pnl, 40);
+  assert.equal(events[0].exitId, 'tue');
+  assert.equal(events[1].date, '2026-01-07');
+  assert.equal(events[1].pnl, 120);
+  assert.equal(events.reduce(function (sum, event) { return sum + event.pnl; }, 0), store.tradePnl(normalized));
+
+  const days = store.dayPnlMap([normalized]);
+  assert.equal(days.get('2026-01-05').pnl, 0);
+  assert.equal(days.get('2026-01-05').count, 1);
+  assert.equal(days.get('2026-01-06').pnl, 40);
+  assert.equal(days.get('2026-01-06').count, 1);
+  assert.equal(days.get('2026-01-07').pnl, 120);
+  assert.equal(days.get('2026-01-07').count, 1);
+});
+
+test('an exit without a date falls back to the trade entry date', function () {
+  const normalized = trade({
+    date: '2026-01-05',
+    qty: 5,
+    exits: [{ id: 'no-date', qty: 5, price: 105 }]
+  });
+  const events = store.tradePnlEvents(normalized);
+  assert.equal(events.length, 1);
+  assert.equal(events[0].date, '2026-01-05');
+});
+
+test('open trades produce no daily P&L events but still count on the entry day', function () {
+  const normalized = trade({ date: '2026-01-05', qty: 10, exits: [] });
+  assert.equal(store.tradePnlEvents(normalized).length, 0);
+  const days = store.dayPnlMap([normalized]);
+  assert.equal(days.get('2026-01-05').pnl, 0);
+  assert.equal(days.get('2026-01-05').count, 1);
+  assert.equal(days.size, 1);
+});
+
+test('drawdown follows exit events instead of entry order', function () {
+  const first = trade({ id: 'a', date: '2026-01-01', qty: 1, exits: [{ qty: 1, price: 200, date: '2026-01-10' }] });
+  const second = trade({ id: 'b', date: '2026-01-02', qty: 1, exits: [{ qty: 1, price: 50, date: '2026-01-15' }] });
+  const third = trade({ id: 'c', date: '2026-01-03', qty: 1, exits: [{ qty: 1, price: 200, date: '2026-01-04' }] });
+  const fourth = trade({ id: 'd', date: '2026-01-04', qty: 1, exits: [{ qty: 1, price: 0, date: '2026-01-20' }] });
+
+  const m = store.metrics([first, second, third, fourth], 1000);
+  assert.equal(m.net, 50);
+  assert.equal(m.maxDD, 150);
+});
+
+test('calendar month P&L equals the sum of trades exited in that month', function () {  const split = trade({
+    id: 'jan-split',
+    date: '2026-01-05',
+    qty: 10,
+    exits: [
+      { qty: 4, price: 110, date: '2026-01-10' },
+      { qty: 6, price: 120, date: '2026-01-12' }
+    ]
+  });
+  const enteredEarlier = trade({
+    id: 'dec-entry',
+    date: '2025-12-20',
+    qty: 5,
+    exits: [{ qty: 5, price: 130, date: '2026-01-03' }]
+  });
+  const exitsNextMonth = trade({
+    id: 'feb-exit',
+    date: '2026-01-20',
+    qty: 5,
+    exits: [{ qty: 5, price: 90, date: '2026-02-02' }]
+  });
+  const open = trade({ id: 'open', date: '2026-01-08', qty: 10, exits: [] });
+  const trades = [split, enteredEarlier, exitsNextMonth, open];
+
+  const days = store.dayPnlMap(trades);
+  const calendarMonthPnl = Array.from(days.entries()).reduce(function (sum, entry) {
+    return entry[0].slice(0, 7) === '2026-01' ? sum + entry[1].pnl : sum;
+  }, 0);
+  const exitedInJanuary = trades
+    .filter(function (item) {
+      return store.tradePnlEvents(item).some(function (event) { return event.date.slice(0, 7) === '2026-01'; });
+    })
+    .reduce(function (sum, item) { return sum + store.tradePnl(item); }, 0);
+
+  assert.equal(calendarMonthPnl, exitedInJanuary);
+  assert.equal(calendarMonthPnl, store.tradePnl(split) + store.tradePnl(enteredEarlier));
+});
+
 test('contract multiplier scales P&L and risk', function () {
   const normalized = trade({
     qty: 2,
