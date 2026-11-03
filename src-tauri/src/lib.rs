@@ -152,13 +152,11 @@ fn is_journal_data(value: &serde_json::Value) -> bool {
         .map(|object| {
             let legacy = object
                 .get("trades")
-                .map_or(false, serde_json::Value::is_array)
-                && object
-                    .get("notes")
-                    .map_or(false, serde_json::Value::is_array);
+                .is_some_and(serde_json::Value::is_array)
+                && object.get("notes").is_some_and(serde_json::Value::is_array);
             let accounts = object
                 .get("accounts")
-                .map_or(false, serde_json::Value::is_array);
+                .is_some_and(serde_json::Value::is_array);
             legacy || accounts
         })
         .unwrap_or(false)
@@ -290,7 +288,7 @@ fn prune_backups(backup_dir: &Path) {
         })
         .collect();
 
-    files.sort_by(|left, right| right.1.cmp(&left.1));
+    files.sort_by_key(|left| std::cmp::Reverse(left.1));
     for (path, _) in files.into_iter().skip(MAX_BACKUPS) {
         let _ = fs::remove_file(path);
     }
@@ -377,7 +375,7 @@ fn list_backups(state: &AppState) -> Result<Vec<BackupInfo>, String> {
         })
         .collect();
 
-    backups.sort_by(|left, right| right.mtime.cmp(&left.mtime));
+    backups.sort_by_key(|left| std::cmp::Reverse(left.mtime));
     backups.truncate(50);
     Ok(backups)
 }
@@ -792,7 +790,7 @@ fn valid_image_magic(extension: &str, bytes: &[u8]) -> bool {
     match extension {
         "jpg" => bytes.starts_with(&[0xFF, 0xD8, 0xFF]),
         "png" => bytes.starts_with(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]),
-        "webp" => bytes.len() >= 12 && bytes.starts_with(b"RIFF") && &bytes[8..12] == &b"WEBP"[..],
+        "webp" => bytes.len() >= 12 && bytes.starts_with(b"RIFF") && bytes[8..12] == b"WEBP"[..],
         _ => false,
     }
 }
