@@ -270,6 +270,13 @@ fn backup_info(path: &Path) -> Option<BackupInfo> {
     })
 }
 
+fn sort_newest_first<T, F>(items: &mut [T], mtime: F)
+where
+    F: Fn(&T) -> u64,
+{
+    items.sort_by_key(|item| std::cmp::Reverse(mtime(item)));
+}
+
 fn prune_backups(backup_dir: &Path) {
     let Ok(entries) = fs::read_dir(backup_dir) else {
         return;
@@ -288,7 +295,7 @@ fn prune_backups(backup_dir: &Path) {
         })
         .collect();
 
-    files.sort_by_key(|left| std::cmp::Reverse(left.1));
+    sort_newest_first(&mut files, |file| file.1);
     for (path, _) in files.into_iter().skip(MAX_BACKUPS) {
         let _ = fs::remove_file(path);
     }
@@ -375,7 +382,7 @@ fn list_backups(state: &AppState) -> Result<Vec<BackupInfo>, String> {
         })
         .collect();
 
-    backups.sort_by_key(|left| std::cmp::Reverse(left.mtime));
+    sort_newest_first(&mut backups, |backup| backup.mtime);
     backups.truncate(50);
     Ok(backups)
 }
@@ -1252,6 +1259,21 @@ mod tests {
         );
 
         fs::remove_dir_all(&directory).unwrap();
+    }
+
+    #[test]
+    fn newest_backups_sort_first_and_equal_timestamps_keep_their_order() {
+        let mut entries = vec![
+            ("old", 10_u64),
+            ("newest-a", 30_u64),
+            ("middle", 20_u64),
+            ("newest-b", 30_u64),
+        ];
+
+        sort_newest_first(&mut entries, |entry| entry.1);
+
+        let names: Vec<&str> = entries.iter().map(|entry| entry.0).collect();
+        assert_eq!(names, vec!["newest-a", "newest-b", "middle", "old"]);
     }
 
     #[test]
