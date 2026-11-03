@@ -149,22 +149,31 @@ jobs:
           name: TradeJournal-${{ github.sha }}
           path: artifacts
 
-      - name: Check that the release does not exist
+      - name: Check that no release exists for the tag
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
         run: |
-          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
-            echo "::error::Release ${GITHUB_REF_NAME} already exists."
+          $found = gh release list --limit 100 --json tagName,isDraft |
+            From-Json | Where-Object { $_.tagName -eq $env:GITHUB_REF_NAME }
+          if ($found) {
+            if ($found.isDraft) {
+              Write-Error "Draft release $env:GITHUB_REF_NAME already exists."
+              Write-Error "Remove the stale draft manually before re-creating it:"
+              Write-Error "  gh release delete $env:GITHUB_REF_NAME --yes"
+              exit 1
+            }
+            Write-Error "Release $env:GITHUB_REF_NAME already exists; refusing to overwrite."
             exit 1
-          fi
+          }
 
-      - name: Create GitHub Release
+      - name: Create draft GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
         run: |
           gh release create "${GITHUB_REF_NAME}" artifacts/* \
             --title "TradeJournal ${GITHUB_REF_NAME}" \
+            --draft \
             --generate-notes \
             --verify-tag
