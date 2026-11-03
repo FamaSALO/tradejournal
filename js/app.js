@@ -4,7 +4,7 @@
   const U = NS.utils;
   const store = NS.store;
   const desktop = window.tradeJournalDesktop || null;
-  const APP_VERSION = '2.3.0';
+  const APP_VERSION = '2.4.0';
   const DRAFT_PREFIX = 'tradejournal.draft.v1.';
   const META_KEY = 'tradejournal.meta';
   // Drafts live in localStorage even on desktop, so a full screenshot data URL

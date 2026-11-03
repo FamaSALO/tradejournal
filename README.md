@@ -18,7 +18,7 @@
 - **Связь интерфейса с системой** — Tauri `invoke` через `js/desktop-bridge.js`. Интерфейс не имеет доступа к Node.js и может вызывать только команды, зарегистрированные в Rust.
 - **Безопасность** — Content Security Policy, разрешения Tauri в `src-tauri/capabilities/default.json`, отсутствие загрузки удалённого контента, атомарная запись файлов.
 - **Графики** — собственная отрисовка на Canvas 2D без сторонних библиотек.
-- **Хранение** — JSON-файлы в `%APPDATA%\TradeJournal`: атомарная запись, `journal.previous.json`, автоматические и ручные резервные копии, отдельная папка `screenshots/` для изображений. В веб-версии используется `localStorage`. Схема данных v3; журналы v1 и v2 переводятся автоматически без потери сделок, записей и скриншотов.
+- **Хранение** — JSON-файлы в `%APPDATA%\TradeJournal`: атомарная запись, `journal.previous.json`, автоматические и ручные резервные копии, отдельная папка `screenshots/` для изображений. В веб-версии журнал хранится в `localStorage`, а скриншоты — в IndexedDB. Схема данных v4; журналы v1, v2 и v3 переводятся автоматически без потери сделок, записей и скриншотов.
 - **Сборка** — Tauri CLI 2.12, Rust stable и NSIS-установщик для Windows x64. CI-сборка выполняется в GitHub Actions на `windows-latest`.
 - **Публикация** — GitHub Pages для веб-версии и GitHub Releases для Windows-сборок.
 
@@ -58,15 +58,27 @@ src-tauri/src/lib.rs             Rust: окно, файлы, копии, диа�
 
 Горячие клавиши: `N` — новая сделка, `/` — поиск, `Esc` — закрыть окно, `Ctrl+V` — вставить скриншот в открытом редакторе сделки, `Ctrl+Enter` или `Ctrl+S` — сохранить сделку.
 
+## Что изменилось в 2.4.0
+
+- **Дневной результат** — дневной P&L, календарь и дневные лимиты теперь считаются по датам выходов; сделка с несколькими частичными выходами распределяется по дням.
+- **Просадка** — максимальная просадка показывается отдельно в деньгах и в процентах от пика счёта.
+- **Комиссии** — при частичном закрытии списывается только доля комиссии за закрытый объём, остаток — при следующем выходе.
+- **Скриншоты в веб-версии** — хранятся в IndexedDB, переносятся из старых журналов, встраиваются в экспорт и возвращаются при импорте. В настройках появилась оценка хранилища и запрос постоянного доступа.
+- **Резервные копии** — приложение запоминает дату последнего экспорта и раз в сессию напоминает о копии, если её не было больше 7 дней.
+- **Офлайн-обновления** — service worker при установке обходит HTTP-кэш и сразу получает свежие файлы.
+- **Веб-метаданные** — канонический адрес, карточки Open Graph и Twitter, maskable-иконка 512 и обновлённый PWA-манифест.
+- **Надёжность** — тесты часовых поясов на переходах DST, проверка целостности app shell, ESLint и отдельный CI для веб-проверок.
+- **Лицензия** — проект распространяется по лицензии MIT.
+
 ## Windows-приложение
 
 ### Установка
 
 В GitHub Release публикуются:
 
-- `TradeJournal_2.3.0_x64-setup.exe` — установщик NSIS для текущего пользователя, без прав администратора.
-- `TradeJournal_2.3.0_x64-setup.exe.sig` — подпись установщика для автообновления.
-- `TradeJournal-portable-2.3.0-x64.zip` — портативная версия, которая запускается без установки.
+- `TradeJournal_2.4.0_x64-setup.exe` — установщик NSIS для текущего пользователя, без прав администратора.
+- `TradeJournal_2.4.0_x64-setup.exe.sig` — подпись установщика для автообновления.
+- `TradeJournal-portable-2.4.0-x64.zip` — портативная версия, которая запускается без установки.
 - `latest.json` — манифест обновления, который читает Windows-версия.
 - `SHA256SUMS.txt` — контрольные суммы файлов.
 
@@ -151,7 +163,7 @@ npm.cmd run build
 
 ```text
 src-tauri\target\release\TradeJournal.exe
-src-tauri\target\release\bundle\nsis\TradeJournal_2.3.0_x64-setup.exe
+src-tauri\target\release\bundle\nsis\TradeJournal_2.4.0_x64-setup.exe
 ```
 
 Портативную сборку можно получить, упаковав `TradeJournal.exe` в ZIP. Именно это делает CI-сборка в `.github/workflows/tauri.yml`.
@@ -159,7 +171,7 @@ src-tauri\target\release\bundle\nsis\TradeJournal_2.3.0_x64-setup.exe
 Проверки перед сборкой:
 
 ```powershell
-npm.cmd test                  # node:test для хранилища, CSV и ZIP
+npm.cmd test                  # node:test для хранилища, CSV, ZIP и PWA
 npm.cmd run check:versions    # версия во всех файлах должна совпадать
 cargo fmt --check --manifest-path src-tauri/Cargo.toml
 npm.cmd run web:build         # подготовка dist/ для Tauri и cargo test
@@ -215,7 +227,8 @@ js/charts.js                Графики на canvas
 js/app.js                   Логика интерфейса и маршрутизация
 manifest.webmanifest        Манифест устанавливаемого веб-приложения
 sw.js                       Service worker с версионированным кэшем
-assets/icons/               Иконки PWA 192/512 и apple-touch-icon
+assets/icons/               Иконки PWA 192/512, maskable и apple-touch-icon
+assets/og-image.png         Обложка Open Graph и Twitter
 src-tauri/src/lib.rs        Rust-команды, файловое хранилище, копии и обновления
 src-tauri/src/main.rs       Точка входа Windows-приложения
 src-tauri/tauri.conf.json   Окно, CSP, NSIS, WebView2 и автообновление
@@ -223,7 +236,8 @@ src-tauri/Cargo.toml        Rust-зависимости и оптимизаци�
 src-tauri/capabilities/     Разрешения Tauri
 scripts/build-web.mjs       Подготовка dist/ для Tauri
 scripts/check-versions.mjs  Проверка совпадения версий во всех файлах
-tests/                      node:test для store, CSV и ZIP
+tests/                      node:test для хранилища, CSV, ZIP, PWA и метаданных
+.github/workflows/web.yml   CI: линтер, тесты и сборка веб-версии
 .github/workflows/tauri.yml CI: проверки, тесты, сборка и latest.json
 build/icon.ico              Иконка приложения
 assets/preview.png          Превью для README
