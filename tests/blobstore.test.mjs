@@ -95,24 +95,6 @@ test('blob store rejects invalid images and malformed references', async functio
   assert.equal(loaded.TJ.blobStore.isRef('idb:screenshots/valid-id_1'), false);
 });
 
-test('IndexedDB screenshots are disabled in the desktop app', function () {
-  const fakeIndexedDB = { open: function () { throw new Error('IndexedDB must not be opened on desktop'); } };
-  const web = loadTradeJournal(null, { indexedDB: fakeIndexedDB });
-  assert.equal(web.TJ.blobStore.available(), true);
-
-  const desktop = loadTradeJournal(null, { indexedDB: fakeIndexedDB, desktop: { name: 'desktop' } });
-  assert.equal(desktop.TJ.blobStore.available(), false);
-  assert.equal(desktop.TJ.blobStore.getDefault(), null);
-
-  const base = { id: 'trade-1', date: '2026-01-05', symbol: 'EURUSD', side: 'long', entry: 100, qty: 1 };
-  const idbTrade = desktop.TJ.store.normalizeTrade(Object.assign({}, base, { screenshot: 'idb:screenshots/abc' }));
-  const fileTrade = desktop.TJ.store.normalizeTrade(Object.assign({}, base, {
-    screenshot: 'file:screenshots/a.png'
-  }));
-  assert.equal(idbTrade.screenshot, '');
-  assert.equal(fileTrade.screenshot, 'file:screenshots/a.png');
-});
-
 test('garbage collection removes only unreferenced screenshots', async function () {
   const adapter = memoryAdapter();
   const loaded = loadTradeJournal();
@@ -168,9 +150,37 @@ test('failed IndexedDB migration keeps the embedded screenshot', async function 
   const normalized = store.normalizeTrade(trade());
   store.state.trades = [normalized];
 
-  const changed = await store.migrateScreenshots();
+  let warnCalls = 0;
+  const originalWarn = console.warn;
+  console.warn = function () { warnCalls++; };
+  let changed;
+  try {
+    changed = await store.migrateScreenshots();
+  } finally {
+    console.warn = originalWarn;
+  }
+
   assert.equal(changed, 0);
   assert.equal(normalized.screenshot, PNG);
+  assert.ok(warnCalls >= 1, 'migration failure should emit a warning');
+});
+
+test('IndexedDB screenshots are disabled in the desktop app', function () {
+  const fakeIndexedDB = { open: function () { throw new Error('IndexedDB must not be opened on desktop'); } };
+  const web = loadTradeJournal(null, { indexedDB: fakeIndexedDB });
+  assert.equal(web.TJ.blobStore.available(), true);
+
+  const desktop = loadTradeJournal(null, { indexedDB: fakeIndexedDB, desktop: { name: 'desktop' } });
+  assert.equal(desktop.TJ.blobStore.available(), false);
+  assert.equal(desktop.TJ.blobStore.getDefault(), null);
+
+  const base = { id: 'trade-1', date: '2026-01-05', symbol: 'EURUSD', side: 'long', entry: 100, qty: 1 };
+  const idbTrade = desktop.TJ.store.normalizeTrade(Object.assign({}, base, { screenshot: 'idb:screenshots/abc' }));
+  const fileTrade = desktop.TJ.store.normalizeTrade(Object.assign({}, base, {
+    screenshot: 'file:screenshots/a.png'
+  }));
+  assert.equal(idbTrade.screenshot, '');
+  assert.equal(fileTrade.screenshot, 'file:screenshots/a.png');
 });
 
 test('web export embeds screenshots from IndexedDB', async function () {
