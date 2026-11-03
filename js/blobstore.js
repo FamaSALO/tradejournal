@@ -106,6 +106,25 @@
       });
     }
 
+    function supportsPersistence() {
+      return typeof adapter.persist === 'function' && typeof adapter.persisted === 'function';
+    }
+
+    function persisted() {
+      if (typeof adapter.persisted !== 'function') return Promise.resolve(null);
+      try {
+        return Promise.resolve(adapter.persisted()).then(function (value) {
+          if (value === true) return true;
+          if (value === false) return false;
+          return null;
+        }).catch(function () {
+          return null;
+        });
+      } catch (err) {
+        return Promise.resolve(null);
+      }
+    }
+
     function persist() {
       if (persistResult) return persistResult;
       if (typeof adapter.persist !== 'function') {
@@ -138,6 +157,8 @@
       remove: remove,
       list: list,
       gc: gc,
+      supportsPersistence: supportsPersistence,
+      persisted: persisted,
       persist: persist,
       estimate: estimate
     };
@@ -247,6 +268,21 @@
       });
     }
 
+    function persisted() {
+      if (!storage || typeof storage.persisted !== 'function') return Promise.resolve(null);
+      try {
+        return Promise.resolve(storage.persisted()).then(function (value) {
+          if (value === true) return true;
+          if (value === false) return false;
+          return null;
+        }).catch(function () {
+          return null;
+        });
+      } catch (err) {
+        return Promise.resolve(null);
+      }
+    }
+
     function persist() {
       if (!storage || typeof storage.persist !== 'function') return Promise.resolve(false);
       return Promise.resolve(storage.persist()).then(function (granted) {
@@ -268,6 +304,7 @@
       get: get,
       remove: remove,
       list: list,
+      persisted: persisted,
       persist: persist,
       estimate: estimate
     };

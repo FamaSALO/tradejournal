@@ -7,6 +7,7 @@
   // The storage key is intentionally kept as v1: existing web journals must be
   // discovered and migrated in place instead of being replaced with demo data.
   const KEY = 'tradejournal.v1';
+  const META_KEY = 'tradejournal.meta';
   const SCHEMA_VERSION = 4;
   const DEFAULT_ACCOUNT_NAME = 'Основной счёт';
   const MAX_EXITS = 50;
@@ -731,7 +732,12 @@
     }
     const blobs = getBlobStore();
     if (!blobs) return Promise.resolve(value);
-    return blobs.save(value).catch(function (err) {
+    return blobs.save(value).then(function (ref) {
+      // The browser prompt is only useful after a screenshot has actually
+      // landed in IndexedDB, so startup and migrations stay silent.
+      requestPersistentStorageOnce();
+      return ref;
+    }, function (err) {
       // Keep the journal usable when IndexedDB is unavailable (for example in
       // a private window); the caller stores the data URL as before.
       console.warn('TradeJournal: не удалось сохранить скриншот в IndexedDB', err);
@@ -828,6 +834,60 @@
   function requestPersistentStorage() {
     const blobs = getBlobStore();
     return blobs ? blobs.persist() : Promise.resolve(false);
+  }
+
+  let persistRequest = null;
+
+  function readPersistMeta() {
+    try {
+      const raw = localStorage.getItem(META_KEY);
+      if (!raw) return {};
+      const parsed = JSON.parse(raw);
+      return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch (err) {
+      return {};
+    }
+  }
+
+  function markPersistAsked() {
+    const meta = Object.assign({}, readPersistMeta(), { persistAsked: true });
+    try {
+      localStorage.setItem(META_KEY, JSON.stringify(meta));
+    } catch (err) {
+      // The flag only prevents repeated prompts; failing to store it leaves
+      // the journal itself untouched.
+    }
+  }
+
+  function supportsPersistentStorage() {
+    const blobs = getBlobStore();
+    return !!(blobs && typeof blobs.supportsPersistence === 'function' && blobs.supportsPersistence());
+  }
+
+  function isStoragePersisted() {
+    const blobs = getBlobStore();
+    if (!blobs || typeof blobs.persisted !== 'function') return Promise.resolve(null);
+    return blobs.persisted();
+  }
+
+  function requestPersistentStorageOnce() {
+    if (desktop) return Promise.resolve(false);
+    if (persistRequest) return persistRequest;
+    const blobs = getBlobStore();
+    if (!blobs || typeof blobs.supportsPersistence !== 'function' || !blobs.supportsPersistence()) {
+      return Promise.resolve(false);
+    }
+    persistRequest = blobs.persisted().then(function (persisted) {
+      const meta = readPersistMeta();
+      if (!U.shouldRequestPersistentStorage(meta, true, persisted)) return false;
+      markPersistAsked();
+      return blobs.persist().then(function (granted) {
+        return !!granted;
+      });
+    }).catch(function () {
+      return false;
+    });
+    return persistRequest;
   }
 
   function storageEstimate() {
@@ -1214,6 +1274,7 @@
 
   NS.store = {
     KEY: KEY,
+    META_KEY: META_KEY,
     SCHEMA_VERSION: SCHEMA_VERSION,
     DEFAULT_ACCOUNT_NAME: DEFAULT_ACCOUNT_NAME,
     DEFAULT_SETTINGS: DEFAULT_SETTINGS,
@@ -1245,6 +1306,9 @@
     migrateScreenshots: migrateScreenshots,
     gcScreenshots: gcScreenshots,
     requestPersistentStorage: requestPersistentStorage,
+    requestPersistentStorageOnce: requestPersistentStorageOnce,
+    supportsPersistentStorage: supportsPersistentStorage,
+    isStoragePersisted: isStoragePersisted,
     storageEstimate: storageEstimate,
     exportSnapshot: exportSnapshot,
     tradeExits: tradeExits,

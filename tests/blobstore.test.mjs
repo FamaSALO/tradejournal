@@ -6,7 +6,7 @@ const PNG = 'data:image/png;base64,AAAA';
 
 function memoryAdapter() {
   const data = new Map();
-  const calls = { put: 0, get: 0, remove: 0, persist: 0, estimate: 0 };
+  const calls = { put: 0, get: 0, remove: 0, persist: 0, persisted: 0, estimate: 0 };
   return {
     data: data,
     calls: calls,
@@ -32,6 +32,10 @@ function memoryAdapter() {
     persist: function () {
       calls.persist++;
       return Promise.resolve(true);
+    },
+    persisted: function () {
+      calls.persisted++;
+      return Promise.resolve(false);
     },
     estimate: function () {
       calls.estimate++;
@@ -124,6 +128,59 @@ test('persistent storage and estimate are exposed as promises', async function (
   assert.equal(estimate.usage, 2048);
   assert.equal(estimate.quota, 4096);
   assert.equal(adapter.calls.estimate, 1);
+});
+
+test('persistent storage is requested once after the first screenshot write', async function () {
+  const adapter = memoryAdapter();
+  const loaded = createStore(adapter);
+  const store = loaded.TJ.store;
+  loaded.storage.setItem('tradejournal.meta', JSON.stringify({
+    lastExportAt: '2026-01-01T00:00:00.000Z',
+    remindLaterUntil: '2026-02-01T00:00:00.000Z'
+  }));
+
+  const ref = await store.saveScreenshot(PNG);
+  assert.ok(ref.startsWith('idb:screenshots/'));
+  await store.requestPersistentStorageOnce();
+
+  const meta = JSON.parse(loaded.storage.getItem('tradejournal.meta'));
+  assert.equal(meta.persistAsked, true);
+  assert.equal(meta.lastExportAt, '2026-01-01T00:00:00.000Z');
+  assert.equal(meta.remindLaterUntil, '2026-02-01T00:00:00.000Z');
+  assert.equal(adapter.calls.persisted, 1);
+  assert.equal(adapter.calls.persist, 1);
+
+  await store.saveScreenshot(PNG);
+  await store.requestPersistentStorageOnce();
+  assert.equal(adapter.calls.persisted, 1);
+  assert.equal(adapter.calls.persist, 1);
+});
+
+test('does not ask for persistent storage when the browser already persists data', async function () {
+  const adapter = memoryAdapter();
+  adapter.persisted = function () {
+    adapter.calls.persisted++;
+    return Promise.resolve(true);
+  };
+  const loaded = createStore(adapter);
+  const store = loaded.TJ.store;
+
+  await store.saveScreenshot(PNG);
+  assert.equal(await store.requestPersistentStorageOnce(), false);
+  assert.equal(adapter.calls.persist, 0);
+  assert.equal(loaded.storage.getItem('tradejournal.meta'), null);
+});
+
+test('does not ask for persistent storage when the API is incomplete', async function () {
+  const adapter = memoryAdapter();
+  adapter.persisted = undefined;
+  const loaded = createStore(adapter);
+  const store = loaded.TJ.store;
+
+  await store.saveScreenshot(PNG);
+  assert.equal(await store.requestPersistentStorageOnce(), false);
+  assert.equal(adapter.calls.persist, 0);
+  assert.equal(loaded.storage.getItem('tradejournal.meta'), null);
 });
 
 test('web migration moves embedded screenshots to IndexedDB', async function () {

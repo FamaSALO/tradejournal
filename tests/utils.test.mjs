@@ -106,6 +106,16 @@ test('backup reminder respects remindLaterUntil', function () {
   }, now, 1), true);
 });
 
+test('persistent storage is requested once and only when the API reports no persistence', function () {
+  assert.equal(U.shouldRequestPersistentStorage({}, true, false), true);
+  assert.equal(U.shouldRequestPersistentStorage(null, true, false), true);
+  assert.equal(U.shouldRequestPersistentStorage({}, false, false), false);
+  assert.equal(U.shouldRequestPersistentStorage({ persistAsked: true }, true, false), false);
+  assert.equal(U.shouldRequestPersistentStorage({}, true, true), false);
+  assert.equal(U.shouldRequestPersistentStorage({}, true, null), false);
+  assert.equal(U.shouldRequestPersistentStorage({}, true, undefined), false);
+});
+
 test('Moscow and Almaty do not observe DST', function () {
   const moscowWinter = roundTrip('2026-01-15', '12:00', 'Europe/Moscow');
   const moscowSummer = roundTrip('2026-07-15', '12:00', 'Europe/Moscow');

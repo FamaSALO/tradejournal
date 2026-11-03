@@ -506,6 +506,12 @@
     return now - lastExport >= BACKUP_REMIND_MS;
   }
 
+  function shouldRequestPersistentStorage(meta, supported, persisted) {
+    if (!supported) return false;
+    if (meta && meta.persistAsked) return false;
+    return persisted === false;
+  }
+
   function truncate(str, length) {
     const text = String(str || '');
     return text.length > length ? text.slice(0, length - 1).trim() + '…' : text;
@@ -551,6 +557,7 @@
     bytesToBase64: bytesToBase64,
     bytes: bytes,
     shouldRemindBackup: shouldRemindBackup,
+    shouldRequestPersistentStorage: shouldRequestPersistentStorage,
     BACKUP_REMIND_MS: BACKUP_REMIND_MS,
     truncate: truncate
   };

@@ -6,7 +6,7 @@
   const desktop = window.tradeJournalDesktop || null;
   const APP_VERSION = '2.4.0';
   const DRAFT_PREFIX = 'tradejournal.draft.v1.';
-  const META_KEY = 'tradejournal.meta';
+  const META_KEY = store.META_KEY;
   // Drafts live in localStorage even on desktop, so a full screenshot data URL
   // must not be duplicated there. Keep the draft small; the screenshot stays in
   // the trade itself or in a file reference on desktop.
@@ -70,7 +70,6 @@
     storageHealthData: null,
     storageHealthScanning: false,
     storageHealthCleaning: false,
-    storagePersisted: false,
     backupReminderShown: false
   };
 
@@ -95,9 +94,6 @@
       if (!demoOk) toast('Не удалось сохранить демо-данные. Проверьте папку данных.', 'error');
     }
     if (!desktop) {
-      store.requestPersistentStorage().then(function (granted) {
-        state.storagePersisted = !!granted;
-      });
       store.gcScreenshots();
     }
     applyCurrency();
@@ -1839,17 +1835,20 @@
     if (!note) return;
     note.hidden = false;
     note.textContent = 'Скриншоты хранятся в IndexedDB. Считаем размер хранилища…';
-    store.storageEstimate().then(function (data) {
+    Promise.all([store.storageEstimate(), store.isStoragePersisted()]).then(function (results) {
       if (!note.isConnected) return;
+      const data = results[0];
+      const persisted = results[1] === true;
       if (!data) {
-        note.textContent = 'Скриншоты хранятся в IndexedDB. Браузер не сообщает точный размер хранилища.';
+        note.textContent = 'Скриншоты хранятся в IndexedDB. Браузер не сообщает точный размер хранилища.' +
+          (persisted ? ' Постоянное хранилище включено.' : '');
         return;
       }
       renderStorageMeter(data.usage, data.quota);
       const pct = data.usage / data.quota * 100;
       note.textContent = 'Оценка браузера: ' + U.bytes(data.usage) + ' из ' + U.bytes(data.quota) +
         ' (' + pct.toFixed(1).replace('.', ',') + '%). Скриншоты хранятся в IndexedDB.' +
-        (state.storagePersisted ? ' Постоянное хранилище включено.' : '');
+        (persisted ? ' Постоянное хранилище включено.' : '');
     });
   }
 
