@@ -212,6 +212,11 @@ test('rejects an archive without journal.json', async function () {
   await assert.rejects(function () { return zip.readJournal(archiveBuffer(archive)); }, /journal\.json/);
 });
 
+test('rejects a file without the ZIP signature', async function () {
+  const bytes = new TextEncoder().encode('{"accounts":[]} padded to look long enough');
+  await assert.rejects(function () { return zip.read(archiveBuffer(bytes)); }, /сигнатура/);
+});
+
 test('rejects a truncated archive', async function () {
   const archive = buildZip([{ name: 'journal.json', data: '{"accounts":[]}' }]);
   const truncated = archive.slice(0, archive.length - 10);

@@ -199,6 +199,11 @@
     if (bytes.length < 22) {
       throw new Error('Файл слишком короткий для ZIP-архива.');
     }
+    var isLocalHeader = bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] === 0x03 && bytes[3] === 0x04;
+    var isEmptyArchive = bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] === 0x05 && bytes[3] === 0x06;
+    if (!isLocalHeader && !isEmptyArchive) {
+      throw new Error('Файл не является ZIP-архивом: неверная сигнатура.');
+    }
     var view = new DataView(arrayBuffer);
     var eocd = findEocd(view, bytes.length);
     if (eocd < 0) {
