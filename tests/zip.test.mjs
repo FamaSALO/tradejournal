@@ -101,6 +101,32 @@ function archiveBuffer(bytes) {
   return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
 }
 
+function countingDecompressionStream(counter) {
+  return class CountingDecompressionStream {
+    constructor(format) {
+      const inner = new globalThis.DecompressionStream(format);
+      const reader = inner.readable.getReader();
+      this.writable = inner.writable;
+      this.readable = new globalThis.ReadableStream({
+        pull: async function (controller) {
+          const step = await reader.read();
+          if (step.done) {
+            controller.close();
+            return;
+          }
+          counter.chunks++;
+          counter.bytes += step.value.byteLength;
+          controller.enqueue(step.value);
+        },
+        cancel: function (reason) {
+          counter.cancelled = true;
+          return reader.cancel(reason);
+        }
+      });
+    }
+  };
+}
+
 test('computes standard CRC32 values', function () {
   assert.equal(zip.crc32(new TextEncoder().encode('123456789')), 0xcbf43926);
   assert.equal(zip.crc32(new TextEncoder().encode('hello')), 0x3610a686);
@@ -186,6 +212,30 @@ test('round-trips the ZIP export into analyzeImport without losses', async funct
   assert.equal(stats.tradesDropped, 0);
   assert.equal(stats.screenshotsAccepted, 1);
   assert.equal(stats.screenshotsDropped, 0);
+});
+
+test('rejects a deflate entry that exceeds its declared size before draining the stream', async function () {
+  const payload = new Uint8Array(2 * 1024 * 1024);
+  payload.fill(0x41);
+  const archive = buildZip([{
+    name: 'journal.json',
+    data: payload,
+    method: 8,
+    uncompressedSize: 10
+  }]);
+  const counter = { chunks: 0, bytes: 0, cancelled: false };
+  const loaded = loadTradeJournal(null, {
+    DecompressionStream: countingDecompressionStream(counter)
+  });
+
+  await assert.rejects(function () {
+    return loaded.TJ.zip.read(archiveBuffer(archive));
+  }, /не совпадает с заявленным/);
+
+  assert.equal(counter.cancelled, true, 'the decompression stream must be cancelled');
+  assert.ok(counter.chunks <= 2, 'only the first chunks may be read, got ' + counter.chunks);
+  assert.ok(counter.bytes < payload.length,
+    'must reject before accumulating the full payload, read ' + counter.bytes + ' bytes');
 });
 
 test('rejects a corrupted CRC', async function () {

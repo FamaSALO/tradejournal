@@ -152,6 +152,21 @@
     return new Error('Некорректное имя файла в архиве: ' + JSON.stringify(name) + '.');
   }
 
+  function zipLimitError(message) {
+    var error = new Error(message);
+    error.zipLimit = true;
+    return error;
+  }
+
+  async function cancelReader(reader, reason) {
+    try {
+      await reader.cancel(reason);
+    } catch (err) {
+      // A stream that has already errored can reject cancellation; the import
+      // is aborted either way.
+    }
+  }
+
   function findEocd(view, length) {
     var min = Math.max(0, length - 22 - 0xFFFF);
     for (var i = length - 22; i >= min; i--) {
@@ -183,12 +198,55 @@
     return true;
   }
 
-  async function inflateRaw(data) {
+  async function inflateRaw(data, name, uncompressedSize, totalBefore) {
     if (typeof DecompressionStream !== 'function') {
       throw new Error('Браузер не поддерживает распаковку Deflate.');
     }
     var stream = new Blob([data]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
-    return new Uint8Array(await new Response(stream).arrayBuffer());
+    var reader = stream.getReader();
+    var chunks = [];
+    var received = 0;
+    var totalLimit = MAX_TOTAL_SIZE - totalBefore;
+    try {
+      for (;;) {
+        var step = await reader.read();
+        if (step.done) break;
+        var value = step.value;
+        if (!value || typeof value.byteLength !== 'number') {
+          throw new Error('Не удалось распаковать файл ' + JSON.stringify(name) + ': данные повреждены.');
+        }
+        var chunk = typeof value.length === 'number' ? value : new Uint8Array(value);
+        received += chunk.length;
+        if (received > uncompressedSize) {
+          await cancelReader(reader, 'declared size exceeded');
+          throw zipLimitError('Размер распакованного файла ' + JSON.stringify(name) + ' не совпадает с заявленным.');
+        }
+        if (received > MAX_ENTRY_SIZE) {
+          await cancelReader(reader, 'entry size limit exceeded');
+          throw zipLimitError('Файл ' + JSON.stringify(name) + ' слишком большой для импорта.');
+        }
+        if (received > totalLimit) {
+          await cancelReader(reader, 'total size limit exceeded');
+          throw zipLimitError('Общий распакованный размер превышает лимит ' +
+            (MAX_TOTAL_SIZE / 1024 / 1024) + ' МБ.');
+        }
+        chunks.push(chunk);
+      }
+    } finally {
+      try {
+        reader.releaseLock();
+      } catch (err) {
+        // The reader is already released when the stream was cancelled.
+      }
+    }
+
+    var output = new Uint8Array(received);
+    var offset = 0;
+    for (var i = 0; i < chunks.length; i++) {
+      output.set(chunks[i], offset);
+      offset += chunks[i].length;
+    }
+    return output;
   }
 
   async function read(arrayBuffer) {
@@ -234,6 +292,7 @@
     var entries = [];
     var offset = cdOffset;
     var totalUncompressed = 0;
+    var totalBefore;
 
     for (var index = 0; index < totalRecords; index++) {
       if (offset + 46 > bytes.length || view.getUint32(offset, true) !== 0x02014b50) {
@@ -270,6 +329,7 @@
       if (compressedSize > MAX_ENTRY_SIZE || uncompressedSize > MAX_ENTRY_SIZE) {
         throw new Error('Файл ' + JSON.stringify(name) + ' слишком большой для импорта.');
       }
+      totalBefore = totalUncompressed;
       totalUncompressed += uncompressedSize;
       if (totalUncompressed > MAX_TOTAL_SIZE) {
         throw new Error('Общий распакованный размер превышает лимит ' + (MAX_TOTAL_SIZE / 1024 / 1024) + ' МБ.');
@@ -294,9 +354,9 @@
         data = raw;
       } else {
         try {
-          data = await inflateRaw(raw);
+          data = await inflateRaw(raw, name, uncompressedSize, totalBefore);
         } catch (err) {
-          if (err && err.message && err.message.indexOf('Браузер не поддерживает') === 0) throw err;
+          if (err && (err.zipLimit || (err.message && err.message.indexOf('Браузер не поддерживает') === 0))) throw err;
           throw new Error('Не удалось распаковать файл ' + JSON.stringify(name) + ': данные повреждены.', { cause: err });
         }
         if (data.length !== uncompressedSize) {

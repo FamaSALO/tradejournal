@@ -28,7 +28,7 @@ export function loadTradeJournal(extraFiles, options) {
     URL: URL,
     Blob: Blob,
     Response: Response,
-    DecompressionStream: DecompressionStream,
+    DecompressionStream: options.DecompressionStream || DecompressionStream,
     crypto: globalThis.crypto,
     btoa: globalThis.btoa,
     atob: globalThis.atob,
