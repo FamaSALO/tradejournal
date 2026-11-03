@@ -7,6 +7,7 @@
   // The storage key is intentionally kept as v1: existing web journals must be
   // discovered and migrated in place instead of being replaced with demo data.
   const KEY = 'tradejournal.v1';
+  const META_KEY = 'tradejournal.meta';
   const SCHEMA_VERSION = 4;
   const DEFAULT_ACCOUNT_NAME = 'Основной счёт';
   const MAX_EXITS = 50;
@@ -19,6 +20,10 @@
   const MAX_SCREENSHOT_LENGTH = desktop ? 8000000 : 3000000;
   const SAFE_SCREENSHOT_RE = /^data:image\/(?:png|jpe?g|webp);base64,[a-z0-9+/=]+$/i;
   const SAFE_SCREENSHOT_FILE_RE = /^file:screenshots\/[a-z0-9_-]{1,80}\.(?:jpe?g|png|webp)$/i;
+  const IDB_SCREENSHOT_RE = /^idb:screenshots\/[a-z0-9-]{1,80}$/i;
+  // Refs used earlier in this session stay protected so that undo can restore
+  // a deleted or replaced screenshot. They are collected on the next launch.
+  const sessionScreenshotRefs = new Set();
   const MAX_AVATAR_LENGTH = 2000000;
   const SAFE_AVATAR_RE = SAFE_SCREENSHOT_RE;
   const DEFAULT_SETTINGS = {
@@ -168,7 +173,7 @@
     };
   }
 
-  function allocateExitFees(exits, totalFees) {
+  function allocateExitFees(exits, totalFees, positionQty) {
     if (!exits.length) return;
     const total = Math.max(0, totalFees || 0);
     const qtySum = exits.reduce(function (sum, exit) { return sum + exit.qty; }, 0);
@@ -176,13 +181,19 @@
       exits.forEach(function (exit) { exit.fees = 0; });
       return;
     }
+    const quantity = U.parseNum(positionQty);
+    const position = quantity !== null && quantity > 0 ? quantity : qtySum;
+    const fullyClosed = qtySum >= position - QTY_EPSILON;
+    // Over-closing is normalised by the actual exits sum. A partial position
+    // keeps the uncharged fee share until another exit is added.
+    const denominator = Math.max(position, qtySum);
     let assigned = 0;
     exits.forEach(function (exit, index) {
-      if (index === exits.length - 1) {
+      if (fullyClosed && index === exits.length - 1) {
         exit.fees = Math.round(Math.max(0, total - assigned) * 1e8) / 1e8;
         return;
       }
-      const share = Math.round((total * exit.qty / qtySum) * 1e8) / 1e8;
+      const share = Math.round((total * exit.qty / denominator) * 1e8) / 1e8;
       exit.fees = share;
       assigned += share;
     });
@@ -235,7 +246,7 @@
       }
     }
 
-    allocateExitFees(exits, trade.fees);
+    allocateExitFees(exits, trade.fees, trade.qty);
     return exits;
   }
 
@@ -274,6 +285,8 @@
     let shot = '';
     if (typeof raw.screenshot === 'string') {
       if (SAFE_SCREENSHOT_FILE_RE.test(raw.screenshot)) {
+        shot = raw.screenshot;
+      } else if (!desktop && IDB_SCREENSHOT_RE.test(raw.screenshot)) {
         shot = raw.screenshot;
       } else if (raw.screenshot.length <= MAX_SCREENSHOT_LENGTH && SAFE_SCREENSHOT_RE.test(raw.screenshot)) {
         shot = raw.screenshot;
@@ -433,6 +446,7 @@
       screenshotsTooLarge: 0,
       screenshotsInvalid: 0,
       fileScreenshots: 0,
+      idbScreenshots: 0,
       invalidDates: 0,
       missingSymbols: 0,
       tradesDropped: 0,
@@ -491,6 +505,9 @@
         if (SAFE_SCREENSHOT_FILE_RE.test(shot)) {
           stats.fileScreenshots++;
           stats.screenshotsAccepted++;
+        } else if (!desktop && IDB_SCREENSHOT_RE.test(shot)) {
+          stats.idbScreenshots++;
+          stats.screenshotsAccepted++;
         } else if (shot.length <= MAX_SCREENSHOT_LENGTH && SAFE_SCREENSHOT_RE.test(shot)) {
           stats.screenshotsAccepted++;
         } else {
@@ -516,7 +533,7 @@
   function normalizeData(raw, options) {
     raw = raw || {};
     const isV2 = Array.isArray(raw.accounts);
-    let accounts = [];
+    let accounts;
 
     if (isV2) {
       accounts = raw.accounts.map(function (account, index) {
@@ -607,16 +624,23 @@
     try {
       localStorage.setItem(KEY, raw);
       pendingMigration = false;
-      return Promise.resolve(true);
+      return gcScreenshots().then(function () {
+        return true;
+      }, function () {
+        return true;
+      });
     } catch (err) {
       console.warn('TradeJournal: не удалось сохранить данные', err);
       return Promise.resolve(false);
     }
   }
 
-  function replaceData(raw, options) {
+  async function replaceData(raw, options) {
     if (!isJournalData(raw)) return false;
     root = normalizeData(raw, options);
+    // Move embedded screenshots out of the journal before the first save so a
+    // large import does not hit the localStorage quota.
+    if (!desktop) await migrateScreenshotData();
     return save();
   }
 
@@ -689,15 +713,35 @@
     return true;
   }
 
+  function getBlobStore() {
+    if (desktop || !NS.blobStore || typeof NS.blobStore.getDefault !== 'function') return null;
+    return NS.blobStore.getDefault();
+  }
+
   function saveScreenshotData(dataUrl) {
-    if (!desktop) return Promise.resolve(dataUrl);
-    if (!SAFE_SCREENSHOT_RE.test(String(dataUrl || ''))) {
+    const value = String(dataUrl || '');
+    if (!SAFE_SCREENSHOT_RE.test(value)) {
       return Promise.reject(new Error('Некорректное изображение скриншота.'));
     }
-    return desktop.saveScreenshot(U.uid(), dataUrl).then(function (result) {
-      if (result && result.reference) return result.reference;
-      if (typeof result === 'string') return result;
-      throw new Error('Не удалось сохранить скриншот.');
+    if (desktop) {
+      return desktop.saveScreenshot(U.uid(), value).then(function (result) {
+        if (result && result.reference) return result.reference;
+        if (typeof result === 'string') return result;
+        throw new Error('Не удалось сохранить скриншот.');
+      });
+    }
+    const blobs = getBlobStore();
+    if (!blobs) return Promise.resolve(value);
+    return blobs.save(value).then(function (ref) {
+      // The browser prompt is only useful after a screenshot has actually
+      // landed in IndexedDB, so startup and migrations stay silent.
+      requestPersistentStorageOnce();
+      return ref;
+    }, function (err) {
+      // Keep the journal usable when IndexedDB is unavailable (for example in
+      // a private window); the caller stores the data URL as before.
+      console.warn('TradeJournal: не удалось сохранить скриншот в IndexedDB', err);
+      return value;
     });
   }
 
@@ -712,43 +756,169 @@
         return '';
       });
     }
+    if (!desktop && IDB_SCREENSHOT_RE.test(value)) {
+      const blobs = getBlobStore();
+      if (!blobs) return Promise.resolve('');
+      return blobs.load(value);
+    }
     return Promise.resolve('');
   }
 
-  async function migrateScreenshots() {
-    if (!desktop) return 0;
+  async function migrateScreenshotData() {
     let changed = 0;
+    if (desktop) {
+      for (const account of root.accounts) {
+        for (const trade of account.trades) {
+          if (!SAFE_SCREENSHOT_RE.test(trade.screenshot || '')) continue;
+          try {
+            const result = await desktop.saveScreenshot(U.uid(), trade.screenshot);
+            const reference = result && result.reference ? result.reference : '';
+            if (reference) {
+              trade.screenshot = reference;
+              changed++;
+            }
+          } catch (err) {
+            console.warn('TradeJournal: не удалось вынести скриншот в файл', err);
+          }
+        }
+      }
+      return changed;
+    }
+
+    const blobs = getBlobStore();
+    if (!blobs) return 0;
     for (const account of root.accounts) {
       for (const trade of account.trades) {
         if (!SAFE_SCREENSHOT_RE.test(trade.screenshot || '')) continue;
         try {
-          const result = await desktop.saveScreenshot(U.uid(), trade.screenshot);
-          const reference = result && result.reference ? result.reference : '';
-          if (reference) {
-            trade.screenshot = reference;
-            changed++;
-          }
+          // Persist to IndexedDB first, verify the value round-trips, and
+          // only then replace the inline reference and save the journal.
+          // Any failure leaves the original inline data URL intact.
+          var ref = await blobs.save(trade.screenshot);
+          var roundtrip = await blobs.load(ref);
+          if (!roundtrip) throw new Error('Round-trip check failed');
+          trade.screenshot = ref;
+          changed++;
         } catch (err) {
-          console.warn('TradeJournal: не удалось вынести скриншот в файл', err);
+          console.warn('TradeJournal: не удалось перенести скриншот в IndexedDB', err);
         }
       }
     }
+    return changed;
+  }
+
+  async function migrateScreenshots() {
+    const changed = await migrateScreenshotData();
     if (changed) await save();
     return changed;
   }
 
+  function screenshotRefs() {
+    const refs = [];
+    root.accounts.forEach(function (account) {
+      account.trades.forEach(function (trade) {
+        if (trade && IDB_SCREENSHOT_RE.test(trade.screenshot || '')) refs.push(trade.screenshot);
+      });
+    });
+    return refs;
+  }
+
+  async function gcScreenshots() {
+    const blobs = getBlobStore();
+    if (!blobs) return { deleted: 0, bytes: 0 };
+    const refs = screenshotRefs();
+    refs.forEach(function (ref) { sessionScreenshotRefs.add(ref); });
+    return blobs.gc(Array.from(sessionScreenshotRefs));
+  }
+
+  function requestPersistentStorage() {
+    const blobs = getBlobStore();
+    return blobs ? blobs.persist() : Promise.resolve(false);
+  }
+
+  let persistRequest = null;
+
+  function readPersistMeta() {
+    try {
+      const raw = localStorage.getItem(META_KEY);
+      if (!raw) return {};
+      const parsed = JSON.parse(raw);
+      return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch (err) {
+      return {};
+    }
+  }
+
+  function markPersistAsked() {
+    const meta = Object.assign({}, readPersistMeta(), { persistAsked: true });
+    try {
+      localStorage.setItem(META_KEY, JSON.stringify(meta));
+    } catch (err) {
+      // The flag only prevents repeated prompts; failing to store it leaves
+      // the journal itself untouched.
+    }
+  }
+
+  function supportsPersistentStorage() {
+    const blobs = getBlobStore();
+    return !!(blobs && typeof blobs.supportsPersistence === 'function' && blobs.supportsPersistence());
+  }
+
+  function isStoragePersisted() {
+    const blobs = getBlobStore();
+    if (!blobs || typeof blobs.persisted !== 'function') return Promise.resolve(null);
+    return blobs.persisted();
+  }
+
+  function requestPersistentStorageOnce() {
+    if (desktop) return Promise.resolve(false);
+    if (persistRequest) return persistRequest;
+    const blobs = getBlobStore();
+    if (!blobs || typeof blobs.supportsPersistence !== 'function' || !blobs.supportsPersistence()) {
+      return Promise.resolve(false);
+    }
+    persistRequest = blobs.persisted().then(function (persisted) {
+      const meta = readPersistMeta();
+      if (!U.shouldRequestPersistentStorage(meta, true, persisted)) return false;
+      markPersistAsked();
+      return blobs.persist().then(function (granted) {
+        return !!granted;
+      });
+    }).catch(function () {
+      return false;
+    });
+    return persistRequest;
+  }
+
+  function storageEstimate() {
+    const blobs = getBlobStore();
+    return blobs ? blobs.estimate() : Promise.resolve(null);
+  }
+
   async function exportSnapshot() {
     const snapshot = JSON.parse(JSON.stringify(root));
-    if (!desktop) return snapshot;
+    if (desktop) {
+      for (const account of snapshot.accounts) {
+        for (const trade of account.trades) {
+          if (!SAFE_SCREENSHOT_FILE_RE.test(trade.screenshot || '')) continue;
+          try {
+            const dataUrl = await desktop.loadScreenshot(trade.screenshot);
+            if (dataUrl) trade.screenshot = dataUrl;
+          } catch (err) {
+            console.warn('TradeJournal: не удалось вложить скриншот в экспорт', err);
+          }
+        }
+      }
+      return snapshot;
+    }
+
+    const blobs = getBlobStore();
+    if (!blobs) return snapshot;
     for (const account of snapshot.accounts) {
       for (const trade of account.trades) {
-        if (!SAFE_SCREENSHOT_FILE_RE.test(trade.screenshot || '')) continue;
-        try {
-          const dataUrl = await desktop.loadScreenshot(trade.screenshot);
-          if (dataUrl) trade.screenshot = dataUrl;
-        } catch (err) {
-          console.warn('TradeJournal: не удалось вложить скриншот в экспорт', err);
-        }
+        if (!IDB_SCREENSHOT_RE.test(trade.screenshot || '')) continue;
+        const dataUrl = await blobs.load(trade.screenshot);
+        if (dataUrl) trade.screenshot = dataUrl;
       }
     }
     return snapshot;
@@ -820,6 +990,80 @@
     return pnl;
   }
 
+  // Daily views are based on the day a position was exited. A trade can
+  // contribute to several days when it is scaled out, while the sum of its
+  // events always matches tradePnl().
+  function tradePnlEvents(trade) {
+    if (!trade) return [];
+    const entry = U.parseNum(trade.entry);
+    const quantity = U.parseNum(trade.qty);
+    const exits = tradeExits(trade);
+    if (entry === null || quantity === null || !exits.length) return [];
+    const dir = trade.side === 'short' ? -1 : 1;
+    const multiplier = normalizeMultiplier(trade.multiplier);
+    const events = [];
+    exits.forEach(function (exit) {
+      const exitQty = U.parseNum(exit.qty);
+      const exitPrice = U.parseNum(exit.price);
+      if (exitQty === null || exitQty <= 0 || exitPrice === null) return;
+      const fees = Math.max(0, U.parseNum(exit.fees) || 0);
+      events.push({
+        date: exit.date || trade.date || '',
+        pnl: (exitPrice - entry) * exitQty * multiplier * dir - fees,
+        exitId: exit.id ? String(exit.id) : ''
+      });
+    });
+    return events;
+  }
+
+  // Counts distinct trades that were opened or exited on each day.
+  function dayPnlMap(trades) {
+    const map = new Map();
+    (trades || []).forEach(function (trade) {
+      if (!trade) return;
+      const days = new Set();
+      if (trade.date) days.add(trade.date);
+      tradePnlEvents(trade).forEach(function (event) {
+        if (!event.date) return;
+        days.add(event.date);
+        let item = map.get(event.date);
+        if (!item) { item = { pnl: 0, count: 0 }; map.set(event.date, item); }
+        item.pnl += event.pnl;
+      });
+      days.forEach(function (day) {
+        let item = map.get(day);
+        if (!item) { item = { pnl: 0, count: 0 }; map.set(day, item); }
+        item.count++;
+      });
+    });
+    return map;
+  }
+
+  // Stable exit-event order used by the equity curve and drawdown.
+  function pnlEventRows(trades) {
+    const rows = [];
+    (trades || []).forEach(function (trade) {
+      tradePnlEvents(trade).forEach(function (event, index) {
+        rows.push({
+          date: event.date || trade.date || '',
+          time: trade.time || '00:00',
+          tradeId: trade.id || '',
+          exitId: event.exitId || '',
+          index: index,
+          pnl: event.pnl
+        });
+      });
+    });
+    rows.sort(function (a, b) {
+      return (a.date || '').localeCompare(b.date || '') ||
+        (a.time || '').localeCompare(b.time || '') ||
+        (a.tradeId || '').localeCompare(b.tradeId || '') ||
+        (a.exitId || '').localeCompare(b.exitId || '') ||
+        a.index - b.index;
+    });
+    return rows;
+  }
+
   function hasRealized(trade) {
     return tradePnl(trade) !== null;
   }
@@ -834,7 +1078,8 @@
     if (!trade) return null;
     const entry = U.parseNum(trade.entry);
     const stop = U.parseNum(trade.stop);
-    const quantity = U.parseNum(trade.qty);
+    let quantity = U.parseNum(trade.qty);
+    if (isPartial(trade)) quantity = exitedQty(trade);
     if (entry === null || stop === null || quantity === null) return null;
     const risk = Math.abs(entry - stop) * quantity * normalizeMultiplier(trade.multiplier);
     return risk > 0 ? risk : null;
@@ -925,15 +1170,14 @@
     const base = U.parseNum(startBalance) || 0;
 
     let equity = 0, peak = 0, maxDD = 0, maxDDPct = 0;
-    rows.forEach(function (row) {
-      equity += row.pnl;
+    pnlEventRows(realized).forEach(function (event) {
+      equity += event.pnl;
       if (equity > peak) peak = equity;
       const dd = peak - equity;
-      if (dd > maxDD) {
-        maxDD = dd;
-        const peakBalance = base + peak;
-        maxDDPct = peakBalance > 0 ? (dd / peakBalance) * 100 : 0;
-      }
+      if (dd > maxDD) maxDD = dd;
+      const peakBalance = base + peak;
+      const ddPct = peakBalance > 0 ? (dd / peakBalance) * 100 : 0;
+      if (ddPct > maxDDPct) maxDDPct = ddPct;
     });
 
     let maxWinStreak = 0, maxLossStreak = 0;
@@ -1030,6 +1274,7 @@
 
   NS.store = {
     KEY: KEY,
+    META_KEY: META_KEY,
     SCHEMA_VERSION: SCHEMA_VERSION,
     DEFAULT_ACCOUNT_NAME: DEFAULT_ACCOUNT_NAME,
     DEFAULT_SETTINGS: DEFAULT_SETTINGS,
@@ -1059,15 +1304,24 @@
     saveScreenshot: saveScreenshotData,
     screenshotSource: screenshotSource,
     migrateScreenshots: migrateScreenshots,
+    gcScreenshots: gcScreenshots,
+    requestPersistentStorage: requestPersistentStorage,
+    requestPersistentStorageOnce: requestPersistentStorageOnce,
+    supportsPersistentStorage: supportsPersistentStorage,
+    isStoragePersisted: isStoragePersisted,
+    storageEstimate: storageEstimate,
     exportSnapshot: exportSnapshot,
     tradeExits: tradeExits,
     exitedQty: exitedQty,
     remainingQty: remainingQty,
     isClosed: isClosed,
     isPartial: isPartial,
+    allocateExitFees: allocateExitFees,
     hasRealized: hasRealized,
     weightedExit: weightedExit,
     tradePnl: tradePnl,
+    tradePnlEvents: tradePnlEvents,
+    dayPnlMap: dayPnlMap,
     tradeFees: tradeFees,
     tradeRisk: tradeRisk,
     openRisk: openRisk,

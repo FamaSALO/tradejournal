@@ -72,7 +72,7 @@
     const name = value.trim();
     if (!name) return false;
     if (zoneValidity.has(name)) return zoneValidity.get(name);
-    let valid = false;
+    let valid;
     try {
       new Intl.DateTimeFormat('en-US', { timeZone: name }).format(new Date());
       valid = true;
@@ -493,6 +493,25 @@
     return Math.round(value) + ' Б';
   }
 
+  const BACKUP_REMIND_MS = 7 * 24 * 60 * 60 * 1000;
+
+  function shouldRemindBackup(meta, nowMs, tradesCount) {
+    const count = Number(tradesCount);
+    if (!Number.isFinite(count) || count <= 0) return false;
+    const now = Number.isFinite(nowMs) ? nowMs : Date.now();
+    const remindLater = Date.parse(meta && meta.remindLaterUntil);
+    if (Number.isFinite(remindLater) && remindLater > now) return false;
+    const lastExport = Date.parse(meta && meta.lastExportAt);
+    if (!Number.isFinite(lastExport)) return true;
+    return now - lastExport >= BACKUP_REMIND_MS;
+  }
+
+  function shouldRequestPersistentStorage(meta, supported, persisted) {
+    if (!supported) return false;
+    if (meta && meta.persistAsked) return false;
+    return persisted === false;
+  }
+
   function truncate(str, length) {
     const text = String(str || '');
     return text.length > length ? text.slice(0, length - 1).trim() + '…' : text;
@@ -537,6 +556,9 @@
     downloadBytes: downloadBytes,
     bytesToBase64: bytesToBase64,
     bytes: bytes,
+    shouldRemindBackup: shouldRemindBackup,
+    shouldRequestPersistentStorage: shouldRequestPersistentStorage,
+    BACKUP_REMIND_MS: BACKUP_REMIND_MS,
     truncate: truncate
   };
 

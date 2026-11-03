@@ -4,8 +4,9 @@
   const U = NS.utils;
   const store = NS.store;
   const desktop = window.tradeJournalDesktop || null;
-  const APP_VERSION = '2.3.0';
+  const APP_VERSION = '2.4.0';
   const DRAFT_PREFIX = 'tradejournal.draft.v1.';
+  const META_KEY = store.META_KEY;
   // Drafts live in localStorage even on desktop, so a full screenshot data URL
   // must not be duplicated there. Keep the draft small; the screenshot stays in
   // the trade itself or in a file reference on desktop.
@@ -68,7 +69,8 @@
     lastFocus: null,
     storageHealthData: null,
     storageHealthScanning: false,
-    storageHealthCleaning: false
+    storageHealthCleaning: false,
+    backupReminderShown: false
   };
 
   const EMOTION_OPTIONS = NS.EMOTIONS;
@@ -85,11 +87,14 @@
         return;
       }
       const migratedShots = await store.migrateScreenshots();
-      if (migratedShots) console.info('TradeJournal: скриншоты перенесены в файлы:', migratedShots);
+      if (migratedShots) console.info('TradeJournal: скриншоты перенесены в отдельное хранилище:', migratedShots);
       if (store.needsMigration) await store.save();
     } else {
       const demoOk = await store.setDemo(NS.sample.generate());
       if (!demoOk) toast('Не удалось сохранить демо-данные. Проверьте папку данных.', 'error');
+    }
+    if (!desktop) {
+      store.gcScreenshots();
     }
     applyCurrency();
     setVersionLabel(APP_VERSION);
@@ -106,6 +111,7 @@
     const hashView = String(location.hash || '').replace('#', '');
     const initialView = VIEW_META[hashView] ? hashView : 'dashboard';
     navigate(initialView, { push: false, scroll: false });
+    maybeRemindBackup();
   }
 
   function setVersionLabel(version) {
@@ -368,13 +374,8 @@
     delta.classList.toggle('pos', roi > 0.004);
 
     const today = todayInAccount();
-    let todayPnl = 0;
-    store.state.trades.forEach(function (trade) {
-      if (trade.date === today && store.hasRealized(trade)) {
-        const pnl = store.tradePnl(trade);
-        if (pnl !== null) todayPnl += pnl;
-      }
-    });
+    const todayInfo = store.dayPnlMap(store.state.trades).get(today);
+    const todayPnl = todayInfo ? todayInfo.pnl : 0;
     const todayEl = $('#sidebarToday');
     todayEl.innerHTML = 'сегодня <b class="' + toneClass(todayPnl) + '">' + U.escapeHtml(U.money(todayPnl, { sign: true })) + '</b>';
 
@@ -612,10 +613,10 @@
         sub: hasR ? 'Итого ' + U.rfmt(m.totalR, { sign: true }) + ' · ' + m.rCount + ' с R' : 'Добавьте стоп при входе к сделкам'
       },
       {
-        label: 'Макс. просадка',
+        label: 'Макс. просадка, $',
         value: m.count ? U.money(m.maxDD) : '—',
         tone: m.maxDD > 0.004 ? 'neg' : '',
-        sub: m.count ? U.percent(m.maxDDPct, 1) + ' от пика счёта' : 'Пока без просадок'
+        sub: m.count ? 'Макс. просадка, %: ' + U.percent(m.maxDDPct, 1) + ' от пика счёта' : 'Пока без просадок'
       },
       {
         label: 'Серия',
@@ -632,17 +633,40 @@
     }).join('');
   }
 
+  function orderedPnlEvents(trades) {
+    const events = [];
+    (trades || []).forEach(function (trade) {
+      store.tradePnlEvents(trade).forEach(function (event, index) {
+        events.push({
+          date: event.date || trade.date || '',
+          time: trade.time || '00:00',
+          tradeId: trade.id || '',
+          exitId: event.exitId || '',
+          index: index,
+          pnl: event.pnl,
+          trade: trade
+        });
+      });
+    });
+    events.sort(function (a, b) {
+      return (a.date || '').localeCompare(b.date || '') ||
+        (a.time || '').localeCompare(b.time || '') ||
+        (a.tradeId || '').localeCompare(b.tradeId || '') ||
+        (a.exitId || '').localeCompare(b.exitId || '') ||
+        a.index - b.index;
+    });
+    return events;
+  }
+
   function buildEquityPoints(closedAsc, base) {
     let balance = base;
     const points = [{ label: 'Старт', value: balance, meta: 'Начало периода' }];
-    closedAsc.forEach(function (trade) {
-      const pnl = store.tradePnl(trade);
-      if (pnl === null) return;
-      balance += pnl;
+    orderedPnlEvents(closedAsc).forEach(function (event) {
+      balance += event.pnl;
       points.push({
-        label: trade.date,
+        label: event.date,
         value: balance,
-        meta: trade.symbol + ' · ' + U.money(pnl, { sign: true })
+        meta: event.trade.symbol + ' · ' + U.money(event.pnl, { sign: true })
       });
     });
 
@@ -656,13 +680,14 @@
 
   function dailySeries(trades, limit) {
     const map = new Map();
-    trades.forEach(function (trade) {
-      const pnl = store.tradePnl(trade);
-      if (pnl === null) return;
-      let item = map.get(trade.date);
-      if (!item) { item = { value: 0, count: 0 }; map.set(trade.date, item); }
-      item.value += pnl;
-      item.count++;
+    (trades || []).forEach(function (trade) {
+      store.tradePnlEvents(trade).forEach(function (event) {
+        if (!event.date) return;
+        let item = map.get(event.date);
+        if (!item) { item = { value: 0, count: 0, trades: new Set() }; map.set(event.date, item); }
+        item.value += event.pnl;
+        if (!item.trades.has(trade.id)) { item.trades.add(trade.id); item.count++; }
+      });
     });
     const list = Array.from(map.entries()).map(function (entry) {
       return {
@@ -678,12 +703,8 @@
     const settings = store.state.settings;
     const today = todayInAccount();
     const todayTrades = store.state.trades.filter(function (trade) { return trade.date === today; });
-    const closedToday = todayTrades.filter(store.hasRealized);
-    let dayPnl = 0;
-    closedToday.forEach(function (trade) {
-      const pnl = store.tradePnl(trade);
-      if (pnl !== null) dayPnl += pnl;
-    });
+    const todayInfo = store.dayPnlMap(store.state.trades).get(today);
+    const dayPnl = todayInfo ? todayInfo.pnl : 0;
 
     const balance = store.balanceAll();
     const startOfDayBalance = Math.max(0, balance - dayPnl);
@@ -691,7 +712,6 @@
     const maxTrades = U.parseNum(settings.maxTradesPerDay) || 0;
     return {
       todayTrades: todayTrades,
-      closedToday: closedToday,
       dayPnl: dayPnl,
       startOfDayBalance: startOfDayBalance,
       lossLimit: lossLimit,
@@ -1063,16 +1083,23 @@
     $('#calTitle').textContent = U.monthTitle(year, month);
     $('#calWeekdays').innerHTML = NS.WEEKDAY_LABELS.map(function (label) { return '<span>' + label + '</span>'; }).join('');
 
-    const monthTrades = store.state.trades.filter(function (trade) { return (trade.date || '').slice(0, 7) === prefix; });
+    const dayMap = store.dayPnlMap(store.state.trades);
+    const monthTrades = store.state.trades.filter(function (trade) {
+      return store.tradePnlEvents(trade).some(function (event) {
+        return (event.date || '').slice(0, 7) === prefix;
+      });
+    });
     const closedMonth = monthTrades.filter(store.hasRealized);
-    const pnlMap = {};
-    const countMap = {};
-
-    monthTrades.forEach(function (trade) {
-      countMap[trade.date] = (countMap[trade.date] || 0) + 1;
-      if (!store.hasRealized(trade)) return;
-      const pnl = store.tradePnl(trade);
-      if (pnl !== null) pnlMap[trade.date] = (pnlMap[trade.date] || 0) + pnl;
+    const monthKeys = Array.from(dayMap.keys()).filter(function (key) {
+      return key.slice(0, 7) === prefix;
+    });
+    const monthPnl = monthKeys.reduce(function (sum, key) {
+      return sum + dayMap.get(key).pnl;
+    }, 0);
+    let bestDay = null;
+    monthKeys.forEach(function (key) {
+      const value = dayMap.get(key).pnl;
+      if (!bestDay || value > bestDay.value) bestDay = { date: key, value: value };
     });
 
     const notesByDate = {};
@@ -1083,12 +1110,7 @@
 
     const settings = store.state.settings;
     const monthMetrics = store.metrics(closedMonth, U.parseNum(settings.startBalance) || 0);
-    const dayValues = Object.keys(pnlMap).map(function (key) { return pnlMap[key]; });
-    const monthPnl = U.sum(dayValues);
-    let bestDay = null;
-    Object.keys(pnlMap).forEach(function (key) {
-      if (!bestDay || pnlMap[key] > bestDay.value) bestDay = { date: key, value: pnlMap[key] };
-    });
+    const dayValues = monthKeys.map(function (key) { return dayMap.get(key).pnl; });
 
     $('#calSummary').innerHTML =
       '<span class="chip ' + toneClass(monthPnl) + '">' + U.escapeHtml(U.money(monthPnl, { sign: true })) + '</span>' +
@@ -1107,8 +1129,9 @@
       const date = new Date(gridStart.getFullYear(), gridStart.getMonth(), gridStart.getDate() + i);
       const iso = U.isoOf(date);
       const inMonth = date.getMonth() === month;
-      const dayPnl = pnlMap[iso] || 0;
-      const count = countMap[iso] || 0;
+      const dayInfo = dayMap.get(iso);
+      const dayPnl = dayInfo ? dayInfo.pnl : 0;
+      const count = dayInfo ? dayInfo.count : 0;
       const hasNote = notesByDate[iso] && notesByDate[iso].length > 0;
       const ratio = maxAbs > 0 ? Math.abs(dayPnl) / maxAbs : 0;
       let style = '';
@@ -1147,36 +1170,41 @@
       return;
     }
 
+    const dayInfo = store.dayPnlMap(store.state.trades).get(day) || { pnl: 0, count: 0 };
+    const dayPnl = dayInfo.pnl;
+    const dayEventPnl = new Map();
     const dayTrades = store.state.trades
-      .filter(function (trade) { return trade.date === day; })
+      .filter(function (trade) {
+        if (trade.date === day) return true;
+        const events = store.tradePnlEvents(trade).filter(function (event) { return event.date === day; });
+        if (!events.length) return false;
+        dayEventPnl.set(trade.id, events.reduce(function (sum, event) { return sum + event.pnl; }, 0));
+        return true;
+      })
       .sort(function (a, b) { return (a.time || '').localeCompare(b.time || ''); });
-    const closedTrades = dayTrades.filter(store.hasRealized);
-    let dayPnl = 0;
-    closedTrades.forEach(function (trade) {
-      const pnl = store.tradePnl(trade);
-      if (pnl !== null) dayPnl += pnl;
-    });
+    const closedTrades = dayTrades.filter(function (trade) { return dayEventPnl.has(trade.id); });
 
     const dayNotes = store.state.notes
       .filter(function (note) { return note.date === day; })
       .sort(function (a, b) { return String(b.createdAt).localeCompare(String(a.createdAt)); });
 
-    const wins = closedTrades.filter(function (trade) { return (store.tradePnl(trade) || 0) > 0.004; }).length;
-    const losses = closedTrades.filter(function (trade) { return (store.tradePnl(trade) || 0) < -0.004; }).length;
+    const wins = closedTrades.filter(function (trade) { return dayEventPnl.get(trade.id) > 0.004; }).length;
+    const losses = closedTrades.filter(function (trade) { return dayEventPnl.get(trade.id) < -0.004; }).length;
 
-    let tradesHtml = '';
+    let tradesHtml;
     if (!dayTrades.length) {
       tradesHtml = '<div class="day-empty">В этот день сделок нет.<br>Можно добавить сделку или записать наблюдение.</div>';
     } else {
       tradesHtml = '<div class="day-sub">Сделки дня</div>' + dayTrades.map(function (trade) {
         const status = store.tradeStatus(trade);
-        const pnl = store.tradePnl(trade);
+        const hasEvent = dayEventPnl.has(trade.id);
+        const pnl = hasEvent ? dayEventPnl.get(trade.id) : null;
         return '<div class="day-trade" data-open-trade="' + U.escapeHtml(trade.id) + '" tabindex="0">' +
           '<span class="day-trade-symbol">' + U.escapeHtml(trade.symbol) +
           ' <span class="day-trade-side">' + (trade.side === 'long' ? 'long' : 'short') + '</span>' +
           (status === 'partial' ? ' <span class="partial-badge">частично</span>' : '') + '</span>' +
-          '<span class="day-trade-pnl ' + (status === 'open' ? 'neutral' : toneClass(pnl)) + '">' +
-          (status === 'open' ? 'открыта' : U.escapeHtml(U.money(pnl, { sign: true }))) + '</span></div>';
+          '<span class="day-trade-pnl ' + (hasEvent ? toneClass(pnl) : 'neutral') + '">' +
+          (status === 'open' ? 'открыта' : (hasEvent ? U.escapeHtml(U.money(pnl, { sign: true })) : '—')) + '</span></div>';
       }).join('');
     }
 
@@ -1219,9 +1247,8 @@
     const now = new Date();
     if (cursor.getFullYear() === now.getFullYear() && cursor.getMonth() === now.getMonth()) return todayInAccount();
     const prefix = cursor.getFullYear() + '-' + pad2(cursor.getMonth() + 1);
-    const days = store.state.trades
-      .filter(function (trade) { return (trade.date || '').slice(0, 7) === prefix; })
-      .map(function (trade) { return trade.date; })
+    const days = Array.from(store.dayPnlMap(store.state.trades).keys())
+      .filter(function (day) { return day.slice(0, 7) === prefix; })
       .sort();
     return days[0] || prefix + '-01';
   }
@@ -1353,8 +1380,18 @@
       }
     }
 
-    const weekdayGroups = store.groupRows(rows, function (t) { return String(U.weekdayIndex(t.date)); })
-      .filter(function (g) { return g.count >= 2; })
+    const weekdayMap = new Map();
+    rows.forEach(function (trade) {
+      store.tradePnlEvents(trade).forEach(function (event) {
+        const key = String(U.weekdayIndex(event.date));
+        let group = weekdayMap.get(key);
+        if (!group) { group = { key: key, count: 0, pnl: 0, trades: new Set() }; weekdayMap.set(key, group); }
+        group.pnl += event.pnl;
+        if (!group.trades.has(trade.id)) { group.trades.add(trade.id); group.count++; }
+      });
+    });
+    const weekdayGroups = Array.from(weekdayMap.values())
+      .filter(function (group) { return group.count >= 2; })
       .sort(function (a, b) { return a.pnl - b.pnl; });
     if (weekdayGroups.length > 1) {
       const worstDay = weekdayGroups[0];
@@ -1564,21 +1601,7 @@
       return;
     }
 
-    const dayStats = new Map();
-    store.state.trades.forEach(function (trade) {
-      if (!store.hasRealized(trade)) {
-        let item = dayStats.get(trade.date);
-        if (!item) { item = { pnl: 0, count: 0 }; dayStats.set(trade.date, item); }
-        item.count++;
-        return;
-      }
-      const pnl = store.tradePnl(trade);
-      if (pnl === null) return;
-      let item = dayStats.get(trade.date);
-      if (!item) { item = { pnl: 0, count: 0 }; dayStats.set(trade.date, item); }
-      item.pnl += pnl;
-      item.count++;
-    });
+    const dayStats = store.dayPnlMap(store.state.trades);
 
     container.innerHTML = notes.map(function (note) {
       const mood = U.moodMeta(note.mood);
@@ -1794,13 +1817,39 @@
     $('#settingsSavedAt').textContent = '';
     setVersionLabel(APP_VERSION);
 
-    const size = store.storageSize();
-    const storageLimit = desktop ? 100 * 1024 * 1024 : 5 * 1024 * 1024;
-    const pct = Math.min(100, size / storageLimit * 100);
-    $('#storageText').textContent = U.bytes(size) + ' · ' + pct.toFixed(1).replace('.', ',') + '%';
-    $('#storageBar').style.width = Math.max(pct > 0 ? 2 : 0, pct) + '%';
+    renderStorageMeter(store.storageSize(), desktop ? 100 * 1024 * 1024 : 5 * 1024 * 1024);
+    if (!desktop) renderWebStorageEstimate();
+    renderBackupMeta();
 
     if (desktop) refreshDesktopBackups();
+  }
+
+  function renderStorageMeter(size, limit) {
+    const pct = limit > 0 ? Math.min(100, size / limit * 100) : 0;
+    $('#storageText').textContent = U.bytes(size) + ' · ' + pct.toFixed(1).replace('.', ',') + '%';
+    $('#storageBar').style.width = Math.max(pct > 0 ? 2 : 0, pct) + '%';
+  }
+
+  function renderWebStorageEstimate() {
+    const note = $('#storageEstimate');
+    if (!note) return;
+    note.hidden = false;
+    note.textContent = 'Скриншоты хранятся в IndexedDB. Считаем размер хранилища…';
+    Promise.all([store.storageEstimate(), store.isStoragePersisted()]).then(function (results) {
+      if (!note.isConnected) return;
+      const data = results[0];
+      const persisted = results[1] === true;
+      if (!data) {
+        note.textContent = 'Скриншоты хранятся в IndexedDB. Браузер не сообщает точный размер хранилища.' +
+          (persisted ? ' Постоянное хранилище включено.' : '');
+        return;
+      }
+      renderStorageMeter(data.usage, data.quota);
+      const pct = data.usage / data.quota * 100;
+      note.textContent = 'Оценка браузера: ' + U.bytes(data.usage) + ' из ' + U.bytes(data.quota) +
+        ' (' + pct.toFixed(1).replace('.', ',') + '%). Скриншоты хранятся в IndexedDB.' +
+        (persisted ? ' Постоянное хранилище включено.' : '');
+    });
   }
 
   function pluralNotes(n) {
@@ -1848,6 +1897,8 @@
 
   function initDesktopUi() {
     if (!desktop) return;
+    const backupRow = $('#backupMetaRow');
+    if (backupRow) backupRow.hidden = true;
     const card = $('#desktopDataCard');
     if (!card) return;
     card.hidden = false;
@@ -2445,6 +2496,94 @@
     });
   }
 
+  function readBackupMeta() {
+    try {
+      const raw = localStorage.getItem(META_KEY);
+      if (!raw) return {};
+      const parsed = JSON.parse(raw);
+      return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch (err) {
+      return {};
+    }
+  }
+
+  function writeBackupMeta(meta) {
+    try {
+      localStorage.setItem(META_KEY, JSON.stringify(meta));
+    } catch (err) {
+      // Metadata only controls reminders; the journal itself is unaffected.
+    }
+  }
+
+  function updateBackupMeta(patch) {
+    const meta = Object.assign({}, readBackupMeta(), patch);
+    writeBackupMeta(meta);
+    renderBackupMeta();
+    return meta;
+  }
+
+  function backupTradeCount() {
+    return store.state.accounts.reduce(function (sum, account) {
+      return sum + (Array.isArray(account.trades) ? account.trades.length : 0);
+    }, 0);
+  }
+
+  function formatBackupTime(value) {
+    const ms = Date.parse(value);
+    if (!Number.isFinite(ms)) return '';
+    try {
+      return new Date(ms).toLocaleString('ru-RU', {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
+      });
+    } catch (err) {
+      return new Date(ms).toISOString().slice(0, 16).replace('T', ' ');
+    }
+  }
+
+  function renderBackupMeta() {
+    const el = $('#backupMetaText');
+    if (!el) return;
+    const meta = readBackupMeta();
+    const parts = [];
+    const last = formatBackupTime(meta.lastExportAt);
+    parts.push(last ? 'Последняя резервная копия: ' + last + '.' : 'Резервная копия ещё не создавалась.');
+    const remindLater = Date.parse(meta.remindLaterUntil);
+    if (Number.isFinite(remindLater) && remindLater > Date.now()) {
+      parts.push('Напоминание отложено до ' + formatBackupTime(meta.remindLaterUntil) + '.');
+    }
+    el.textContent = parts.join(' ');
+  }
+
+  function markBackupExported() {
+    updateBackupMeta({
+      lastExportAt: new Date().toISOString(),
+      remindLaterUntil: null
+    });
+  }
+
+  function remindBackupLater() {
+    updateBackupMeta({
+      remindLaterUntil: new Date(Date.now() + U.BACKUP_REMIND_MS).toISOString()
+    });
+    toast('Напомним о резервной копии позже');
+  }
+
+  function maybeRemindBackup() {
+    if (desktop) return;
+    if (state.backupReminderShown) return;
+    state.backupReminderShown = true;
+    if (store.state.demo) return;
+    if (!U.shouldRemindBackup(readBackupMeta(), Date.now(), backupTradeCount())) return;
+    toast('Давно не делали резервную копию журнала. Экспорт JSON — в настройках.', 'warn', {
+      label: 'Напомнить позже',
+      onClick: remindBackupLater
+    });
+  }
+
   async function exportJSON() {
     try {
       const snapshot = await store.exportSnapshot();
@@ -2454,6 +2593,7 @@
         exportedAt: new Date().toISOString()
       });
       U.download('tradejournal-' + U.todayISO() + '.json', JSON.stringify(payload, null, 2), 'application/json');
+      markBackupExported();
       toast('Резервная копия скачана');
     } catch (err) {
       toast('Не удалось подготовить экспорт: ' + (err && err.message ? err.message : err), 'error');
@@ -2570,6 +2710,7 @@
         { name: 'README.txt', data: readme, date: new Date() }
       ]);
       U.downloadBytes('tradejournal-backup-' + U.todayISO() + '.zip', archive, 'application/zip');
+      markBackupExported();
       toast('ZIP-архив со скриншотами скачан');
     } catch (err) {
       toast('Не удалось подготовить ZIP-архив: ' + (err && err.message ? err.message : err), 'error');
@@ -2714,7 +2855,24 @@
 
   function importJSONFile(file) {
     if (!file) return;
+    if (file.size > 200 * 1024 * 1024) {
+      toast('Файл слишком большой: максимум 200 МБ.', 'error');
+      return;
+    }
     const reader = new FileReader();
+    if (file.name.toLowerCase().slice(-4) === '.zip') {
+      reader.onload = function () {
+        const buffer = reader.result;
+        if (!(buffer instanceof ArrayBuffer)) {
+          toast('Не удалось прочитать файл.', 'error');
+          return;
+        }
+        importZipArchive(buffer);
+      };
+      reader.onerror = function () { toast('Не удалось открыть файл.', 'error'); };
+      reader.readAsArrayBuffer(file);
+      return;
+    }
     reader.onload = function () {
       let data;
       try {
@@ -2723,89 +2881,104 @@
         toast('Не удалось прочитать файл: это не корректный JSON.', 'error');
         return;
       }
-      if (!store.isJournalData(data)) {
-        toast('В файле нет корректных массивов сделок и записей. Похоже, это резервная копия другого формата.', 'error');
-        return;
-      }
-      const stats = store.analyzeImport(data);
-      const currentTrades = store.state.accounts.reduce(function (sum, account) { return sum + account.trades.length; }, 0);
-      const currentNotes = store.state.accounts.reduce(function (sum, account) { return sum + account.notes.length; }, 0);
-      const dropReasons = [];
-      if (stats.missingSymbols) dropReasons.push('без символа: ' + stats.missingSymbols);
-      if (stats.invalidDates) dropReasons.push('битая дата: ' + stats.invalidDates);
-      const replacementSummary = 'Будет заменено ' + currentTrades + ' ' + pluralTrades(currentTrades) +
-        ', ' + stats.tradesDropped + ' ' + pluralTrades(stats.tradesDropped) + ' отброшено' +
-        (dropReasons.length ? ' (' + dropReasons.join(', ') + ')' : '') + '.';
-      const details = [
-        'Все счета, сделки и записи будут заменены данными из файла. Рекомендуем сначала сделать экспорт текущего журнала.',
-        replacementSummary,
-        'Сейчас: счетов ' + store.state.accounts.length + ', сделок ' + currentTrades + ', записей ' + currentNotes + '.',
-        'В файле: счетов ' + stats.accounts + ', сделок ' + stats.trades + ', записей ' + stats.notes + ', скриншотов ' + stats.screenshots + '.',
-        'Будет импортировано: сделок ' + stats.tradesAccepted + ', записей ' + stats.notesAccepted + ', скриншотов ' + stats.screenshotsAccepted + '.'
-      ];
-      if (stats.tradesDropped) {
-        details.push('Отброшенные сделки не попадут в журнал: без символа импортировать нельзя, а битую дату не подменяем сегодняшней.');
-      }
-      if (stats.notesDropped) {
-        details.push('Не будет импортировано записей: ' + stats.notesDropped + '.');
-      }
-      if (stats.screenshotsDropped) {
-        const dropped = stats.screenshotsDropped;
-        const singular = dropped % 10 === 1 && dropped % 100 !== 11;
-        const reasons = [];
-        if (stats.screenshotsTooLarge) reasons.push('слишком большой размер: ' + stats.screenshotsTooLarge);
-        if (stats.screenshotsInvalid) reasons.push('неподдерживаемый формат: ' + stats.screenshotsInvalid);
-        details.push('Внимание: ' + dropped + ' ' + pluralScreenshots(dropped) + (singular ? ' не будет импортирован' : ' не будут импортированы') + (reasons.length ? ' (' + reasons.join(', ') + ')' : '') + '. Эти скриншоты будут потеряны.');
-      }
-      if (stats.fileScreenshots) {
-        details.push('Скриншотов-ссылок на файлы: ' + stats.fileScreenshots + '. Они откроются только на ПК, где создан бэкап.');
-      }
-      details.push('Сразу после импорта действие можно будет отменить.');
-
-      askConfirm({
-        title: 'Импортировать данные?',
-        text: details.join(' '),
-        okLabel: 'Импортировать'
-      }).then(async function (confirmed) {
-        if (!confirmed) return;
-        const before = JSON.parse(JSON.stringify(store.state));
-        const ok = await store.replaceData(data, { strictDate: true });
-        if (!ok) {
-          await store.replaceData(before);
-          applyCurrency();
-          renderAll();
-          toast('Импорт не сохранён: не удалось записать данные. Журнал оставлен прежним.', 'error');
-          return;
-        }
-        await store.migrateScreenshots();
-        clearAllDrafts();
-        applyCurrency();
-        state.calCursor = monthStart(new Date());
-        state.selectedDay = todayInAccount();
-        renderAll();
-        const importedAccounts = store.state.accounts.length;
-        const importedTrades = store.state.accounts.reduce(function (sum, account) { return sum + account.trades.length; }, 0);
-        const importedNotes = store.state.accounts.reduce(function (sum, account) { return sum + account.notes.length; }, 0);
-        let importedMessage = 'Импортировано: счетов ' + importedAccounts + ', сделок ' + importedTrades + ', записей ' + importedNotes;
-        if (stats.screenshotsDropped) {
-          importedMessage += '. Не импортировано скриншотов: ' + stats.screenshotsDropped;
-        }
-        toast(importedMessage, stats.screenshotsDropped ? 'warn' : 'success', {
-          label: 'Отменить',
-          onClick: async function () {
-            const restored = await store.replaceData(before);
-            clearAllDrafts();
-            applyCurrency();
-            state.calCursor = monthStart(new Date());
-            state.selectedDay = todayInAccount();
-            renderAll();
-            toast(restored ? 'Импорт отменён, прежние данные восстановлены' : 'Не удалось сохранить откат', restored ? 'success' : 'error');
-          }
-        });
-      });
+      importJSONData(data);
     };
     reader.onerror = function () { toast('Не удалось открыть файл.', 'error'); };
     reader.readAsText(file);
+  }
+
+  async function importZipArchive(arrayBuffer) {
+    let data;
+    try {
+      data = await NS.zip.readJournal(arrayBuffer);
+    } catch (err) {
+      toast('Не удалось открыть ZIP-архив: ' + (err && err.message ? err.message : err), 'error');
+      return;
+    }
+    importJSONData(data);
+  }
+
+  function importJSONData(data) {
+    if (!store.isJournalData(data)) {
+      toast('В файле нет корректных массивов сделок и записей. Похоже, это резервная копия другого формата.', 'error');
+      return;
+    }
+    const currentTrades = store.state.accounts.reduce(function (sum, account) { return sum + account.trades.length; }, 0);
+    const currentNotes = store.state.accounts.reduce(function (sum, account) { return sum + account.notes.length; }, 0);
+    const stats = store.analyzeImport(data);
+    const dropReasons = [];
+    if (stats.missingSymbols) dropReasons.push('без символа: ' + stats.missingSymbols);
+    if (stats.invalidDates) dropReasons.push('битая дата: ' + stats.invalidDates);
+    const replacementSummary = 'Будет заменено ' + currentTrades + ' ' + pluralTrades(currentTrades) +
+      ', ' + stats.tradesDropped + ' ' + pluralTrades(stats.tradesDropped) + ' отброшено' +
+      (dropReasons.length ? ' (' + dropReasons.join(', ') + ')' : '') + '.';
+    const details = [
+      'Все счета, сделки и записи будут заменены данными из файла. Рекомендуем сначала сделать экспорт текущего журнала.',
+      replacementSummary,
+      'Сейчас: счетов ' + store.state.accounts.length + ', сделок ' + currentTrades + ', записей ' + currentNotes + '.',
+      'В файле: счетов ' + stats.accounts + ', сделок ' + stats.trades + ', записей ' + stats.notes + ', скриншотов ' + stats.screenshots + '.',
+      'Будет импортировано: сделок ' + stats.tradesAccepted + ', записей ' + stats.notesAccepted + ', скриншотов ' + stats.screenshotsAccepted + '.'
+    ];
+    if (stats.tradesDropped) {
+      details.push('Отброшенные сделки не попадут в журнал: без символа импортировать нельзя, а битую дату не подменяем сегодняшней.');
+    }
+    if (stats.notesDropped) {
+      details.push('Не будет импортировано записей: ' + stats.notesDropped + '.');
+    }
+    if (stats.screenshotsDropped) {
+      const dropped = stats.screenshotsDropped;
+      const singular = dropped % 10 === 1 && dropped % 100 !== 11;
+      const reasons = [];
+      if (stats.screenshotsTooLarge) reasons.push('слишком большой размер: ' + stats.screenshotsTooLarge);
+      if (stats.screenshotsInvalid) reasons.push('неподдерживаемый формат: ' + stats.screenshotsInvalid);
+      details.push('Внимание: ' + dropped + ' ' + pluralScreenshots(dropped) + (singular ? ' не будет импортирован' : ' не будут импортированы') + (reasons.length ? ' (' + reasons.join(', ') + ')' : '') + '. Эти скриншоты будут потеряны.');
+    }
+    if (stats.fileScreenshots) {
+      details.push('Скриншотов-ссылок на файлы: ' + stats.fileScreenshots + '. Они откроются только на ПК, где создан бэкап.');
+    }
+    details.push('Сразу после импорта действие можно будет отменить.');
+
+    askConfirm({
+      title: 'Импортировать данные?',
+      text: details.join(' '),
+      okLabel: 'Импортировать'
+    }).then(async function (confirmed) {
+      if (!confirmed) return;
+      const before = JSON.parse(JSON.stringify(store.state));
+      const ok = await store.replaceData(data, { strictDate: true });
+      if (!ok) {
+        await store.replaceData(before);
+        applyCurrency();
+        renderAll();
+        toast('Импорт не сохранён: не удалось записать данные. Журнал оставлен прежним.', 'error');
+        return;
+      }
+      await store.migrateScreenshots();
+      clearAllDrafts();
+      applyCurrency();
+      state.calCursor = monthStart(new Date());
+      state.selectedDay = todayInAccount();
+      renderAll();
+      const importedAccounts = store.state.accounts.length;
+      const importedTrades = store.state.accounts.reduce(function (sum, account) { return sum + account.trades.length; }, 0);
+      const importedNotes = store.state.accounts.reduce(function (sum, account) { return sum + account.notes.length; }, 0);
+      let importedMessage = 'Импортировано: счетов ' + importedAccounts + ', сделок ' + importedTrades + ', записей ' + importedNotes;
+      if (stats.screenshotsDropped) {
+        importedMessage += '. Не импортировано скриншотов: ' + stats.screenshotsDropped;
+      }
+      toast(importedMessage, stats.screenshotsDropped ? 'warn' : 'success', {
+        label: 'Отменить',
+        onClick: async function () {
+          const restored = await store.replaceData(before);
+          clearAllDrafts();
+          applyCurrency();
+          state.calCursor = monthStart(new Date());
+          state.selectedDay = todayInAccount();
+          renderAll();
+          toast(restored ? 'Импорт отменён, прежние данные восстановлены' : 'Не удалось сохранить откат', restored ? 'success' : 'error');
+        }
+      });
+    });
   }
 
   function loadDemoData() {
@@ -2898,7 +3071,8 @@
   function isScreenshotValue(value) {
     if (typeof value !== 'string' || value.length > 3000000) return false;
     return /^data:image\/(?:png|jpe?g|webp);base64,[a-z0-9+/=]+$/i.test(value)
-      || /^file:screenshots\/[a-z0-9_-]{1,80}\.(?:jpe?g|png|webp)$/i.test(value);
+      || /^file:screenshots\/[a-z0-9_-]{1,80}\.(?:jpe?g|png|webp)$/i.test(value)
+      || /^idb:screenshots\/[a-z0-9-]{1,80}$/i.test(value);
   }
 
   function normalizeExitRows(rows) {
@@ -3026,13 +3200,12 @@
 
   function exitRowsTotals() {
     let qty = 0;
-    let fees = 0;
     const quantity = U.parseNum($('#tradeQty') ? $('#tradeQty').value : null);
     state.tradeExits.forEach(function (row) {
       const value = U.parseNum(row.qty);
       if (value !== null && value > 0) qty += value;
     });
-    fees = U.parseNum($('#tradeFees') ? $('#tradeFees').value : null) || 0;
+    const fees = U.parseNum($('#tradeFees') ? $('#tradeFees').value : null) || 0;
     return { qty: qty, remaining: quantity === null ? null : quantity - qty, fees: fees };
   }
 
@@ -3045,7 +3218,7 @@
     const epsilon = store.QTY_EPSILON || 1e-9;
     let text;
     if (!state.tradeExits.length) {
-      text = 'Выходов нет — позиция открыта. Добавьте один или несколько частичных выходов; комиссия распределится пропорционально.';
+      text = 'Выходов нет — позиция открыта. Добавьте один или несколько частичных выходов; комиссия распределится по объёму выходов.';
     } else if (quantity === null || quantity <= 0) {
       text = 'Укажите количество в сделке, чтобы рассчитать остаток позиции.';
     } else if (totals.qty > quantity + epsilon) {
@@ -3056,7 +3229,11 @@
       text = 'Закрыто ' + U.qty(totals.qty) + ' из ' + U.qty(quantity) + ', остаток ' + U.qty(totals.remaining) + '. Сделка останется частично открытой.';
     }
     if (totals.fees > 0 && state.tradeExits.length) {
-      text += ' Комиссия ' + U.money(totals.fees) + ' распределится между выходами пропорционально количеству.';
+      if (quantity !== null && quantity > 0 && totals.remaining <= epsilon) {
+        text += ' Комиссия ' + U.money(totals.fees) + ' распределится между выходами пропорционально количеству.';
+      } else {
+        text += ' Комиссия ' + U.money(totals.fees) + ' распределится по закрытому объёму: спишется только доля выходов, остаток — при следующем выходе.';
+      }
     }
     hint.textContent = text;
     if (closeButton) {
@@ -3594,12 +3771,10 @@
       qty: qty,
       multiplier: multiplier,
       fees: fees,
-      exits: exits
+      exits: exits.map(function (exit) { return Object.assign({}, exit); })
     };
-    // The preview exits do not carry allocated fees yet, so subtract the
-    // trade-level commission here to match the P&L that will be saved.
-    const grossPnl = store.tradePnl(preview);
-    const pnl = grossPnl === null ? null : grossPnl - Math.max(0, fees);
+    store.allocateExitFees(preview.exits, fees, qty);
+    const pnl = store.tradePnl(preview);
     const risk = store.tradeRisk(preview);
     const r = pnl !== null && risk !== null && risk > 0 ? pnl / risk : null;
     const rr = store.plannedRR(preview);
@@ -4176,6 +4351,7 @@
     $('#exportCsvBtn').addEventListener('click', exportCSV);
     $('#exportCsvBtn2').addEventListener('click', exportCSV);
     $('#exportZipBtn').addEventListener('click', exportZIP);
+    $('#backupRemindLaterBtn').addEventListener('click', remindBackupLater);
     $('#importCsvBtn').addEventListener('click', function () { $('#importCsvFile').click(); });
     $('#importCsvBtn2').addEventListener('click', function () { $('#importCsvFile2').click(); });
     $('#importCsvFile').addEventListener('change', function (event) {

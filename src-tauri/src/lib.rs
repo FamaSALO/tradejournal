@@ -152,13 +152,11 @@ fn is_journal_data(value: &serde_json::Value) -> bool {
         .map(|object| {
             let legacy = object
                 .get("trades")
-                .map_or(false, serde_json::Value::is_array)
-                && object
-                    .get("notes")
-                    .map_or(false, serde_json::Value::is_array);
+                .is_some_and(serde_json::Value::is_array)
+                && object.get("notes").is_some_and(serde_json::Value::is_array);
             let accounts = object
                 .get("accounts")
-                .map_or(false, serde_json::Value::is_array);
+                .is_some_and(serde_json::Value::is_array);
             legacy || accounts
         })
         .unwrap_or(false)
@@ -272,6 +270,13 @@ fn backup_info(path: &Path) -> Option<BackupInfo> {
     })
 }
 
+fn sort_newest_first<T, F>(items: &mut [T], mtime: F)
+where
+    F: Fn(&T) -> u64,
+{
+    items.sort_by_key(|item| std::cmp::Reverse(mtime(item)));
+}
+
 fn prune_backups(backup_dir: &Path) {
     let Ok(entries) = fs::read_dir(backup_dir) else {
         return;
@@ -290,7 +295,7 @@ fn prune_backups(backup_dir: &Path) {
         })
         .collect();
 
-    files.sort_by(|left, right| right.1.cmp(&left.1));
+    sort_newest_first(&mut files, |file| file.1);
     for (path, _) in files.into_iter().skip(MAX_BACKUPS) {
         let _ = fs::remove_file(path);
     }
@@ -377,7 +382,7 @@ fn list_backups(state: &AppState) -> Result<Vec<BackupInfo>, String> {
         })
         .collect();
 
-    backups.sort_by(|left, right| right.mtime.cmp(&left.mtime));
+    sort_newest_first(&mut backups, |backup| backup.mtime);
     backups.truncate(50);
     Ok(backups)
 }
@@ -792,7 +797,7 @@ fn valid_image_magic(extension: &str, bytes: &[u8]) -> bool {
     match extension {
         "jpg" => bytes.starts_with(&[0xFF, 0xD8, 0xFF]),
         "png" => bytes.starts_with(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]),
-        "webp" => bytes.len() >= 12 && bytes.starts_with(b"RIFF") && &bytes[8..12] == &b"WEBP"[..],
+        "webp" => bytes.len() >= 12 && bytes.starts_with(b"RIFF") && bytes[8..12] == b"WEBP"[..],
         _ => false,
     }
 }
@@ -1061,7 +1066,7 @@ fn save_download(
         });
     };
 
-    fs::write(&path, content.as_bytes())
+    write_atomic(&path, content.as_bytes())
         .map_err(|error| format!("Не удалось сохранить файл: {error}"))?;
 
     Ok(SaveDownloadResult {
@@ -1089,7 +1094,7 @@ fn save_download_bytes(
         });
     };
 
-    fs::write(&path, &bytes).map_err(|error| format!("Не удалось сохранить файл: {error}"))?;
+    write_atomic(&path, &bytes).map_err(|error| format!("Не удалось сохранить файл: {error}"))?;
 
     Ok(SaveDownloadResult {
         ok: true,
@@ -1227,6 +1232,48 @@ mod tests {
         assert!(refs.contains("note_shot.png"));
         assert!(refs.contains("old-shot.jpg"));
         assert_eq!(refs.len(), 3);
+    }
+
+    #[test]
+    fn write_atomic_replaces_existing_file_and_cleans_temp_files() {
+        let directory = std::env::temp_dir().join(format!(
+            "tradejournal-write-atomic-{}-{}",
+            std::process::id(),
+            now_millis()
+        ));
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("export.json");
+
+        write_atomic(&path, b"first version").unwrap();
+        write_atomic(&path, b"second version").unwrap();
+
+        assert_eq!(fs::read_to_string(&path).unwrap(), "second version");
+        let temp_files: Vec<String> = fs::read_dir(&directory)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|name| name.starts_with(".tj-") && name.ends_with(".tmp"))
+            .collect();
+        assert!(
+            temp_files.is_empty(),
+            "temporary files left: {temp_files:?}"
+        );
+
+        fs::remove_dir_all(&directory).unwrap();
+    }
+
+    #[test]
+    fn newest_backups_sort_first_and_equal_timestamps_keep_their_order() {
+        let mut entries = vec![
+            ("old", 10_u64),
+            ("newest-a", 30_u64),
+            ("middle", 20_u64),
+            ("newest-b", 30_u64),
+        ];
+
+        sort_newest_first(&mut entries, |entry| entry.1);
+
+        let names: Vec<&str> = entries.iter().map(|entry| entry.0).collect();
+        assert_eq!(names, vec!["newest-a", "newest-b", "middle", "old"]);
     }
 
     #[test]

@@ -7,6 +7,23 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self' blob: data:; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
   <title>TradeJournal — дневник трейдера</title>
   <meta name="description" content="Личный дневник трейдера: сделки, статистика, календарь прибыли, аналитика и риск-менеджмент.">
+  <link rel="canonical" href="https://famasalo.github.io/tradejournal/">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="TradeJournal">
+  <meta property="og:locale" content="ru_RU">
+  <meta property="og:title" content="TradeJournal — дневник трейдера">
+  <meta property="og:description" content="Личный дневник трейдера: сделки, статистика, календарь прибыли, аналитика и риск-менеджмент.">
+  <meta property="og:url" content="https://famasalo.github.io/tradejournal/">
+  <meta property="og:image" content="https://famasalo.github.io/tradejournal/assets/og-image.png">
+  <meta property="og:image:type" content="image/png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="TradeJournal — обзор с P&L, винрейтом и кривой капитала">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="TradeJournal — дневник трейдера">
+  <meta name="twitter:description" content="Личный дневник трейдера: сделки, статистика, календарь прибыли, аналитика и риск-менеджмент.">
+  <meta name="twitter:image" content="https://famasalo.github.io/tradejournal/assets/og-image.png">
+  <meta name="twitter:image:alt" content="TradeJournal — обзор с P&L, винрейтом и кривой капитала">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230b1118'/%3E%3Cpath d='M6 22l6-6 4 3 9-10' stroke='%2334e3ac' stroke-width='2.6' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M19 9h6v6' stroke='%2334e3ac' stroke-width='2.6' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="apple-touch-icon" href="assets/icons/apple-touch-icon.png">
@@ -585,20 +602,25 @@
               </button>
               <button class="btn btn-ghost" id="importJsonBtn">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 6 5-5 5 5"/><path d="M4 20h16"/></svg>
-                Импорт JSON
+                Импорт JSON / ZIP
               </button>
               <button class="btn btn-ghost" id="importCsvBtn2">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 6 5-5 5 5"/><path d="M4 20h16"/></svg>
                 Импорт CSV
               </button>
-              <input type="file" id="importFile" accept=".json,application/json" hidden>
+              <input type="file" id="importFile" accept=".json,.zip,application/json,application/zip" hidden>
               <input type="file" id="importCsvFile2" accept=".csv,text/csv" hidden>
+            </div>
+            <div class="backup-meta-row" id="backupMetaRow">
+              <p class="muted small" id="backupMetaText">Резервная копия ещё не создавалась.</p>
+              <button type="button" class="btn btn-ghost btn-sm" id="backupRemindLaterBtn">Напомнить позже</button>
             </div>
 
             <div class="storage-block">
               <div class="storage-head"><span>Использование хранилища</span><strong id="storageText">—</strong></div>
               <div class="storage-meter"><i id="storageBar"></i></div>
-              <p class="muted small">В веб-версии данные лежат в localStorage браузера, в Windows-приложении — в локальных файлах, а скриншоты — отдельно в папке <b>screenshots</b>. Очистка кэша браузера удалит журнал — держите резервную копию. Глубокая проверка неиспользуемых скриншотов доступна в Windows-приложении.</p>
+              <p class="muted small storage-estimate" id="storageEstimate" hidden></p>
+              <p class="muted small">В веб-версии журнал лежит в localStorage, а скриншоты — в IndexedDB браузера; в Windows-приложении данные хранятся в локальных файлах, скриншоты — в папке <b>screenshots</b>. Очистка данных сайта удалит журнал — держите резервную копию. Глубокая проверка неиспользуемых скриншотов доступна в Windows-приложении.</p>
             </div>
 
             <div class="danger-zone">
@@ -635,7 +657,7 @@
               </div>
             </div>
 
-            <p class="muted small desktop-transfer-note">Перенос из веб-версии: сделайте «Экспорт JSON» в браузере и выберите «Импорт JSON» здесь. Скриншоты в экспорте встроены в файл.</p>
+            <p class="muted small desktop-transfer-note">Перенос из веб-версии: сделайте «Экспорт JSON» или «Экспорт ZIP» в браузере и выберите «Импорт JSON / ZIP» здесь. Скриншоты в экспорте встроены в файл.</p>
 
             <div class="desktop-update">
               <div>
@@ -700,7 +722,7 @@
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17.5 8.5 12l4 3L21 6"/><path d="M15 6h6v6"/></svg>
             </div>
             <div>
-              <h3>TradeJournal <span class="version" id="appVersion">v2.3.0</span></h3>
+              <h3>TradeJournal <span class="version" id="appVersion">v2.4.0</span></h3>
               <p>Локальный дневник трейдера без серверов и регистрации. Сделки, календарь P&L, аналитика по сетапам и эмоциям, журнал наблюдений и калькулятор риска — всё в одном приложении. <span class="kbd">N</span> — новая сделка, <span class="kbd">Esc</span> — закрыть окно.</p>
             </div>
           </article>
@@ -795,7 +817,7 @@
               </div>
             </div>
             <div class="exits-editor" id="exitsEditor"></div>
-            <p class="field-hint" id="exitsHint">Выходов нет — позиция открыта. Добавьте один или несколько частичных выходов; комиссия распределится пропорционально.</p>
+            <p class="field-hint" id="exitsHint">Выходов нет — позиция открыта. Добавьте один или несколько частичных выходов; комиссия распределится по объёму выходов.</p>
           </div>
           <div class="field span-2">
             <span>Дисциплина</span>
@@ -999,6 +1021,7 @@
 
 <script src="js/desktop-bridge.js"></script>
 <script src="js/utils.js"></script>
+<script src="js/blobstore.js"></script>
 <script src="js/store.js"></script>
 <script src="js/sample.js"></script>
 <script src="js/csv.js"></script>

@@ -17,7 +17,8 @@ function memoryStorage() {
   };
 }
 
-export function loadTradeJournal(extraFiles) {
+export function loadTradeJournal(extraFiles, options) {
+  options = options || {};
   const storage = memoryStorage();
   const sandbox = {
     console: console,
@@ -26,6 +27,8 @@ export function loadTradeJournal(extraFiles) {
     TextDecoder: TextDecoder,
     URL: URL,
     Blob: Blob,
+    Response: Response,
+    DecompressionStream: options.DecompressionStream || DecompressionStream,
     crypto: globalThis.crypto,
     btoa: globalThis.btoa,
     atob: globalThis.atob,
@@ -35,9 +38,11 @@ export function loadTradeJournal(extraFiles) {
   };
   sandbox.window = sandbox;
   sandbox.globalThis = sandbox;
+  if (options.indexedDB) sandbox.indexedDB = options.indexedDB;
+  if (options.desktop) sandbox.tradeJournalDesktop = options.desktop;
   vm.createContext(sandbox);
 
-  const files = ['js/utils.js', 'js/store.js', 'js/csv.js', 'js/zip.js'].concat(extraFiles || []);
+  const files = ['js/utils.js', 'js/blobstore.js', 'js/store.js', 'js/csv.js', 'js/zip.js'].concat(extraFiles || []);
   files.forEach(function (file) {
     const full = path.join(ROOT, file);
     vm.runInContext(readFileSync(full, 'utf8'), sandbox, { filename: full });

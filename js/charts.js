@@ -357,8 +357,6 @@
 
     const slot = plotW / points.length;
     const barWidth = Math.max(3, Math.min(36, slot * 0.62));
-    const totalPositive = values.some(function (v) { return v > 0; });
-    const totalNegative = values.some(function (v) { return v < 0; });
 
     const draw = function (hoverIndex) {
       ctx.clearRect(0, 0, w, h);

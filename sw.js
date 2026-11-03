@@ -1,12 +1,13 @@
 'use strict';
 
-const CACHE_NAME = 'tradejournal-v2.3.0';
+const CACHE_NAME = 'tradejournal-v2.4.0';
 const APP_SHELL = [
   './',
   './index.html',
   './css/styles.css',
   './js/desktop-bridge.js',
   './js/utils.js',
+  './js/blobstore.js',
   './js/store.js',
   './js/sample.js',
   './js/csv.js',
@@ -15,15 +16,22 @@ const APP_SHELL = [
   './js/charts.js',
   './js/app.js',
   './manifest.webmanifest',
+  './assets/og-image.png',
   './assets/icons/icon-192.png',
   './assets/icons/icon-512.png',
+  './assets/icons/icon-maskable-512.png',
   './assets/icons/apple-touch-icon.png'
 ];
 
 self.addEventListener('install', function (event) {
   event.waitUntil(
     caches.open(CACHE_NAME).then(function (cache) {
-      return cache.addAll(APP_SHELL);
+      // Reload bypasses the browser HTTP cache so a freshly installed worker
+      // never keeps stale scripts or styles from the previous release.
+      const requests = APP_SHELL.map(function (url) {
+        return new Request(url, { cache: 'reload' });
+      });
+      return cache.addAll(requests);
     })
   );
 });

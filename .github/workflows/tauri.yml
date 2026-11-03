@@ -4,10 +4,19 @@ on:
   push:
     branches:
       - main
+    tags:
+      - 'v*'
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
   contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
 jobs:
   build:
@@ -19,6 +28,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
+      - name: Check release tag matches package version
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $tag = '${{ github.ref_name }}'
+          if ($tag -ne "v$version") {
+            throw "Tag $tag does not match package.json version v$version."
+          }
+
       - name: Setup Node.js
         uses: actions/setup-node@v5
         with:
@@ -28,7 +47,7 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt
+          components: rustfmt, clippy
 
       - name: Cache Rust build
         uses: Swatinem/rust-cache@v2
@@ -41,25 +60,34 @@ jobs:
       - name: Check versions
         run: npm run check:versions
 
+      - name: Lint
+        run: npm run lint
+
       - name: Run tests
         run: npm test
 
       - name: Check Rust formatting
         run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
 
-      - name: Build web assets for Rust tests
+      # generate_context! in src-tauri requires the web assets to exist.
+      - name: Build web assets for Rust checks
         run: npm run web:build
+
+      - name: Run clippy
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 
       - name: Run Rust tests
         run: cargo test --manifest-path src-tauri/Cargo.toml
 
       - name: Build TradeJournal
+        if: github.event_name != 'pull_request'
         run: npm run build
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
       - name: Collect artifacts
+        if: github.event_name != 'pull_request'
         shell: pwsh
         run: |
           $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
@@ -97,8 +125,60 @@ jobs:
           Get-ChildItem artifacts | Format-Table Name, Length
 
       - name: Upload artifacts
+        if: github.event_name != 'pull_request'
         uses: actions/upload-artifact@v4
         with:
           name: TradeJournal-${{ github.sha }}
           path: artifacts/
           if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: TradeJournal-${{ github.sha }}
+          path: artifacts
+
+      - name: Check that no release exists for the tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          existing=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 100 --json tagName,isDraft \
+            --jq ".[] | select(.tagName == \"${GITHUB_REF_NAME}\") | .isDraft")
+          if [ -n "$existing" ]; then
+            if [ "$existing" = "true" ]; then
+              echo "::error::Draft release ${GITHUB_REF_NAME} already exists. Remove it first: gh release delete ${GITHUB_REF_NAME} --yes"
+            else
+              echo "::error::Release ${GITHUB_REF_NAME} already exists; refusing to overwrite."
+            fi
+            exit 1
+          fi
+
+      - name: Create draft GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          assets=(artifacts/*)
+          if [ "${#assets[@]}" -eq 0 ]; then
+            echo "::error::No release assets were downloaded."
+            exit 1
+          fi
+          gh release create "${GITHUB_REF_NAME}" "${assets[@]}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "TradeJournal ${GITHUB_REF_NAME}" \
+            --draft \
+            --generate-notes \
+            --verify-tag

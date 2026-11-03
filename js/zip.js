@@ -136,9 +136,276 @@
     return output;
   }
 
+  var MAX_ENTRIES = 2000;
+  var MAX_TOTAL_SIZE = 200 * 1024 * 1024;
+  var MAX_ENTRY_SIZE = 50 * 1024 * 1024;
+
+  function zip64Warning() {
+    return new Error('Архив использует ZIP64, который не поддерживается.');
+  }
+
+  function unsupportedMethod(method) {
+    return new Error('Неподдерживаемый метод сжатия: ' + method + '. Поддерживаются stored (0) и Deflate (8).');
+  }
+
+  function invalidEntryName(name) {
+    return new Error('Некорректное имя файла в архиве: ' + JSON.stringify(name) + '.');
+  }
+
+  function zipLimitError(message) {
+    var error = new Error(message);
+    error.zipLimit = true;
+    return error;
+  }
+
+  async function cancelReader(reader, reason) {
+    try {
+      await reader.cancel(reason);
+    } catch (err) {
+      // A stream that has already errored can reject cancellation; the import
+      // is aborted either way.
+    }
+  }
+
+  function findEocd(view, length) {
+    var min = Math.max(0, length - 22 - 0xFFFF);
+    for (var i = length - 22; i >= min; i--) {
+      if (view.getUint32(i, true) === 0x06054b50) return i;
+    }
+    return -1;
+  }
+
+  function decodeName(bytes) {
+    try {
+      return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+    } catch (err) {
+      throw invalidEntryName('');
+    }
+  }
+
+  function isValidName(name) {
+    if (!name) return false;
+    if (name.charAt(0) === '/' || /^[a-z]:/i.test(name)) return false;
+    if (name.indexOf('\\') >= 0) return false;
+    for (var c = 0; c < name.length; c++) {
+      var code = name.charCodeAt(c);
+      if (code < 0x20 || code === 0x7f) return false;
+    }
+    var parts = name.split('/');
+    for (var i = 0; i < parts.length; i++) {
+      if (parts[i] === '..') return false;
+    }
+    return true;
+  }
+
+  async function inflateRaw(data, name, uncompressedSize, totalBefore) {
+    if (typeof DecompressionStream !== 'function') {
+      throw new Error('Браузер не поддерживает распаковку Deflate.');
+    }
+    var stream = new Blob([data]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+    var reader = stream.getReader();
+    var chunks = [];
+    var received = 0;
+    var totalLimit = MAX_TOTAL_SIZE - totalBefore;
+    try {
+      for (;;) {
+        var step = await reader.read();
+        if (step.done) break;
+        var value = step.value;
+        if (!value || typeof value.byteLength !== 'number') {
+          throw new Error('Не удалось распаковать файл ' + JSON.stringify(name) + ': данные повреждены.');
+        }
+        var chunk = typeof value.length === 'number' ? value : new Uint8Array(value);
+        received += chunk.length;
+        if (received > uncompressedSize) {
+          await cancelReader(reader, 'declared size exceeded');
+          throw zipLimitError('Размер распакованного файла ' + JSON.stringify(name) + ' не совпадает с заявленным.');
+        }
+        if (received > MAX_ENTRY_SIZE) {
+          await cancelReader(reader, 'entry size limit exceeded');
+          throw zipLimitError('Файл ' + JSON.stringify(name) + ' слишком большой для импорта.');
+        }
+        if (received > totalLimit) {
+          await cancelReader(reader, 'total size limit exceeded');
+          throw zipLimitError('Общий распакованный размер превышает лимит ' +
+            (MAX_TOTAL_SIZE / 1024 / 1024) + ' МБ.');
+        }
+        chunks.push(chunk);
+      }
+    } finally {
+      try {
+        reader.releaseLock();
+      } catch (err) {
+        // The reader is already released when the stream was cancelled.
+      }
+    }
+
+    var output = new Uint8Array(received);
+    var offset = 0;
+    for (var i = 0; i < chunks.length; i++) {
+      output.set(chunks[i], offset);
+      offset += chunks[i].length;
+    }
+    return output;
+  }
+
+  async function read(arrayBuffer) {
+    if (!arrayBuffer || typeof arrayBuffer.byteLength !== 'number') {
+      throw new Error('zip.read ожидает ArrayBuffer.');
+    }
+    var bytes = new Uint8Array(arrayBuffer);
+    if (bytes.length < 22) {
+      throw new Error('Файл слишком короткий для ZIP-архива.');
+    }
+    var isLocalHeader = bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] === 0x03 && bytes[3] === 0x04;
+    var isEmptyArchive = bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] === 0x05 && bytes[3] === 0x06;
+    if (!isLocalHeader && !isEmptyArchive) {
+      throw new Error('Файл не является ZIP-архивом: неверная сигнатура.');
+    }
+    var view = new DataView(arrayBuffer);
+    var eocd = findEocd(view, bytes.length);
+    if (eocd < 0) {
+      throw new Error('Не найден центральный каталог ZIP: файл повреждён или обрезан.');
+    }
+
+    var diskNumber = view.getUint16(eocd + 4, true);
+    var cdDisk = view.getUint16(eocd + 6, true);
+    var recordsOnDisk = view.getUint16(eocd + 8, true);
+    var totalRecords = view.getUint16(eocd + 10, true);
+    var cdSize = view.getUint32(eocd + 12, true);
+    var cdOffset = view.getUint32(eocd + 16, true);
+
+    if (diskNumber !== 0 || cdDisk !== 0 || recordsOnDisk !== totalRecords) {
+      throw zip64Warning();
+    }
+    if (totalRecords === 0xFFFF || cdSize === 0xFFFFFFFF || cdOffset === 0xFFFFFFFF) {
+      throw zip64Warning();
+    }
+    if (totalRecords > MAX_ENTRIES) {
+      throw new Error('Слишком много файлов в архиве: ' + totalRecords + ' (максимум ' + MAX_ENTRIES + ').');
+    }
+    if (cdOffset < 0 || cdOffset + cdSize > bytes.length) {
+      throw new Error('Центральный каталог ZIP выходит за пределы файла.');
+    }
+    if (totalRecords === 0) return [];
+
+    var entries = [];
+    var offset = cdOffset;
+    var totalUncompressed = 0;
+    var totalBefore;
+
+    for (var index = 0; index < totalRecords; index++) {
+      if (offset + 46 > bytes.length || view.getUint32(offset, true) !== 0x02014b50) {
+        throw new Error('Повреждён центральный каталог ZIP.');
+      }
+      var flags = view.getUint16(offset + 8, true);
+      var method = view.getUint16(offset + 10, true);
+      var crc = view.getUint32(offset + 16, true);
+      var compressedSize = view.getUint32(offset + 20, true);
+      var uncompressedSize = view.getUint32(offset + 24, true);
+      var nameLength = view.getUint16(offset + 28, true);
+      var extraLength = view.getUint16(offset + 30, true);
+      var commentLength = view.getUint16(offset + 32, true);
+      var localOffset = view.getUint32(offset + 42, true);
+
+      if (compressedSize === 0xFFFFFFFF || uncompressedSize === 0xFFFFFFFF ||
+          localOffset === 0xFFFFFFFF) {
+        throw zip64Warning();
+      }
+      if (offset + 46 + nameLength + extraLength + commentLength > bytes.length) {
+        throw new Error('Повреждён центральный каталог ZIP.');
+      }
+
+      var name = decodeName(bytes.subarray(offset + 46, offset + 46 + nameLength));
+      if (!isValidName(name)) {
+        throw invalidEntryName(name);
+      }
+      if (flags & 0x0001) {
+        throw new Error('Зашифрованные файлы в архиве не поддерживаются: ' + JSON.stringify(name) + '.');
+      }
+      if (method !== 0 && method !== 8) {
+        throw unsupportedMethod(method);
+      }
+      if (compressedSize > MAX_ENTRY_SIZE || uncompressedSize > MAX_ENTRY_SIZE) {
+        throw new Error('Файл ' + JSON.stringify(name) + ' слишком большой для импорта.');
+      }
+      totalBefore = totalUncompressed;
+      totalUncompressed += uncompressedSize;
+      if (totalUncompressed > MAX_TOTAL_SIZE) {
+        throw new Error('Общий распакованный размер превышает лимит ' + (MAX_TOTAL_SIZE / 1024 / 1024) + ' МБ.');
+      }
+
+      if (localOffset + 30 > bytes.length || view.getUint32(localOffset, true) !== 0x04034b50) {
+        throw new Error('Повреждён локальный заголовок файла ' + JSON.stringify(name) + '.');
+      }
+      var localNameLength = view.getUint16(localOffset + 26, true);
+      var localExtraLength = view.getUint16(localOffset + 28, true);
+      var dataStart = localOffset + 30 + localNameLength + localExtraLength;
+      if (dataStart + compressedSize > bytes.length) {
+        throw new Error('Файл ' + JSON.stringify(name) + ' выходит за пределы архива.');
+      }
+      var raw = bytes.subarray(dataStart, dataStart + compressedSize);
+
+      var data;
+      if (method === 0) {
+        if (compressedSize !== uncompressedSize) {
+          throw new Error('Размер файла ' + JSON.stringify(name) + ' не совпадает с заявленным.');
+        }
+        data = raw;
+      } else {
+        try {
+          data = await inflateRaw(raw, name, uncompressedSize, totalBefore);
+        } catch (err) {
+          if (err && (err.zipLimit || (err.message && err.message.indexOf('Браузер не поддерживает') === 0))) throw err;
+          throw new Error('Не удалось распаковать файл ' + JSON.stringify(name) + ': данные повреждены.', { cause: err });
+        }
+        if (data.length !== uncompressedSize) {
+          throw new Error('Размер распакованного файла ' + JSON.stringify(name) + ' не совпадает с заявленным.');
+        }
+      }
+      if (crc32(data) !== crc) {
+        throw new Error('CRC-32 не совпадает для файла ' + JSON.stringify(name) + '.');
+      }
+      entries.push({ name: name, data: data });
+      offset += 46 + nameLength + extraLength + commentLength;
+    }
+
+    return entries;
+  }
+
+  async function readJournal(arrayBuffer) {
+    var entries = await read(arrayBuffer);
+    var journal = null;
+    for (var i = 0; i < entries.length; i++) {
+      if (entries[i].name.toLowerCase() === 'journal.json') {
+        journal = entries[i];
+        break;
+      }
+    }
+    if (!journal) {
+      throw new Error('В архиве не найден journal.json.');
+    }
+    var text;
+    try {
+      text = new TextDecoder('utf-8').decode(journal.data);
+    } catch (err) {
+      throw new Error('Не удалось прочитать journal.json из архива.', { cause: err });
+    }
+    try {
+      return JSON.parse(text);
+    } catch (err) {
+      throw new Error('journal.json в архиве не является корректным JSON.', { cause: err });
+    }
+  }
+
   NS.zip = {
     crc32: crc32,
     utf8: utf8,
-    create: create
+    create: create,
+    read: read,
+    readJournal: readJournal,
+    MAX_ENTRIES: MAX_ENTRIES,
+    MAX_TOTAL_SIZE: MAX_TOTAL_SIZE,
+    MAX_ENTRY_SIZE: MAX_ENTRY_SIZE
   };
 })();
