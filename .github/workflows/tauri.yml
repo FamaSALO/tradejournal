@@ -154,18 +154,16 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
         run: |
-          $found = gh release list --limit 100 --json tagName,isDraft |
-            From-Json | Where-Object { $_.tagName -eq $env:GITHUB_REF_NAME }
-          if ($found) {
-            if ($found.isDraft) {
-              Write-Error "Draft release $env:GITHUB_REF_NAME already exists."
-              Write-Error "Remove the stale draft manually before re-creating it:"
-              Write-Error "  gh release delete $env:GITHUB_REF_NAME --yes"
-              exit 1
-            }
-            Write-Error "Release $env:GITHUB_REF_NAME already exists; refusing to overwrite."
+          existing=$(gh release list --limit 100 --json tagName,isDraft \
+            --jq ".[] | select(.tagName == \"${GITHUB_REF_NAME}\") | .isDraft")
+          if [ -n "$existing" ]; then
+            if [ "$existing" = "true" ]; then
+              echo "::error::Draft release ${GITHUB_REF_NAME} already exists. Remove it first: gh release delete ${GITHUB_REF_NAME} --yes"
+            else
+              echo "::error::Release ${GITHUB_REF_NAME} already exists; refusing to overwrite."
+            fi
             exit 1
-          }
+          fi
 
       - name: Create draft GitHub Release
         env:
