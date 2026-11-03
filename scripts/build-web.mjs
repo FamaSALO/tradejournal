@@ -12,6 +12,7 @@ await cp(path.join(root, 'js'), path.join(dist, 'js'), { recursive: true });
 await cp(path.join(root, 'manifest.webmanifest'), path.join(dist, 'manifest.webmanifest'));
 await cp(path.join(root, 'sw.js'), path.join(dist, 'sw.js'));
 await mkdir(path.join(dist, 'assets'), { recursive: true });
+await cp(path.join(root, 'assets', 'og-image.png'), path.join(dist, 'assets', 'og-image.png'));
 await cp(path.join(root, 'assets', 'icons'), path.join(dist, 'assets', 'icons'), { recursive: true });
 
 let html = await readFile(path.join(root, 'index.html'), 'utf8');

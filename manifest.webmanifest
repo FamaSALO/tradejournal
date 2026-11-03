@@ -4,6 +4,8 @@
   "description": "Локальный дневник трейдера: сделки, статистика, календарь, аналитика и риск-менеджмент.",
   "lang": "ru",
   "dir": "ltr",
+  "id": "./",
+  "categories": ["finance", "productivity"],
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
@@ -22,6 +24,12 @@
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any"
+    },
+    {
+      "src": "assets/icons/icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
     },
     {
       "src": "assets/icons/apple-touch-icon.png",
