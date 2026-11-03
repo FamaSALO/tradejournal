@@ -785,10 +785,15 @@
       for (const trade of account.trades) {
         if (!SAFE_SCREENSHOT_RE.test(trade.screenshot || '')) continue;
         try {
-          trade.screenshot = await blobs.save(trade.screenshot);
+          // Persist to IndexedDB first, verify the value round-trips, and
+          // only then replace the inline reference and save the journal.
+          // Any failure leaves the original inline data URL intact.
+          var ref = await blobs.save(trade.screenshot);
+          var roundtrip = await blobs.load(ref);
+          if (!roundtrip) throw new Error('Round-trip check failed');
+          trade.screenshot = ref;
           changed++;
         } catch (err) {
-          // A failed migration must not destroy the original data URL.
           console.warn('TradeJournal: не удалось перенести скриншот в IndexedDB', err);
         }
       }
