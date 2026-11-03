@@ -72,7 +72,7 @@
     const name = value.trim();
     if (!name) return false;
     if (zoneValidity.has(name)) return zoneValidity.get(name);
-    let valid = false;
+    let valid;
     try {
       new Intl.DateTimeFormat('en-US', { timeZone: name }).format(new Date());
       valid = true;

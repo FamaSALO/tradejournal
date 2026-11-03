@@ -675,7 +675,6 @@
   function dailySeries(trades, limit) {
     const map = new Map();
     (trades || []).forEach(function (trade) {
-      const seen = new Set();
       store.tradePnlEvents(trade).forEach(function (event) {
         if (!event.date) return;
         let item = map.get(event.date);
@@ -1186,7 +1185,7 @@
     const wins = closedTrades.filter(function (trade) { return dayEventPnl.get(trade.id) > 0.004; }).length;
     const losses = closedTrades.filter(function (trade) { return dayEventPnl.get(trade.id) < -0.004; }).length;
 
-    let tradesHtml = '';
+    let tradesHtml;
     if (!dayTrades.length) {
       tradesHtml = '<div class="day-empty">В этот день сделок нет.<br>Можно добавить сделку или записать наблюдение.</div>';
     } else {
@@ -3044,13 +3043,12 @@
 
   function exitRowsTotals() {
     let qty = 0;
-    let fees = 0;
     const quantity = U.parseNum($('#tradeQty') ? $('#tradeQty').value : null);
     state.tradeExits.forEach(function (row) {
       const value = U.parseNum(row.qty);
       if (value !== null && value > 0) qty += value;
     });
-    fees = U.parseNum($('#tradeFees') ? $('#tradeFees').value : null) || 0;
+    const fees = U.parseNum($('#tradeFees') ? $('#tradeFees').value : null) || 0;
     return { qty: qty, remaining: quantity === null ? null : quantity - qty, fees: fees };
   }
 

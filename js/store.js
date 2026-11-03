@@ -522,7 +522,7 @@
   function normalizeData(raw, options) {
     raw = raw || {};
     const isV2 = Array.isArray(raw.accounts);
-    let accounts = [];
+    let accounts;
 
     if (isV2) {
       accounts = raw.accounts.map(function (account, index) {
