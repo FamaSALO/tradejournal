@@ -1898,6 +1898,8 @@
 
   function initDesktopUi() {
     if (!desktop) return;
+    const backupRow = $('#backupMetaRow');
+    if (backupRow) backupRow.hidden = true;
     const card = $('#desktopDataCard');
     if (!card) return;
     card.hidden = false;
@@ -2572,6 +2574,7 @@
   }
 
   function maybeRemindBackup() {
+    if (desktop) return;
     if (state.backupReminderShown) return;
     state.backupReminderShown = true;
     if (store.state.demo) return;
