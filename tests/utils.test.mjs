@@ -68,6 +68,44 @@ test('ordinary wall-clock times round-trip through UTC', function () {
   });
 });
 
+test('backup reminder depends on trade count, last export and snooze time', function () {
+  const now = Date.parse('2026-11-03T12:00:00.000Z');
+  const day = 24 * 60 * 60 * 1000;
+
+  assert.equal(U.shouldRemindBackup({}, now, 0), false);
+  assert.equal(U.shouldRemindBackup({}, now, 1), true);
+  assert.equal(U.shouldRemindBackup(null, now, 1), true);
+
+  assert.equal(U.shouldRemindBackup({ lastExportAt: new Date(now - day).toISOString() }, now, 1), false);
+  assert.equal(U.shouldRemindBackup({ lastExportAt: new Date(now - 6 * day).toISOString() }, now, 1), false);
+  assert.equal(U.shouldRemindBackup({ lastExportAt: new Date(now - 7 * day).toISOString() }, now, 1), true);
+  assert.equal(U.shouldRemindBackup({ lastExportAt: new Date(now - 30 * day).toISOString() }, now, 1), true);
+  assert.equal(U.shouldRemindBackup({ lastExportAt: new Date(now + day).toISOString() }, now, 1), false);
+});
+
+test('backup reminder respects remindLaterUntil', function () {
+  const now = Date.parse('2026-11-03T12:00:00.000Z');
+  const day = 24 * 60 * 60 * 1000;
+
+  assert.equal(U.shouldRemindBackup({
+    lastExportAt: new Date(now - 30 * day).toISOString(),
+    remindLaterUntil: new Date(now + day).toISOString()
+  }, now, 1), false);
+
+  assert.equal(U.shouldRemindBackup({
+    lastExportAt: new Date(now - 30 * day).toISOString(),
+    remindLaterUntil: new Date(now - day).toISOString()
+  }, now, 1), true);
+
+  assert.equal(U.shouldRemindBackup({
+    remindLaterUntil: new Date(now + day).toISOString()
+  }, now, 1), false);
+
+  assert.equal(U.shouldRemindBackup({
+    remindLaterUntil: 'not-a-date'
+  }, now, 1), true);
+});
+
 test('Moscow and Almaty do not observe DST', function () {
   const moscowWinter = roundTrip('2026-01-15', '12:00', 'Europe/Moscow');
   const moscowSummer = roundTrip('2026-07-15', '12:00', 'Europe/Moscow');

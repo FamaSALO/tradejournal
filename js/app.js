@@ -6,6 +6,7 @@
   const desktop = window.tradeJournalDesktop || null;
   const APP_VERSION = '2.3.0';
   const DRAFT_PREFIX = 'tradejournal.draft.v1.';
+  const META_KEY = 'tradejournal.meta';
   // Drafts live in localStorage even on desktop, so a full screenshot data URL
   // must not be duplicated there. Keep the draft small; the screenshot stays in
   // the trade itself or in a file reference on desktop.
@@ -69,7 +70,8 @@
     storageHealthData: null,
     storageHealthScanning: false,
     storageHealthCleaning: false,
-    storagePersisted: false
+    storagePersisted: false,
+    backupReminderShown: false
   };
 
   const EMOTION_OPTIONS = NS.EMOTIONS;
@@ -113,6 +115,7 @@
     const hashView = String(location.hash || '').replace('#', '');
     const initialView = VIEW_META[hashView] ? hashView : 'dashboard';
     navigate(initialView, { push: false, scroll: false });
+    maybeRemindBackup();
   }
 
   function setVersionLabel(version) {
@@ -1820,6 +1823,7 @@
 
     renderStorageMeter(store.storageSize(), desktop ? 100 * 1024 * 1024 : 5 * 1024 * 1024);
     if (!desktop) renderWebStorageEstimate();
+    renderBackupMeta();
 
     if (desktop) refreshDesktopBackups();
   }
@@ -2491,6 +2495,93 @@
     });
   }
 
+  function readBackupMeta() {
+    try {
+      const raw = localStorage.getItem(META_KEY);
+      if (!raw) return {};
+      const parsed = JSON.parse(raw);
+      return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch (err) {
+      return {};
+    }
+  }
+
+  function writeBackupMeta(meta) {
+    try {
+      localStorage.setItem(META_KEY, JSON.stringify(meta));
+    } catch (err) {
+      // Metadata only controls reminders; the journal itself is unaffected.
+    }
+  }
+
+  function updateBackupMeta(patch) {
+    const meta = Object.assign({}, readBackupMeta(), patch);
+    writeBackupMeta(meta);
+    renderBackupMeta();
+    return meta;
+  }
+
+  function backupTradeCount() {
+    return store.state.accounts.reduce(function (sum, account) {
+      return sum + (Array.isArray(account.trades) ? account.trades.length : 0);
+    }, 0);
+  }
+
+  function formatBackupTime(value) {
+    const ms = Date.parse(value);
+    if (!Number.isFinite(ms)) return '';
+    try {
+      return new Date(ms).toLocaleString('ru-RU', {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
+      });
+    } catch (err) {
+      return new Date(ms).toISOString().slice(0, 16).replace('T', ' ');
+    }
+  }
+
+  function renderBackupMeta() {
+    const el = $('#backupMetaText');
+    if (!el) return;
+    const meta = readBackupMeta();
+    const parts = [];
+    const last = formatBackupTime(meta.lastExportAt);
+    parts.push(last ? 'Последняя резервная копия: ' + last + '.' : 'Резервная копия ещё не создавалась.');
+    const remindLater = Date.parse(meta.remindLaterUntil);
+    if (Number.isFinite(remindLater) && remindLater > Date.now()) {
+      parts.push('Напоминание отложено до ' + formatBackupTime(meta.remindLaterUntil) + '.');
+    }
+    el.textContent = parts.join(' ');
+  }
+
+  function markBackupExported() {
+    updateBackupMeta({
+      lastExportAt: new Date().toISOString(),
+      remindLaterUntil: null
+    });
+  }
+
+  function remindBackupLater() {
+    updateBackupMeta({
+      remindLaterUntil: new Date(Date.now() + U.BACKUP_REMIND_MS).toISOString()
+    });
+    toast('Напомним о резервной копии позже');
+  }
+
+  function maybeRemindBackup() {
+    if (state.backupReminderShown) return;
+    state.backupReminderShown = true;
+    if (store.state.demo) return;
+    if (!U.shouldRemindBackup(readBackupMeta(), Date.now(), backupTradeCount())) return;
+    toast('Давно не делали резервную копию журнала. Экспорт JSON — в настройках.', 'warn', {
+      label: 'Напомнить позже',
+      onClick: remindBackupLater
+    });
+  }
+
   async function exportJSON() {
     try {
       const snapshot = await store.exportSnapshot();
@@ -2500,6 +2591,7 @@
         exportedAt: new Date().toISOString()
       });
       U.download('tradejournal-' + U.todayISO() + '.json', JSON.stringify(payload, null, 2), 'application/json');
+      markBackupExported();
       toast('Резервная копия скачана');
     } catch (err) {
       toast('Не удалось подготовить экспорт: ' + (err && err.message ? err.message : err), 'error');
@@ -2616,6 +2708,7 @@
         { name: 'README.txt', data: readme, date: new Date() }
       ]);
       U.downloadBytes('tradejournal-backup-' + U.todayISO() + '.zip', archive, 'application/zip');
+      markBackupExported();
       toast('ZIP-архив со скриншотами скачан');
     } catch (err) {
       toast('Не удалось подготовить ZIP-архив: ' + (err && err.message ? err.message : err), 'error');
@@ -4224,6 +4317,7 @@
     $('#exportCsvBtn').addEventListener('click', exportCSV);
     $('#exportCsvBtn2').addEventListener('click', exportCSV);
     $('#exportZipBtn').addEventListener('click', exportZIP);
+    $('#backupRemindLaterBtn').addEventListener('click', remindBackupLater);
     $('#importCsvBtn').addEventListener('click', function () { $('#importCsvFile').click(); });
     $('#importCsvBtn2').addEventListener('click', function () { $('#importCsvFile2').click(); });
     $('#importCsvFile').addEventListener('change', function (event) {

@@ -1011,6 +1011,8 @@ svg { display: block; }
   font-size: 10.5px;
 }
 .data-actions { display: flex; flex-wrap: wrap; gap: 7px; }
+.backup-meta-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-top: 12px; }
+.backup-meta-row p { flex: 1 1 220px; margin: 0; line-height: 1.55; }
 .storage-block { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--border); }
 .storage-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; font-size: 10.5px; color: var(--muted); }
 .storage-head strong { color: #cfdae8; font-size: 10.5px; font-weight: 600; font-variant-numeric: tabular-nums; }
