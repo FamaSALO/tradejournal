@@ -6,10 +6,17 @@ on:
       - main
     tags:
       - 'v*'
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
   contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
 jobs:
   build:
@@ -40,7 +47,7 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt
+          components: rustfmt, clippy
 
       - name: Cache Rust build
         uses: Swatinem/rust-cache@v2
@@ -53,11 +60,20 @@ jobs:
       - name: Check versions
         run: npm run check:versions
 
+      - name: Lint
+        run: npm run lint
+
       - name: Run tests
         run: npm test
 
       - name: Check Rust formatting
         run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
+
+      # Clippy could not be run locally without the MSVC linker. Keep it
+      # visible but non-blocking until the first CI run confirms a clean baseline.
+      - name: Run clippy
+        continue-on-error: true
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 
       - name: Build web assets for Rust tests
         run: npm run web:build
@@ -66,12 +82,14 @@ jobs:
         run: cargo test --manifest-path src-tauri/Cargo.toml
 
       - name: Build TradeJournal
+        if: github.event_name != 'pull_request'
         run: npm run build
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
       - name: Collect artifacts
+        if: github.event_name != 'pull_request'
         shell: pwsh
         run: |
           $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
@@ -109,6 +127,7 @@ jobs:
           Get-ChildItem artifacts | Format-Table Name, Length
 
       - name: Upload artifacts
+        if: github.event_name != 'pull_request'
         uses: actions/upload-artifact@v4
         with:
           name: TradeJournal-${{ github.sha }}
