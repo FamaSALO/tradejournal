@@ -148,6 +148,17 @@ test('drawdown follows exit events instead of entry order', function () {
   assert.equal(m.maxDD, 150);
 });
 
+test('max drawdown in dollars and percent can peak at different points', function () {
+  const first = trade({ id: 'a', date: '2026-01-01', qty: 1, exits: [{ qty: 1, price: 200, date: '2026-01-02' }] });
+  const second = trade({ id: 'b', date: '2026-01-02', qty: 1, exits: [{ qty: 1, price: 10, date: '2026-01-03' }] });
+  const third = trade({ id: 'c', date: '2026-01-03', qty: 1, exits: [{ qty: 1, price: 590, date: '2026-01-04' }] });
+  const fourth = trade({ id: 'd', date: '2026-01-04', qty: 1, exits: [{ qty: 1, price: -20, date: '2026-01-05' }] });
+
+  const m = store.metrics([first, second, third, fourth], 1000);
+  assert.equal(m.maxDD, 120);
+  assert.ok(Math.abs(m.maxDDPct - (90 / 1100) * 100) < 1e-9);
+});
+
 test('calendar month P&L equals the sum of trades exited in that month', function () {  const split = trade({
     id: 'jan-split',
     date: '2026-01-05',

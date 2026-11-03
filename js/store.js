@@ -1003,11 +1003,10 @@
       equity += event.pnl;
       if (equity > peak) peak = equity;
       const dd = peak - equity;
-      if (dd > maxDD) {
-        maxDD = dd;
-        const peakBalance = base + peak;
-        maxDDPct = peakBalance > 0 ? (dd / peakBalance) * 100 : 0;
-      }
+      if (dd > maxDD) maxDD = dd;
+      const peakBalance = base + peak;
+      const ddPct = peakBalance > 0 ? (dd / peakBalance) * 100 : 0;
+      if (ddPct > maxDDPct) maxDDPct = ddPct;
     });
 
     let maxWinStreak = 0, maxLossStreak = 0;

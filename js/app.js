@@ -607,10 +607,10 @@
         sub: hasR ? 'Итого ' + U.rfmt(m.totalR, { sign: true }) + ' · ' + m.rCount + ' с R' : 'Добавьте стоп при входе к сделкам'
       },
       {
-        label: 'Макс. просадка',
+        label: 'Макс. просадка, $',
         value: m.count ? U.money(m.maxDD) : '—',
         tone: m.maxDD > 0.004 ? 'neg' : '',
-        sub: m.count ? U.percent(m.maxDDPct, 1) + ' от пика счёта' : 'Пока без просадок'
+        sub: m.count ? 'Макс. просадка, %: ' + U.percent(m.maxDDPct, 1) + ' от пика счёта' : 'Пока без просадок'
       },
       {
         label: 'Серия',
