@@ -23,7 +23,12 @@ const APP_SHELL = [
 self.addEventListener('install', function (event) {
   event.waitUntil(
     caches.open(CACHE_NAME).then(function (cache) {
-      return cache.addAll(APP_SHELL);
+      // Reload bypasses the browser HTTP cache so a freshly installed worker
+      // never keeps stale scripts or styles from the previous release.
+      const requests = APP_SHELL.map(function (url) {
+        return new Request(url, { cache: 'reload' });
+      });
+      return cache.addAll(requests);
     })
   );
 });
