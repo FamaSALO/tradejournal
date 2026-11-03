@@ -168,7 +168,7 @@
     };
   }
 
-  function allocateExitFees(exits, totalFees) {
+  function allocateExitFees(exits, totalFees, positionQty) {
     if (!exits.length) return;
     const total = Math.max(0, totalFees || 0);
     const qtySum = exits.reduce(function (sum, exit) { return sum + exit.qty; }, 0);
@@ -176,13 +176,19 @@
       exits.forEach(function (exit) { exit.fees = 0; });
       return;
     }
+    const quantity = U.parseNum(positionQty);
+    const position = quantity !== null && quantity > 0 ? quantity : qtySum;
+    const fullyClosed = qtySum >= position - QTY_EPSILON;
+    // Over-closing is normalised by the actual exits sum. A partial position
+    // keeps the uncharged fee share until another exit is added.
+    const denominator = Math.max(position, qtySum);
     let assigned = 0;
     exits.forEach(function (exit, index) {
-      if (index === exits.length - 1) {
+      if (fullyClosed && index === exits.length - 1) {
         exit.fees = Math.round(Math.max(0, total - assigned) * 1e8) / 1e8;
         return;
       }
-      const share = Math.round((total * exit.qty / qtySum) * 1e8) / 1e8;
+      const share = Math.round((total * exit.qty / denominator) * 1e8) / 1e8;
       exit.fees = share;
       assigned += share;
     });
@@ -235,7 +241,7 @@
       }
     }
 
-    allocateExitFees(exits, trade.fees);
+    allocateExitFees(exits, trade.fees, trade.qty);
     return exits;
   }
 
@@ -908,7 +914,8 @@
     if (!trade) return null;
     const entry = U.parseNum(trade.entry);
     const stop = U.parseNum(trade.stop);
-    const quantity = U.parseNum(trade.qty);
+    let quantity = U.parseNum(trade.qty);
+    if (isPartial(trade)) quantity = exitedQty(trade);
     if (entry === null || stop === null || quantity === null) return null;
     const risk = Math.abs(entry - stop) * quantity * normalizeMultiplier(trade.multiplier);
     return risk > 0 ? risk : null;
@@ -1138,6 +1145,7 @@
     remainingQty: remainingQty,
     isClosed: isClosed,
     isPartial: isPartial,
+    allocateExitFees: allocateExitFees,
     hasRealized: hasRealized,
     weightedExit: weightedExit,
     tradePnl: tradePnl,

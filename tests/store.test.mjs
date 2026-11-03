@@ -58,10 +58,53 @@ test('partial exits stay open and keep the realized P&L', function () {
   assert.equal(store.isClosed(normalized), false);
   assert.equal(store.tradeStatus(normalized), 'partial');
   assert.equal(store.weightedExit(normalized), 800 / 7);
-  assert.equal(store.tradePnl(normalized), 93);
-  assert.equal(store.tradeFees(normalized), 7);
-  assert.equal(normalized.exits[0].fees, 4);
-  assert.equal(normalized.exits[1].fees, 3);
+  assert.equal(store.tradePnl(normalized), 95.1);
+  assert.equal(store.tradeFees(normalized), 4.9);
+  assert.equal(normalized.exits[0].fees, 2.8);
+  assert.equal(normalized.exits[1].fees, 2.1);
+});
+
+test('partial exits charge fees only for the exited quantity', function () {
+  const partial = trade({
+    qty: 10,
+    fees: 10,
+    exits: [{ qty: 4, price: 110, date: '2026-01-05' }]
+  });
+  assert.equal(partial.exits[0].fees, 4);
+  assert.equal(store.tradeFees(partial), 4);
+  assert.equal(store.tradePnl(partial), 36);
+
+  const closed = trade({
+    qty: 10,
+    fees: 10,
+    exits: [
+      { qty: 4, price: 110, date: '2026-01-05' },
+      { qty: 6, price: 120, date: '2026-01-06' }
+    ]
+  });
+  assert.equal(closed.exits[0].fees, 4);
+  assert.equal(closed.exits[1].fees, 6);
+  assert.equal(store.tradeFees(closed), 10);
+});
+
+test('partial trade R uses the exited quantity as risk', function () {
+  const partial = trade({
+    qty: 10,
+    stop: 95,
+    fees: 0,
+    exits: [{ qty: 4, price: 110 }]
+  });
+  assert.equal(store.tradeRisk(partial), 20);
+  assert.equal(store.tradeR(partial), 2);
+
+  const closed = trade({
+    qty: 10,
+    stop: 95,
+    fees: 0,
+    exits: [{ qty: 10, price: 110 }]
+  });
+  assert.equal(store.tradeRisk(closed), 50);
+  assert.equal(store.tradeR(closed), 2);
 });
 
 test('fees are allocated proportionally and the last exit gets the remainder', function () {
@@ -310,10 +353,10 @@ test('metrics include realized partial trades and count partials separately', fu
   assert.equal(m.count, 2);
   assert.equal(m.partials, 1);
   assert.equal(m.closed.length, 1);
-  assert.equal(m.net, 188);
-  assert.equal(m.endBalance, 1188);
+  assert.equal(m.net, 190.1);
+  assert.equal(m.endBalance, 1190.1);
   assert.equal(m.rows.length, 2);
-  assert.equal(m.fees, 12);
+  assert.equal(m.fees, 9.9);
 });
 
 test('converts wall-clock time between UTC and IANA timezones', function () {

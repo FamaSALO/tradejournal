@@ -3063,7 +3063,7 @@
     const epsilon = store.QTY_EPSILON || 1e-9;
     let text;
     if (!state.tradeExits.length) {
-      text = 'Выходов нет — позиция открыта. Добавьте один или несколько частичных выходов; комиссия распределится пропорционально.';
+      text = 'Выходов нет — позиция открыта. Добавьте один или несколько частичных выходов; комиссия распределится по объёму выходов.';
     } else if (quantity === null || quantity <= 0) {
       text = 'Укажите количество в сделке, чтобы рассчитать остаток позиции.';
     } else if (totals.qty > quantity + epsilon) {
@@ -3074,7 +3074,11 @@
       text = 'Закрыто ' + U.qty(totals.qty) + ' из ' + U.qty(quantity) + ', остаток ' + U.qty(totals.remaining) + '. Сделка останется частично открытой.';
     }
     if (totals.fees > 0 && state.tradeExits.length) {
-      text += ' Комиссия ' + U.money(totals.fees) + ' распределится между выходами пропорционально количеству.';
+      if (quantity !== null && quantity > 0 && totals.remaining <= epsilon) {
+        text += ' Комиссия ' + U.money(totals.fees) + ' распределится между выходами пропорционально количеству.';
+      } else {
+        text += ' Комиссия ' + U.money(totals.fees) + ' распределится по закрытому объёму: спишется только доля выходов, остаток — при следующем выходе.';
+      }
     }
     hint.textContent = text;
     if (closeButton) {
@@ -3612,12 +3616,10 @@
       qty: qty,
       multiplier: multiplier,
       fees: fees,
-      exits: exits
+      exits: exits.map(function (exit) { return Object.assign({}, exit); })
     };
-    // The preview exits do not carry allocated fees yet, so subtract the
-    // trade-level commission here to match the P&L that will be saved.
-    const grossPnl = store.tradePnl(preview);
-    const pnl = grossPnl === null ? null : grossPnl - Math.max(0, fees);
+    store.allocateExitFees(preview.exits, fees, qty);
+    const pnl = store.tradePnl(preview);
     const risk = store.tradeRisk(preview);
     const r = pnl !== null && risk !== null && risk > 0 ? pnl / risk : null;
     const rr = store.plannedRR(preview);
