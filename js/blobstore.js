@@ -8,6 +8,7 @@
   const DB_NAME = 'tradejournal.screenshots';
   const STORE_NAME = 'screenshots';
   const DB_VERSION = 1;
+  const desktop = !!(typeof window !== 'undefined' && window.tradeJournalDesktop);
 
   let defaultStore;
 
@@ -272,8 +273,17 @@
     };
   }
 
+  function available() {
+    if (desktop) return false;
+    return typeof indexedDB !== 'undefined' && !!indexedDB && typeof indexedDB.open === 'function';
+  }
+
   function getDefault() {
     if (defaultStore !== undefined) return defaultStore;
+    if (!available()) {
+      defaultStore = null;
+      return defaultStore;
+    }
     const adapter = createIdbAdapter();
     defaultStore = adapter ? createBlobStore(adapter) : null;
     return defaultStore;
@@ -291,6 +301,7 @@
     idFromRef: idFromRef,
     createBlobStore: createBlobStore,
     createIdbAdapter: createIdbAdapter,
+    available: available,
     getDefault: getDefault,
     configure: configure
   };

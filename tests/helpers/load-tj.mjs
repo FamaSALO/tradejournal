@@ -17,7 +17,8 @@ function memoryStorage() {
   };
 }
 
-export function loadTradeJournal(extraFiles) {
+export function loadTradeJournal(extraFiles, options) {
+  options = options || {};
   const storage = memoryStorage();
   const sandbox = {
     console: console,
@@ -35,6 +36,8 @@ export function loadTradeJournal(extraFiles) {
   };
   sandbox.window = sandbox;
   sandbox.globalThis = sandbox;
+  if (options.indexedDB) sandbox.indexedDB = options.indexedDB;
+  if (options.desktop) sandbox.tradeJournalDesktop = options.desktop;
   vm.createContext(sandbox);
 
   const files = ['js/utils.js', 'js/blobstore.js', 'js/store.js', 'js/csv.js', 'js/zip.js'].concat(extraFiles || []);
