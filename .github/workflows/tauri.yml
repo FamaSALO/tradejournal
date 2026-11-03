@@ -69,14 +69,12 @@ jobs:
       - name: Check Rust formatting
         run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
 
-      # Clippy could not be run locally without the MSVC linker. Keep it
-      # visible but non-blocking until the first CI run confirms a clean baseline.
-      - name: Run clippy
-        continue-on-error: true
-        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
-
-      - name: Build web assets for Rust tests
+      # generate_context! in src-tauri requires the web assets to exist.
+      - name: Build web assets for Rust checks
         run: npm run web:build
+
+      - name: Run clippy
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 
       - name: Run Rust tests
         run: cargo test --manifest-path src-tauri/Cargo.toml
