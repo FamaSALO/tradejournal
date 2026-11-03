@@ -1061,7 +1061,7 @@ fn save_download(
         });
     };
 
-    fs::write(&path, content.as_bytes())
+    write_atomic(&path, content.as_bytes())
         .map_err(|error| format!("Не удалось сохранить файл: {error}"))?;
 
     Ok(SaveDownloadResult {
@@ -1089,7 +1089,7 @@ fn save_download_bytes(
         });
     };
 
-    fs::write(&path, &bytes).map_err(|error| format!("Не удалось сохранить файл: {error}"))?;
+    write_atomic(&path, &bytes).map_err(|error| format!("Не удалось сохранить файл: {error}"))?;
 
     Ok(SaveDownloadResult {
         ok: true,
@@ -1227,6 +1227,33 @@ mod tests {
         assert!(refs.contains("note_shot.png"));
         assert!(refs.contains("old-shot.jpg"));
         assert_eq!(refs.len(), 3);
+    }
+
+    #[test]
+    fn write_atomic_replaces_existing_file_and_cleans_temp_files() {
+        let directory = std::env::temp_dir().join(format!(
+            "tradejournal-write-atomic-{}-{}",
+            std::process::id(),
+            now_millis()
+        ));
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("export.json");
+
+        write_atomic(&path, b"first version").unwrap();
+        write_atomic(&path, b"second version").unwrap();
+
+        assert_eq!(fs::read_to_string(&path).unwrap(), "second version");
+        let temp_files: Vec<String> = fs::read_dir(&directory)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|name| name.starts_with(".tj-") && name.ends_with(".tmp"))
+            .collect();
+        assert!(
+            temp_files.is_empty(),
+            "temporary files left: {temp_files:?}"
+        );
+
+        fs::remove_dir_all(&directory).unwrap();
     }
 
     #[test]
