@@ -2853,7 +2853,24 @@
 
   function importJSONFile(file) {
     if (!file) return;
+    if (file.size > 200 * 1024 * 1024) {
+      toast('Файл слишком большой: максимум 200 МБ.', 'error');
+      return;
+    }
     const reader = new FileReader();
+    if (file.name.toLowerCase().slice(-4) === '.zip') {
+      reader.onload = function () {
+        const buffer = reader.result;
+        if (!(buffer instanceof ArrayBuffer)) {
+          toast('Не удалось прочитать файл.', 'error');
+          return;
+        }
+        importZipArchive(buffer);
+      };
+      reader.onerror = function () { toast('Не удалось открыть файл.', 'error'); };
+      reader.readAsArrayBuffer(file);
+      return;
+    }
     reader.onload = function () {
       let data;
       try {
@@ -2862,89 +2879,104 @@
         toast('Не удалось прочитать файл: это не корректный JSON.', 'error');
         return;
       }
-      if (!store.isJournalData(data)) {
-        toast('В файле нет корректных массивов сделок и записей. Похоже, это резервная копия другого формата.', 'error');
-        return;
-      }
-      const stats = store.analyzeImport(data);
-      const currentTrades = store.state.accounts.reduce(function (sum, account) { return sum + account.trades.length; }, 0);
-      const currentNotes = store.state.accounts.reduce(function (sum, account) { return sum + account.notes.length; }, 0);
-      const dropReasons = [];
-      if (stats.missingSymbols) dropReasons.push('без символа: ' + stats.missingSymbols);
-      if (stats.invalidDates) dropReasons.push('битая дата: ' + stats.invalidDates);
-      const replacementSummary = 'Будет заменено ' + currentTrades + ' ' + pluralTrades(currentTrades) +
-        ', ' + stats.tradesDropped + ' ' + pluralTrades(stats.tradesDropped) + ' отброшено' +
-        (dropReasons.length ? ' (' + dropReasons.join(', ') + ')' : '') + '.';
-      const details = [
-        'Все счета, сделки и записи будут заменены данными из файла. Рекомендуем сначала сделать экспорт текущего журнала.',
-        replacementSummary,
-        'Сейчас: счетов ' + store.state.accounts.length + ', сделок ' + currentTrades + ', записей ' + currentNotes + '.',
-        'В файле: счетов ' + stats.accounts + ', сделок ' + stats.trades + ', записей ' + stats.notes + ', скриншотов ' + stats.screenshots + '.',
-        'Будет импортировано: сделок ' + stats.tradesAccepted + ', записей ' + stats.notesAccepted + ', скриншотов ' + stats.screenshotsAccepted + '.'
-      ];
-      if (stats.tradesDropped) {
-        details.push('Отброшенные сделки не попадут в журнал: без символа импортировать нельзя, а битую дату не подменяем сегодняшней.');
-      }
-      if (stats.notesDropped) {
-        details.push('Не будет импортировано записей: ' + stats.notesDropped + '.');
-      }
-      if (stats.screenshotsDropped) {
-        const dropped = stats.screenshotsDropped;
-        const singular = dropped % 10 === 1 && dropped % 100 !== 11;
-        const reasons = [];
-        if (stats.screenshotsTooLarge) reasons.push('слишком большой размер: ' + stats.screenshotsTooLarge);
-        if (stats.screenshotsInvalid) reasons.push('неподдерживаемый формат: ' + stats.screenshotsInvalid);
-        details.push('Внимание: ' + dropped + ' ' + pluralScreenshots(dropped) + (singular ? ' не будет импортирован' : ' не будут импортированы') + (reasons.length ? ' (' + reasons.join(', ') + ')' : '') + '. Эти скриншоты будут потеряны.');
-      }
-      if (stats.fileScreenshots) {
-        details.push('Скриншотов-ссылок на файлы: ' + stats.fileScreenshots + '. Они откроются только на ПК, где создан бэкап.');
-      }
-      details.push('Сразу после импорта действие можно будет отменить.');
-
-      askConfirm({
-        title: 'Импортировать данные?',
-        text: details.join(' '),
-        okLabel: 'Импортировать'
-      }).then(async function (confirmed) {
-        if (!confirmed) return;
-        const before = JSON.parse(JSON.stringify(store.state));
-        const ok = await store.replaceData(data, { strictDate: true });
-        if (!ok) {
-          await store.replaceData(before);
-          applyCurrency();
-          renderAll();
-          toast('Импорт не сохранён: не удалось записать данные. Журнал оставлен прежним.', 'error');
-          return;
-        }
-        await store.migrateScreenshots();
-        clearAllDrafts();
-        applyCurrency();
-        state.calCursor = monthStart(new Date());
-        state.selectedDay = todayInAccount();
-        renderAll();
-        const importedAccounts = store.state.accounts.length;
-        const importedTrades = store.state.accounts.reduce(function (sum, account) { return sum + account.trades.length; }, 0);
-        const importedNotes = store.state.accounts.reduce(function (sum, account) { return sum + account.notes.length; }, 0);
-        let importedMessage = 'Импортировано: счетов ' + importedAccounts + ', сделок ' + importedTrades + ', записей ' + importedNotes;
-        if (stats.screenshotsDropped) {
-          importedMessage += '. Не импортировано скриншотов: ' + stats.screenshotsDropped;
-        }
-        toast(importedMessage, stats.screenshotsDropped ? 'warn' : 'success', {
-          label: 'Отменить',
-          onClick: async function () {
-            const restored = await store.replaceData(before);
-            clearAllDrafts();
-            applyCurrency();
-            state.calCursor = monthStart(new Date());
-            state.selectedDay = todayInAccount();
-            renderAll();
-            toast(restored ? 'Импорт отменён, прежние данные восстановлены' : 'Не удалось сохранить откат', restored ? 'success' : 'error');
-          }
-        });
-      });
+      importJSONData(data);
     };
     reader.onerror = function () { toast('Не удалось открыть файл.', 'error'); };
     reader.readAsText(file);
+  }
+
+  async function importZipArchive(arrayBuffer) {
+    let data;
+    try {
+      data = await NS.zip.readJournal(arrayBuffer);
+    } catch (err) {
+      toast('Не удалось открыть ZIP-архив: ' + (err && err.message ? err.message : err), 'error');
+      return;
+    }
+    importJSONData(data);
+  }
+
+  function importJSONData(data) {
+    if (!store.isJournalData(data)) {
+      toast('В файле нет корректных массивов сделок и записей. Похоже, это резервная копия другого формата.', 'error');
+      return;
+    }
+    const currentTrades = store.state.accounts.reduce(function (sum, account) { return sum + account.trades.length; }, 0);
+    const currentNotes = store.state.accounts.reduce(function (sum, account) { return sum + account.notes.length; }, 0);
+    const stats = store.analyzeImport(data);
+    const dropReasons = [];
+    if (stats.missingSymbols) dropReasons.push('без символа: ' + stats.missingSymbols);
+    if (stats.invalidDates) dropReasons.push('битая дата: ' + stats.invalidDates);
+    const replacementSummary = 'Будет заменено ' + currentTrades + ' ' + pluralTrades(currentTrades) +
+      ', ' + stats.tradesDropped + ' ' + pluralTrades(stats.tradesDropped) + ' отброшено' +
+      (dropReasons.length ? ' (' + dropReasons.join(', ') + ')' : '') + '.';
+    const details = [
+      'Все счета, сделки и записи будут заменены данными из файла. Рекомендуем сначала сделать экспорт текущего журнала.',
+      replacementSummary,
+      'Сейчас: счетов ' + store.state.accounts.length + ', сделок ' + currentTrades + ', записей ' + currentNotes + '.',
+      'В файле: счетов ' + stats.accounts + ', сделок ' + stats.trades + ', записей ' + stats.notes + ', скриншотов ' + stats.screenshots + '.',
+      'Будет импортировано: сделок ' + stats.tradesAccepted + ', записей ' + stats.notesAccepted + ', скриншотов ' + stats.screenshotsAccepted + '.'
+    ];
+    if (stats.tradesDropped) {
+      details.push('Отброшенные сделки не попадут в журнал: без символа импортировать нельзя, а битую дату не подменяем сегодняшней.');
+    }
+    if (stats.notesDropped) {
+      details.push('Не будет импортировано записей: ' + stats.notesDropped + '.');
+    }
+    if (stats.screenshotsDropped) {
+      const dropped = stats.screenshotsDropped;
+      const singular = dropped % 10 === 1 && dropped % 100 !== 11;
+      const reasons = [];
+      if (stats.screenshotsTooLarge) reasons.push('слишком большой размер: ' + stats.screenshotsTooLarge);
+      if (stats.screenshotsInvalid) reasons.push('неподдерживаемый формат: ' + stats.screenshotsInvalid);
+      details.push('Внимание: ' + dropped + ' ' + pluralScreenshots(dropped) + (singular ? ' не будет импортирован' : ' не будут импортированы') + (reasons.length ? ' (' + reasons.join(', ') + ')' : '') + '. Эти скриншоты будут потеряны.');
+    }
+    if (stats.fileScreenshots) {
+      details.push('Скриншотов-ссылок на файлы: ' + stats.fileScreenshots + '. Они откроются только на ПК, где создан бэкап.');
+    }
+    details.push('Сразу после импорта действие можно будет отменить.');
+
+    askConfirm({
+      title: 'Импортировать данные?',
+      text: details.join(' '),
+      okLabel: 'Импортировать'
+    }).then(async function (confirmed) {
+      if (!confirmed) return;
+      const before = JSON.parse(JSON.stringify(store.state));
+      const ok = await store.replaceData(data, { strictDate: true });
+      if (!ok) {
+        await store.replaceData(before);
+        applyCurrency();
+        renderAll();
+        toast('Импорт не сохранён: не удалось записать данные. Журнал оставлен прежним.', 'error');
+        return;
+      }
+      await store.migrateScreenshots();
+      clearAllDrafts();
+      applyCurrency();
+      state.calCursor = monthStart(new Date());
+      state.selectedDay = todayInAccount();
+      renderAll();
+      const importedAccounts = store.state.accounts.length;
+      const importedTrades = store.state.accounts.reduce(function (sum, account) { return sum + account.trades.length; }, 0);
+      const importedNotes = store.state.accounts.reduce(function (sum, account) { return sum + account.notes.length; }, 0);
+      let importedMessage = 'Импортировано: счетов ' + importedAccounts + ', сделок ' + importedTrades + ', записей ' + importedNotes;
+      if (stats.screenshotsDropped) {
+        importedMessage += '. Не импортировано скриншотов: ' + stats.screenshotsDropped;
+      }
+      toast(importedMessage, stats.screenshotsDropped ? 'warn' : 'success', {
+        label: 'Отменить',
+        onClick: async function () {
+          const restored = await store.replaceData(before);
+          clearAllDrafts();
+          applyCurrency();
+          state.calCursor = monthStart(new Date());
+          state.selectedDay = todayInAccount();
+          renderAll();
+          toast(restored ? 'Импорт отменён, прежние данные восстановлены' : 'Не удалось сохранить откат', restored ? 'success' : 'error');
+        }
+      });
+    });
   }
 
   function loadDemoData() {
