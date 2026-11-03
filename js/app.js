@@ -68,7 +68,8 @@
     lastFocus: null,
     storageHealthData: null,
     storageHealthScanning: false,
-    storageHealthCleaning: false
+    storageHealthCleaning: false,
+    storagePersisted: false
   };
 
   const EMOTION_OPTIONS = NS.EMOTIONS;
@@ -85,11 +86,17 @@
         return;
       }
       const migratedShots = await store.migrateScreenshots();
-      if (migratedShots) console.info('TradeJournal: скриншоты перенесены в файлы:', migratedShots);
+      if (migratedShots) console.info('TradeJournal: скриншоты перенесены в отдельное хранилище:', migratedShots);
       if (store.needsMigration) await store.save();
     } else {
       const demoOk = await store.setDemo(NS.sample.generate());
       if (!demoOk) toast('Не удалось сохранить демо-данные. Проверьте папку данных.', 'error');
+    }
+    if (!desktop) {
+      store.requestPersistentStorage().then(function (granted) {
+        state.storagePersisted = !!granted;
+      });
+      store.gcScreenshots();
     }
     applyCurrency();
     setVersionLabel(APP_VERSION);
@@ -1811,13 +1818,35 @@
     $('#settingsSavedAt').textContent = '';
     setVersionLabel(APP_VERSION);
 
-    const size = store.storageSize();
-    const storageLimit = desktop ? 100 * 1024 * 1024 : 5 * 1024 * 1024;
-    const pct = Math.min(100, size / storageLimit * 100);
-    $('#storageText').textContent = U.bytes(size) + ' · ' + pct.toFixed(1).replace('.', ',') + '%';
-    $('#storageBar').style.width = Math.max(pct > 0 ? 2 : 0, pct) + '%';
+    renderStorageMeter(store.storageSize(), desktop ? 100 * 1024 * 1024 : 5 * 1024 * 1024);
+    if (!desktop) renderWebStorageEstimate();
 
     if (desktop) refreshDesktopBackups();
+  }
+
+  function renderStorageMeter(size, limit) {
+    const pct = limit > 0 ? Math.min(100, size / limit * 100) : 0;
+    $('#storageText').textContent = U.bytes(size) + ' · ' + pct.toFixed(1).replace('.', ',') + '%';
+    $('#storageBar').style.width = Math.max(pct > 0 ? 2 : 0, pct) + '%';
+  }
+
+  function renderWebStorageEstimate() {
+    const note = $('#storageEstimate');
+    if (!note) return;
+    note.hidden = false;
+    note.textContent = 'Скриншоты хранятся в IndexedDB. Считаем размер хранилища…';
+    store.storageEstimate().then(function (data) {
+      if (!note.isConnected) return;
+      if (!data) {
+        note.textContent = 'Скриншоты хранятся в IndexedDB. Браузер не сообщает точный размер хранилища.';
+        return;
+      }
+      renderStorageMeter(data.usage, data.quota);
+      const pct = data.usage / data.quota * 100;
+      note.textContent = 'Оценка браузера: ' + U.bytes(data.usage) + ' из ' + U.bytes(data.quota) +
+        ' (' + pct.toFixed(1).replace('.', ',') + '%). Скриншоты хранятся в IndexedDB.' +
+        (state.storagePersisted ? ' Постоянное хранилище включено.' : '');
+    });
   }
 
   function pluralNotes(n) {
@@ -2915,7 +2944,8 @@
   function isScreenshotValue(value) {
     if (typeof value !== 'string' || value.length > 3000000) return false;
     return /^data:image\/(?:png|jpe?g|webp);base64,[a-z0-9+/=]+$/i.test(value)
-      || /^file:screenshots\/[a-z0-9_-]{1,80}\.(?:jpe?g|png|webp)$/i.test(value);
+      || /^file:screenshots\/[a-z0-9_-]{1,80}\.(?:jpe?g|png|webp)$/i.test(value)
+      || /^idb:screenshots\/[a-z0-9-]{1,80}$/i.test(value);
   }
 
   function normalizeExitRows(rows) {

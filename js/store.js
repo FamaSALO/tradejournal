@@ -19,6 +19,10 @@
   const MAX_SCREENSHOT_LENGTH = desktop ? 8000000 : 3000000;
   const SAFE_SCREENSHOT_RE = /^data:image\/(?:png|jpe?g|webp);base64,[a-z0-9+/=]+$/i;
   const SAFE_SCREENSHOT_FILE_RE = /^file:screenshots\/[a-z0-9_-]{1,80}\.(?:jpe?g|png|webp)$/i;
+  const IDB_SCREENSHOT_RE = /^idb:screenshots\/[a-z0-9-]{1,80}$/i;
+  // Refs used earlier in this session stay protected so that undo can restore
+  // a deleted or replaced screenshot. They are collected on the next launch.
+  const sessionScreenshotRefs = new Set();
   const MAX_AVATAR_LENGTH = 2000000;
   const SAFE_AVATAR_RE = SAFE_SCREENSHOT_RE;
   const DEFAULT_SETTINGS = {
@@ -281,6 +285,8 @@
     if (typeof raw.screenshot === 'string') {
       if (SAFE_SCREENSHOT_FILE_RE.test(raw.screenshot)) {
         shot = raw.screenshot;
+      } else if (!desktop && IDB_SCREENSHOT_RE.test(raw.screenshot)) {
+        shot = raw.screenshot;
       } else if (raw.screenshot.length <= MAX_SCREENSHOT_LENGTH && SAFE_SCREENSHOT_RE.test(raw.screenshot)) {
         shot = raw.screenshot;
       }
@@ -439,6 +445,7 @@
       screenshotsTooLarge: 0,
       screenshotsInvalid: 0,
       fileScreenshots: 0,
+      idbScreenshots: 0,
       invalidDates: 0,
       missingSymbols: 0,
       tradesDropped: 0,
@@ -496,6 +503,9 @@
         stats.screenshots++;
         if (SAFE_SCREENSHOT_FILE_RE.test(shot)) {
           stats.fileScreenshots++;
+          stats.screenshotsAccepted++;
+        } else if (!desktop && IDB_SCREENSHOT_RE.test(shot)) {
+          stats.idbScreenshots++;
           stats.screenshotsAccepted++;
         } else if (shot.length <= MAX_SCREENSHOT_LENGTH && SAFE_SCREENSHOT_RE.test(shot)) {
           stats.screenshotsAccepted++;
@@ -613,16 +623,23 @@
     try {
       localStorage.setItem(KEY, raw);
       pendingMigration = false;
-      return Promise.resolve(true);
+      return gcScreenshots().then(function () {
+        return true;
+      }, function () {
+        return true;
+      });
     } catch (err) {
       console.warn('TradeJournal: не удалось сохранить данные', err);
       return Promise.resolve(false);
     }
   }
 
-  function replaceData(raw, options) {
+  async function replaceData(raw, options) {
     if (!isJournalData(raw)) return false;
     root = normalizeData(raw, options);
+    // Move embedded screenshots out of the journal before the first save so a
+    // large import does not hit the localStorage quota.
+    if (!desktop) await migrateScreenshotData();
     return save();
   }
 
@@ -695,15 +712,30 @@
     return true;
   }
 
+  function getBlobStore() {
+    if (desktop || !NS.blobStore || typeof NS.blobStore.getDefault !== 'function') return null;
+    return NS.blobStore.getDefault();
+  }
+
   function saveScreenshotData(dataUrl) {
-    if (!desktop) return Promise.resolve(dataUrl);
-    if (!SAFE_SCREENSHOT_RE.test(String(dataUrl || ''))) {
+    const value = String(dataUrl || '');
+    if (!SAFE_SCREENSHOT_RE.test(value)) {
       return Promise.reject(new Error('Некорректное изображение скриншота.'));
     }
-    return desktop.saveScreenshot(U.uid(), dataUrl).then(function (result) {
-      if (result && result.reference) return result.reference;
-      if (typeof result === 'string') return result;
-      throw new Error('Не удалось сохранить скриншот.');
+    if (desktop) {
+      return desktop.saveScreenshot(U.uid(), value).then(function (result) {
+        if (result && result.reference) return result.reference;
+        if (typeof result === 'string') return result;
+        throw new Error('Не удалось сохранить скриншот.');
+      });
+    }
+    const blobs = getBlobStore();
+    if (!blobs) return Promise.resolve(value);
+    return blobs.save(value).catch(function (err) {
+      // Keep the journal usable when IndexedDB is unavailable (for example in
+      // a private window); the caller stores the data URL as before.
+      console.warn('TradeJournal: не удалось сохранить скриншот в IndexedDB', err);
+      return value;
     });
   }
 
@@ -718,43 +750,110 @@
         return '';
       });
     }
+    if (!desktop && IDB_SCREENSHOT_RE.test(value)) {
+      const blobs = getBlobStore();
+      if (!blobs) return Promise.resolve('');
+      return blobs.load(value);
+    }
     return Promise.resolve('');
   }
 
-  async function migrateScreenshots() {
-    if (!desktop) return 0;
+  async function migrateScreenshotData() {
     let changed = 0;
+    if (desktop) {
+      for (const account of root.accounts) {
+        for (const trade of account.trades) {
+          if (!SAFE_SCREENSHOT_RE.test(trade.screenshot || '')) continue;
+          try {
+            const result = await desktop.saveScreenshot(U.uid(), trade.screenshot);
+            const reference = result && result.reference ? result.reference : '';
+            if (reference) {
+              trade.screenshot = reference;
+              changed++;
+            }
+          } catch (err) {
+            console.warn('TradeJournal: не удалось вынести скриншот в файл', err);
+          }
+        }
+      }
+      return changed;
+    }
+
+    const blobs = getBlobStore();
+    if (!blobs) return 0;
     for (const account of root.accounts) {
       for (const trade of account.trades) {
         if (!SAFE_SCREENSHOT_RE.test(trade.screenshot || '')) continue;
         try {
-          const result = await desktop.saveScreenshot(U.uid(), trade.screenshot);
-          const reference = result && result.reference ? result.reference : '';
-          if (reference) {
-            trade.screenshot = reference;
-            changed++;
-          }
+          trade.screenshot = await blobs.save(trade.screenshot);
+          changed++;
         } catch (err) {
-          console.warn('TradeJournal: не удалось вынести скриншот в файл', err);
+          // A failed migration must not destroy the original data URL.
+          console.warn('TradeJournal: не удалось перенести скриншот в IndexedDB', err);
         }
       }
     }
+    return changed;
+  }
+
+  async function migrateScreenshots() {
+    const changed = await migrateScreenshotData();
     if (changed) await save();
     return changed;
   }
 
+  function screenshotRefs() {
+    const refs = [];
+    root.accounts.forEach(function (account) {
+      account.trades.forEach(function (trade) {
+        if (trade && IDB_SCREENSHOT_RE.test(trade.screenshot || '')) refs.push(trade.screenshot);
+      });
+    });
+    return refs;
+  }
+
+  async function gcScreenshots() {
+    const blobs = getBlobStore();
+    if (!blobs) return { deleted: 0, bytes: 0 };
+    const refs = screenshotRefs();
+    refs.forEach(function (ref) { sessionScreenshotRefs.add(ref); });
+    return blobs.gc(Array.from(sessionScreenshotRefs));
+  }
+
+  function requestPersistentStorage() {
+    const blobs = getBlobStore();
+    return blobs ? blobs.persist() : Promise.resolve(false);
+  }
+
+  function storageEstimate() {
+    const blobs = getBlobStore();
+    return blobs ? blobs.estimate() : Promise.resolve(null);
+  }
+
   async function exportSnapshot() {
     const snapshot = JSON.parse(JSON.stringify(root));
-    if (!desktop) return snapshot;
+    if (desktop) {
+      for (const account of snapshot.accounts) {
+        for (const trade of account.trades) {
+          if (!SAFE_SCREENSHOT_FILE_RE.test(trade.screenshot || '')) continue;
+          try {
+            const dataUrl = await desktop.loadScreenshot(trade.screenshot);
+            if (dataUrl) trade.screenshot = dataUrl;
+          } catch (err) {
+            console.warn('TradeJournal: не удалось вложить скриншот в экспорт', err);
+          }
+        }
+      }
+      return snapshot;
+    }
+
+    const blobs = getBlobStore();
+    if (!blobs) return snapshot;
     for (const account of snapshot.accounts) {
       for (const trade of account.trades) {
-        if (!SAFE_SCREENSHOT_FILE_RE.test(trade.screenshot || '')) continue;
-        try {
-          const dataUrl = await desktop.loadScreenshot(trade.screenshot);
-          if (dataUrl) trade.screenshot = dataUrl;
-        } catch (err) {
-          console.warn('TradeJournal: не удалось вложить скриншот в экспорт', err);
-        }
+        if (!IDB_SCREENSHOT_RE.test(trade.screenshot || '')) continue;
+        const dataUrl = await blobs.load(trade.screenshot);
+        if (dataUrl) trade.screenshot = dataUrl;
       }
     }
     return snapshot;
@@ -1139,6 +1238,9 @@
     saveScreenshot: saveScreenshotData,
     screenshotSource: screenshotSource,
     migrateScreenshots: migrateScreenshots,
+    gcScreenshots: gcScreenshots,
+    requestPersistentStorage: requestPersistentStorage,
+    storageEstimate: storageEstimate,
     exportSnapshot: exportSnapshot,
     tradeExits: tradeExits,
     exitedQty: exitedQty,

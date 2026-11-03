@@ -7,6 +7,7 @@ const APP_SHELL = [
   './css/styles.css',
   './js/desktop-bridge.js',
   './js/utils.js',
+  './js/blobstore.js',
   './js/store.js',
   './js/sample.js',
   './js/csv.js',

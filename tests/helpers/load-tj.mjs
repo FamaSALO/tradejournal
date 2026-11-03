@@ -37,7 +37,7 @@ export function loadTradeJournal(extraFiles) {
   sandbox.globalThis = sandbox;
   vm.createContext(sandbox);
 
-  const files = ['js/utils.js', 'js/store.js', 'js/csv.js', 'js/zip.js'].concat(extraFiles || []);
+  const files = ['js/utils.js', 'js/blobstore.js', 'js/store.js', 'js/csv.js', 'js/zip.js'].concat(extraFiles || []);
   files.forEach(function (file) {
     const full = path.join(ROOT, file);
     vm.runInContext(readFileSync(full, 'utf8'), sandbox, { filename: full });

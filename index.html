@@ -598,7 +598,8 @@
             <div class="storage-block">
               <div class="storage-head"><span>Использование хранилища</span><strong id="storageText">—</strong></div>
               <div class="storage-meter"><i id="storageBar"></i></div>
-              <p class="muted small">В веб-версии данные лежат в localStorage браузера, в Windows-приложении — в локальных файлах, а скриншоты — отдельно в папке <b>screenshots</b>. Очистка кэша браузера удалит журнал — держите резервную копию. Глубокая проверка неиспользуемых скриншотов доступна в Windows-приложении.</p>
+              <p class="muted small storage-estimate" id="storageEstimate" hidden></p>
+              <p class="muted small">В веб-версии журнал лежит в localStorage, а скриншоты — в IndexedDB браузера; в Windows-приложении данные хранятся в локальных файлах, скриншоты — в папке <b>screenshots</b>. Очистка данных сайта удалит журнал — держите резервную копию. Глубокая проверка неиспользуемых скриншотов доступна в Windows-приложении.</p>
             </div>
 
             <div class="danger-zone">
@@ -999,6 +1000,7 @@
 
 <script src="js/desktop-bridge.js"></script>
 <script src="js/utils.js"></script>
+<script src="js/blobstore.js"></script>
 <script src="js/store.js"></script>
 <script src="js/sample.js"></script>
 <script src="js/csv.js"></script>
