@@ -6,7 +6,7 @@ const PNG = 'data:image/png;base64,AAAA';
 
 function memoryAdapter() {
   const data = new Map();
-  const calls = { put: 0, remove: 0, persist: 0, estimate: 0 };
+  const calls = { put: 0, get: 0, remove: 0, persist: 0, estimate: 0 };
   return {
     data: data,
     calls: calls,
@@ -16,6 +16,7 @@ function memoryAdapter() {
       return Promise.resolve();
     },
     get: function (id) {
+      calls.get++;
       return Promise.resolve(data.get(id) || '');
     },
     remove: function (id) {
@@ -134,6 +135,7 @@ test('web migration moves embedded screenshots to IndexedDB', async function () 
 
   const changed = await store.migrateScreenshots();
   assert.equal(changed, 1);
+  assert.ok(adapter.calls.get >= 1, 'migration must verify the stored blob with a get');
   assert.ok(normalized.screenshot.startsWith('idb:screenshots/'));
   assert.equal(adapter.data.size, 1);
   assert.equal(adapter.data.get(loaded.TJ.blobStore.idFromRef(normalized.screenshot)), PNG);
@@ -255,4 +257,38 @@ test('a fresh session collects screenshots left by earlier undo history', async 
   const result = await second.TJ.store.gcScreenshots();
   assert.equal(result.deleted, 1);
   assert.equal(adapter.data.has(oldId), false);
+});
+
+test('garbage collection keeps screenshots referenced by another account', async function () {
+  const adapter = memoryAdapter();
+  const first = createStore(adapter);
+  const store = first.TJ.store;
+  const shotA = store.normalizeTrade(Object.assign(trade(), { id: 'trade-a' }));
+  const shotB = store.normalizeTrade(Object.assign(trade(), { id: 'trade-b' }));
+  store.state.accounts = [
+    { id: 'account-a', name: 'A', settings: {}, trades: [shotA], notes: [] },
+    { id: 'account-b', name: 'B', settings: {}, trades: [shotB], notes: [] }
+  ];
+  store.state.activeAccountId = 'account-a';
+  await store.migrateScreenshots();
+
+  const idA = first.TJ.blobStore.idFromRef(shotA.screenshot);
+  const idB = first.TJ.blobStore.idFromRef(shotB.screenshot);
+  assert.ok(idA && idB && idA !== idB);
+
+  store.state.trades = [];
+  await store.save();
+
+  const second = createStore(adapter);
+  await second.TJ.store.replaceData({
+    version: 4,
+    activeAccountId: 'account-a',
+    accounts: [
+      { id: 'account-a', name: 'A', settings: {}, trades: [], notes: [] },
+      { id: 'account-b', name: 'B', settings: {}, trades: [shotB], notes: [] }
+    ]
+  }, { strictDate: true });
+  await second.TJ.store.gcScreenshots();
+  assert.equal(adapter.data.has(idA), false);
+  assert.equal(adapter.data.has(idB), true);
 });
