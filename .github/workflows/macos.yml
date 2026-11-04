@@ -3,8 +3,13 @@ name: Build macOS app
 on:
   workflow_dispatch:
   push:
+    branches:
+      - feat/macos-universal
     tags:
       - 'v*'
+  pull_request:
+    branches:
+      - main
 
 permissions:
   contents: read
