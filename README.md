@@ -67,6 +67,30 @@ src-tauri/src/lib.rs             Rust: window, files, backups, dialogs
 
 Keyboard shortcuts: `N` — new trade, `/` — search, `Esc` — close a window, `Ctrl+V` — paste a screenshot into an open trade editor, `Ctrl+Enter` or `Ctrl+S` — save the trade.
 
+## Screenshots
+
+The screenshots use generated demo data; no real journal is shown.
+
+| Overview | Trades |
+| --- | --- |
+| ![Overview](assets/screenshots/overview.png) | ![Trades](assets/screenshots/trades.png) |
+| Key metrics, equity curve, and daily P&L | Filters, partial exits, and open positions |
+
+| Calendar | Analytics |
+| --- | --- |
+| ![Calendar](assets/screenshots/calendar.png) | ![Analytics](assets/screenshots/analytics.png) |
+| Daily P&L heatmap and the selected day's trades | R distribution and performance breakdowns |
+
+| Journal | Calculator |
+| --- | --- |
+| ![Journal](assets/screenshots/journal.png) | ![Calculator](assets/screenshots/calculator.png) |
+| Notes with mood, tags, and consistency statistics | Position size, risk, stop loss, and take profit |
+
+| Settings | Trade editor |
+| --- | --- |
+| ![Settings](assets/screenshots/settings.png) | ![Trade editor](assets/screenshots/trade-editor.png) |
+| Accounts, risk management, data, and updates | Partial exits, R/RR, screenshots, and notes |
+
 ## What's new in 2.4.0
 
 - **Daily result** — daily P&L, the calendar, and daily limits are now calculated by exit dates; a trade with multiple partial exits is distributed across days.
