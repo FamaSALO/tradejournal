@@ -1,275 +1,285 @@
-# TradeJournal — дневник трейдера
+# TradeJournal — trading journal
 
-Локальный дневник трейдера в двух вариантах:
+English | [Русский](README.ru.md)
 
-- **Windows-приложение** — лёгкий установщик на Tauri 2 и Rust с текущим интерфейсом и файловым хранением данных.
-- **Веб-версия** — статическая страница без сервера, которую можно открыть в браузере или опубликовать на GitHub Pages.
+[![AI-assisted development](https://img.shields.io/badge/AI--assisted-development-6f42c1)](#ai-assisted-development)
 
-[Скачать последнюю версию](https://github.com/FamaSALO/tradejournal/releases/latest)
+> **AI-assisted development.** The code, tests, and documentation are created with extensive AI assistance and reviewed by the maintainer. [Details](#ai-assisted-development).
 
-![Обзор TradeJournal](assets/preview.png)
+A local-first trading journal in two editions:
 
-## Технологии и архитектура
+- **Windows app** — a lightweight installer built with Tauri 2 and Rust, with the same interface and file-based data storage.
+- **Web version** — a static page with no server that can be opened in a browser or published on GitHub Pages.
 
-Приложение не использует UI-фреймворки и сборщик интерфейса: один и тот же интерфейс написан на HTML5, CSS3 и чистом JavaScript. Файлы `index.html`, `css/` и `js/` работают как обычная веб-страница и загружаются внутри Windows-приложения.
+[Download the latest version](https://github.com/FamaSALO/tradejournal/releases/latest)
 
-- **Windows-оболочка** — Tauri 2 и Rust. Окно, файловое хранилище, резервные копии и системные диалоги находятся в `src-tauri/src/lib.rs`.
-- **WebView2** — приложение использует системный компонент Microsoft Edge WebView2, а не встроенный браузер. Поэтому установщик и папка установки остаются компактными.
-- **Связь интерфейса с системой** — Tauri `invoke` через `js/desktop-bridge.js`. Интерфейс не имеет доступа к Node.js и может вызывать только команды, зарегистрированные в Rust.
-- **Безопасность** — Content Security Policy, разрешения Tauri в `src-tauri/capabilities/default.json`, отсутствие загрузки удалённого контента, атомарная запись файлов.
-- **Графики** — собственная отрисовка на Canvas 2D без сторонних библиотек.
-- **Хранение** — JSON-файлы в `%APPDATA%\TradeJournal`: атомарная запись, `journal.previous.json`, автоматические и ручные резервные копии, отдельная папка `screenshots/` для изображений. В веб-версии журнал хранится в `localStorage`, а скриншоты — в IndexedDB. Схема данных v4; журналы v1, v2 и v3 переводятся автоматически без потери сделок, записей и скриншотов.
-- **Сборка** — Tauri CLI 2.12, Rust stable и NSIS-установщик для Windows x64. CI-сборка выполняется в GitHub Actions на `windows-latest`.
-- **Публикация** — GitHub Pages для веб-версии и GitHub Releases для Windows-сборок.
+![TradeJournal overview](assets/preview.png)
+
+## Technology and architecture
+
+The app uses no UI frameworks or interface bundler: the same interface is written in HTML5, CSS3, and vanilla JavaScript. The `index.html`, `css/`, and `js/` files work as a regular web page and are loaded inside the Windows app.
+
+- **Windows shell** — Tauri 2 and Rust. The window, file storage, backups, and system dialogs live in `src-tauri/src/lib.rs`.
+- **WebView2** — the app uses Microsoft Edge WebView2, the system component, instead of a bundled browser. This keeps the installer and installation folder small.
+- **UI-to-system bridge** — Tauri `invoke` through `js/desktop-bridge.js`. The UI has no access to Node.js and can only call commands registered in Rust.
+- **Security** — Content Security Policy, Tauri permissions in `src-tauri/capabilities/default.json`, no remote content loading, and atomic file writes.
+- **Charts** — custom Canvas 2D rendering without third-party libraries.
+- **Storage** — JSON files in `%APPDATA%\TradeJournal`: atomic writes, `journal.previous.json`, automatic and manual backups, and a separate `screenshots/` folder for images. In the web version, the journal is stored in `localStorage` and screenshots in IndexedDB. Data schema v4; v1, v2, and v3 journals are migrated automatically without losing trades, notes, or screenshots.
+- **Build** — Tauri CLI 2.12, stable Rust, and an NSIS installer for Windows x64. CI builds run on `windows-latest` in GitHub Actions.
+- **Publishing** — GitHub Pages for the web version and GitHub Releases for Windows builds.
 
 ```text
-index.html + css/ + js/          интерфейс
+index.html + css/ + js/          interface
             │
             │ window.tradeJournalDesktop
             ▼
-js/desktop-bridge.js             Tauri invoke + очередь сохранений
+js/desktop-bridge.js             Tauri invoke + save queue
             ▼
-src-tauri/src/lib.rs             Rust: окно, файлы, копии, диалоги
+src-tauri/src/lib.rs             Rust: window, files, backups, dialogs
             ▼
 %APPDATA%\TradeJournal\          journal.json, screenshots/, backups/
 ```
 
-## Возможности
+## Features
 
-- **Обзор** — чистый P&L, винрейт, профит-фактор, средний R, просадка, серии сделок, кривая капитала и дневной P&L. Частично закрытые позиции учитываются по реализованной части.
-- **Дневной результат** — дневной P&L, календарь, кривая капитала и дневные лимиты считаются по дате выхода; список сделок и фильтры периода — по дате входа.
-- **Сделки** — добавление, редактирование и удаление, фильтры, поиск, сортировка, скриншоты с вставкой из буфера (`Ctrl+V`), drag-and-drop и просмотром на весь экран, автоматический расчёт P&L, R и RR. R считается от стопа при входе, текущий стоп хранится отдельно. В веб-версии скриншоты лежат в IndexedDB, поэтому журнал в localStorage остаётся компактным.
-- **Множитель контракта** — для фьючерсов и опционов: P&L и риск умножаются на количество единиц актива в контракте. По умолчанию множитель равен 1.
-- **Частичные выходы и открытые позиции** — несколько выходов с собственными количеством, ценой и датой, кнопка «Закрыть остаток», статусы «Открыта» и «Частично закрыта», остаток позиции и реализованный P&L. Комиссия распределяется по объёму: частично закрытая позиция несёт только долю закрытого объёма, остаток списывается при следующем выходе. После обновления P&L сохранённых частично закрытых сделок может пересчитаться в меньшую сторону.
-- **Миниатюры и пагинация** — скриншот виден прямо в строке сделки, журнал разбит на страницы с сохранением фильтров и сортировки.
-- **Импорт CSV** — предпросмотр перед добавлением, русские и английские заголовки, разделители `;`, `,` и табуляция, кавычки, BOM, числа и даты в разных форматах, частичные выходы в формате `количество@цена|количество@цена`, пропуск дубликатов и отмена импорта.
-- **Импорт ZIP** — кнопка «Импорт JSON / ZIP» принимает как JSON, так и ZIP-экспорт TradeJournal: приложение само извлекает `journal.json` из архива и показывает тот же предпросмотр. Сжатые записи Deflate распаковываются встроенным `DecompressionStream`, файлы читаются из памяти и не записываются на диск по именам из архива.
-- **Календарь** — тепловая карта прибыли по дням с детальной статистикой выбранного дня.
-- **Аналитика** — распределение R, разбивка по инструментам, сетапам, дням недели, эмоциям и торговым сессиям, таблица эффективности сетапов и автоматические выводы.
-- **Часовой пояс и торговые сессии** — время сделки хранится в UTC, а в журнале показывается в выбранном поясе IANA. Границы и названия четырёх сессий настраиваются в **Настройки → Риск-менеджмент**; сессии считаются в этом же часовом поясе.
-- **Журнал** — записи с настроением, тегами и статистикой регулярности.
-- **Калькулятор** — размер позиции, риск на сделку, стоп-лосс и тейк-профит.
-- **Настройки** — профиль трейдера с аватаром, несколько именованных счетов со своими сделками, записями и риск-настройками, стартовый баланс, риск, дневные лимиты, валюта, часовой пояс, границы торговых сессий, экспорт CSV/JSON, ZIP-архив со скриншотами, импорт CSV/JSON, демо-данные и очистка.
-- **Резервные копии ZIP** — архив содержит `journal.json` со встроенными скриншотами и `README.txt` с инструкцией по восстановлению. Один файл переносит весь журнал на другое устройство.
-- **PWA и офлайн** — веб-версию можно установить как приложение из браузера; service worker кэширует интерфейс, а при обновлении появляется баннер с кнопкой «Обновить».
-- **Автообновление Windows-версии** — приложение проверяет подписанные обновления в GitHub Releases, скачивает установщик и перезапускается. Проверку можно запустить вручную в настройках.
-- **Черновики** — форма сделки автоматически сохраняет несохранённые изменения, восстанавливает их при повторном открытии и предупреждает при закрытии. Черновики привязаны к счёту и сделке.
-- **Дисциплина и эмоции** — оценка качества исполнения и анализ влияния психологии на результат.
-- **Адаптивность** — отдельная раскладка для телефонов в веб-версии.
+- **Overview** — net P&L, win rate, profit factor, average R, drawdown, trade streaks, equity curve, and daily P&L. Partially closed positions are counted by their realized portion.
+- **Daily result** — daily P&L, the calendar, the equity curve, and daily limits are calculated by exit date; the trade list and period filters use the entry date.
+- **Trades** — add, edit, and delete trades; filters, search, and sorting; screenshots with clipboard paste (`Ctrl+V`), drag-and-drop, and a full-screen viewer; automatic P&L, R, and RR calculation. R is calculated from the initial stop; the current stop is stored separately. In the web version, screenshots are stored in IndexedDB, so the journal in `localStorage` stays compact.
+- **Contract multiplier** — for futures and options: P&L and risk are multiplied by the number of units of the asset in the contract. The multiplier defaults to 1.
+- **Partial exits and open positions** — multiple exits with their own quantity, price, and date; a **Close remaining** button; **Open** and **Partially closed** statuses; remaining position size and realized P&L. Commission is allocated by volume: a partially closed position carries only the share of the commission for the closed volume, and the remainder is charged on the next exit. After the update, P&L of saved partially closed trades may be recalculated downward.
+- **Thumbnails and pagination** — the screenshot is visible directly in the trade row, and the journal is split into pages while preserving filters and sorting.
+- **CSV import** — preview before adding, Russian and English headers, `;`, `,`, and tab separators, quotes, BOM, numbers and dates in various formats, partial exits in the `quantity@price|quantity@price` format, duplicate skipping, and import cancellation.
+- **ZIP import** — the **Import JSON / ZIP** button accepts both JSON and a TradeJournal ZIP export: the app extracts `journal.json` from the archive itself and shows the same preview. Compressed Deflate entries are unpacked with the built-in `DecompressionStream`; files are read from memory and are not written to disk under names from the archive.
+- **Calendar** — a profit heatmap by day with detailed statistics for the selected day.
+- **Analytics** — R distribution, breakdown by instrument, setup, day of week, emotion, and trading session; a setup performance table; and automatic insights.
+- **Time zone and trading sessions** — trade time is stored in UTC and displayed in the journal in the selected IANA time zone. The boundaries and names of the four sessions are configured in **Settings → Risk management**; sessions are calculated in the same time zone.
+- **Journal** — notes with mood, tags, and consistency statistics.
+- **Calculator** — position size, risk per trade, stop loss, and take profit.
+- **Settings** — trader profile with an avatar, multiple named accounts with their own trades, notes, and risk settings; starting balance, risk, daily limits, currency, time zone, trading session boundaries, CSV/JSON export, a ZIP archive with screenshots, CSV/JSON import, demo data, and cleanup.
+- **ZIP backups** — the archive contains `journal.json` with embedded screenshots and a `README.txt` with restore instructions. One file moves the entire journal to another device.
+- **PWA and offline** — the web version can be installed as an app from the browser; a service worker caches the interface, and an update banner with an **Update** button appears when a new version is available.
+- **Windows auto-update** — the app checks for signed updates in GitHub Releases, downloads the installer, and restarts. A check can also be started manually in settings.
+- **Drafts** — the trade form automatically saves unsaved changes, restores them when reopened, and warns when closing. Drafts are tied to an account and a trade.
+- **Discipline and emotions** — an execution quality score and analysis of how psychology affects results.
+- **Responsive layout** — a separate layout for phones in the web version.
 
-Горячие клавиши: `N` — новая сделка, `/` — поиск, `Esc` — закрыть окно, `Ctrl+V` — вставить скриншот в открытом редакторе сделки, `Ctrl+Enter` или `Ctrl+S` — сохранить сделку.
+Keyboard shortcuts: `N` — new trade, `/` — search, `Esc` — close a window, `Ctrl+V` — paste a screenshot into an open trade editor, `Ctrl+Enter` or `Ctrl+S` — save the trade.
 
-## Что изменилось в 2.4.0
+## What's new in 2.4.0
 
-- **Дневной результат** — дневной P&L, календарь и дневные лимиты теперь считаются по датам выходов; сделка с несколькими частичными выходами распределяется по дням.
-- **Просадка** — максимальная просадка показывается отдельно в деньгах и в процентах от пика счёта.
-- **Комиссии** — при частичном закрытии списывается только доля комиссии за закрытый объём, остаток — при следующем выходе.
-- **Скриншоты в веб-версии** — хранятся в IndexedDB, переносятся из старых журналов, встраиваются в экспорт и возвращаются при импорте. В настройках появилась оценка хранилища и запрос постоянного доступа.
-- **Резервные копии** — приложение запоминает дату последнего экспорта и раз в сессию напоминает о копии, если её не было больше 7 дней.
-- **Офлайн-обновления** — service worker при установке обходит HTTP-кэш и сразу получает свежие файлы.
-- **Веб-метаданные** — канонический адрес, карточки Open Graph и Twitter, maskable-иконка 512 и обновлённый PWA-манифест.
-- **Надёжность** — тесты часовых поясов на переходах DST, проверка целостности app shell, ESLint и отдельный CI для веб-проверок.
-- **Импорт ZIP** — резервную копию в ZIP можно восстановить прямо через «Импорт JSON / ZIP», без ручного извлечения `journal.json`; поддерживаются stored и Deflate, проверяются CRC-32, размеры и безопасность имён.
-- **Релизы** — сборка по тегу публикует черновик GitHub Release; автообновление пользователей включается только после ручной проверки и нажатия **Publish**.
-- **Лицензия** — проект распространяется по лицензии MIT.
+- **Daily result** — daily P&L, the calendar, and daily limits are now calculated by exit dates; a trade with multiple partial exits is distributed across days.
+- **Drawdown** — maximum drawdown is shown separately in money and as a percentage of the account peak.
+- **Commissions** — when a position is partially closed, only the share of the commission for the closed volume is charged; the remainder is charged on the next exit.
+- **Screenshots in the web version** — stored in IndexedDB, migrated from old journals, embedded in exports, and restored on import. Settings now include a storage estimate and a request for persistent access.
+- **Backups** — the app remembers the date of the last export and, once per session, reminds you about a backup if there has not been one for more than 7 days.
+- **Offline updates** — the service worker bypasses the HTTP cache during installation and fetches fresh files immediately.
+- **Web metadata** — canonical URL, Open Graph and Twitter cards, a 512 maskable icon, and an updated PWA manifest.
+- **Reliability** — time zone tests across DST transitions, app shell integrity checks, ESLint, and a separate CI for web checks.
+- **ZIP import** — a ZIP backup can be restored directly through **Import JSON / ZIP**, without manually extracting `journal.json`; stored and Deflate entries are supported, and CRC-32, sizes, and name safety are checked.
+- **Releases** — a tag build publishes a draft GitHub Release; auto-update for users is enabled only after manual verification and clicking **Publish**.
+- **License** — the project is distributed under the MIT License.
 
-## Windows-приложение
+## Windows app
 
-### Установка
+### Installation
 
-В GitHub Release публикуются:
+The GitHub Release contains:
 
-- `TradeJournal_2.4.0_x64-setup.exe` — установщик NSIS для текущего пользователя, без прав администратора.
-- `TradeJournal_2.4.0_x64-setup.exe.sig` — подпись установщика для автообновления.
-- `TradeJournal-portable-2.4.0-x64.zip` — портативная версия, которая запускается без установки.
-- `latest.json` — манифест обновления, который читает Windows-версия.
-- `SHA256SUMS.txt` — контрольные суммы файлов.
+- `TradeJournal_2.4.0_x64-setup.exe` — an NSIS installer for the current user, without administrator rights.
+- `TradeJournal_2.4.0_x64-setup.exe.sig` — the installer signature for auto-update.
+- `TradeJournal-portable-2.4.0-x64.zip` — a portable version that runs without installation.
+- `latest.json` — the update manifest read by the Windows app.
+- `SHA256SUMS.txt` — file checksums.
 
-Установщик не подписан сертификатом. При первом запуске Windows SmartScreen может показать предупреждение: выберите **Подробнее → Выполнить всё равно**. Это ожидаемо для сборки без платной подписи кода.
+The installer is not signed with a certificate. On first launch, Windows SmartScreen may show a warning: choose **More info → Run anyway**. This is expected for a build without a paid code-signing certificate.
 
-Если WebView2 отсутствует в системе, установщик скачает и установит его. Портативной версии нужен уже установленный WebView2 — на Windows 10 и 11 он обычно присутствует вместе с Microsoft Edge.
+If WebView2 is missing from the system, the installer downloads and installs it. The portable version requires WebView2 to be already installed — it is usually present with Microsoft Edge on Windows 10 and 11.
 
-При первом запуске приложение показывает демо-журнал. Данные из веб-версии или старой Electron-версии можно перенести через **Настройки → Экспорт JSON**, а затем **Настройки → Импорт JSON / ZIP**. Кнопка импорта принимает и JSON, и ZIP-экспорт: из архива автоматически извлекается `journal.json`. Перед заменой журнала приложение показывает dry-run-отчёт: сколько текущих сделок будет заменено и сколько сделок из файла будет отброшено с причинами — например, «без символа: 2, битая дата: 1». Сделки без инструмента и с некорректной датой не импортируются, чтобы не подменять дату сегодняшней; остальные счета, сделки, записи и скриншоты импортируются с предупреждениями о потерях. Если файл `%APPDATA%\TradeJournal\journal.json` уже существует, приложение автоматически переводит старый формат в новый: прежние настройки, сделки и записи попадают в счёт **«Основной счёт»**, а встроенные скриншоты переносятся в папку `screenshots`.
+On first launch, the app shows a demo journal. Data from the web version or the old Electron version can be migrated through **Settings → Export JSON** and then **Settings → Import JSON / ZIP**. The import button accepts both JSON and a ZIP export: `journal.json` is extracted from the archive automatically. Before replacing the journal, the app shows a dry-run report: how many current trades will be replaced and how many trades from the file will be skipped, with reasons — for example, "no symbol: 2, invalid date: 1". Trades without a symbol or with an invalid date are not imported, so they cannot silently take today's date; other accounts, trades, notes, and screenshots are imported with warnings about losses. If `%APPDATA%\TradeJournal\journal.json` already exists, the app automatically migrates the old format to the new one: previous settings, trades, and notes go into the **Main account**, and embedded screenshots are moved to the `screenshots` folder.
 
-### Автообновление
+### Auto-update
 
-Windows-версия проверяет обновления при запуске и умеет обновляться без ручного скачивания установщика:
+The Windows app checks for updates at startup and can update without manually downloading the installer:
 
-- Источник обновлений — GitHub Releases репозитория `FamaSALO/tradejournal`, манифест `latest.json` по адресу `https://github.com/FamaSALO/tradejournal/releases/latest/download/latest.json`.
-- Приложение сравнивает версии и предлагает установить только более новую сборку. Проверить вручную можно в **Настройки → Приложение и локальные файлы → Проверить обновления**. Если обновление найдено, рядом появляется кнопка **Скачать и установить** — она сразу скачивает и устанавливает новую версию, как и кнопка в верхнем баннере.
-- Установщик скачивается в фоне, проверяется по встроенному публичному ключу и запускается с перезапуском приложения. Повреждённая или чужая подпись отклоняется.
-- Если сети нет или GitHub недоступен, приложение продолжает работать и показывает сообщение об ошибке только при ручной проверке.
-- Портативная версия автообновление не использует: для неё достаточно распаковать новый ZIP поверх старой папки, сохранив `%APPDATA%\TradeJournal`.
-- Приватный ключ подписи хранится только в GitHub Actions Secrets (`TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`) и никогда не попадает в репозиторий.
+- The update source is GitHub Releases of the `FamaSALO/tradejournal` repository, with the `latest.json` manifest at `https://github.com/FamaSALO/tradejournal/releases/latest/download/latest.json`.
+- The app compares versions and only offers a newer build. A manual check is available in **Settings → App and local files → Check for updates**. If an update is found, a **Download and install** button appears next to it — it downloads and installs the new version immediately, just like the button in the top banner.
+- The installer is downloaded in the background, verified against the embedded public key, and launched with an app restart. A corrupted or foreign signature is rejected.
+- If there is no network or GitHub is unavailable, the app keeps working and shows an error only during a manual check.
+- The portable version does not use auto-update: unpack the new ZIP over the old folder while keeping `%APPDATA%\TradeJournal`.
+- The private signing key is stored only in GitHub Actions Secrets (`TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`) and never enters the repository.
 
-### Размер и потребление ресурсов
+### Size and resource usage
 
-Замеры на Windows 11 x64 с журналом из 77 сделок, сразу после запуска:
+Measurements on Windows 11 x64 with a 77-trade journal, right after launch:
 
-| Показатель | Electron 1.0.0 | Tauri 2.0.0 |
+| Metric | Electron 1.0.0 | Tauri 2.0.0 |
 | --- | ---: | ---: |
-| Установщик | 112,8 МБ | 1,2 МБ |
-| Установленная папка | 357,7 МБ | 3,2 МБ |
-| Рабочий набор процессов | ≈ 497 МБ | ≈ 417 МБ |
-| Частная память процессов | ≈ 352 МБ | ≈ 270 МБ |
+| Installer | 112.8 MB | 1.2 MB |
+| Installed folder | 357.7 MB | 3.2 MB |
+| Process working set | ≈ 497 MB | ≈ 417 MB |
+| Process private memory | ≈ 352 MB | ≈ 270 MB |
 
-Установленная папка Tauri содержит только `tradejournal.exe` и деинсталлятор. Сам браузерный движок WebView2 уже входит в Windows и не дублируется в приложении; Electron нёс собственную копию Chromium. Служебный кэш WebView2 занимает около 70 МБ в `%LOCALAPPDATA%\com.famasalo.tradejournal` и создаётся при первом запуске.
+The installed Tauri folder contains only `tradejournal.exe` and the uninstaller. The WebView2 browser engine is already part of Windows and is not duplicated in the app; Electron bundled its own copy of Chromium. The WebView2 service cache takes about 70 MB in `%LOCALAPPDATA%\com.famasalo.tradejournal` and is created on first launch.
 
-Потребление RAM зависит от версии WebView2, открытого раздела и количества данных, поэтому цифры выше — ориентир, а не жёсткая гарантия.
+RAM usage depends on the WebView2 version, the open section, and the amount of data, so the figures above are a guide, not a hard guarantee.
 
-### Где хранятся данные
+### Where data is stored
 
-Windows-приложение не использует `localStorage` браузера. Журнал лежит в отдельной папке пользователя:
+The Windows app does not use the browser's `localStorage`. The journal lives in a separate user folder:
 
 ```text
 %APPDATA%\TradeJournal\
-├── journal.json            основной файл журнала (профиль, счета, сделки, записи)
-├── journal.previous.json   предыдущая версия файла
-├── screenshots\            файлы скриншотов сделок
-└── backups\                резервные копии
+├── journal.json            main journal file (profile, accounts, trades, notes)
+├── journal.previous.json   previous version of the file
+├── screenshots\            trade screenshot files
+└── backups\                backups
 ```
 
-- Путь и кнопки **Открыть папку данных**, **Создать резервную копию** и **Восстановить** находятся в **Настройки → Приложение и локальные файлы**.
-- Автоматическая копия создаётся при сохранении, но не чаще одного раза в 10 минут. Вручную копию можно создать в любой момент.
-- Хранятся последние 20 автоматических и ручных копий. Перед восстановлением текущее состояние также сохраняется в отдельную копию.
-- Скриншоты хранятся отдельными файлами в `screenshots/`, а в `journal.json` остаются только ссылки. Изображения сохраняют детализацию: в Windows-версии — до 2560 px без потери качества (PNG) или в WebP высокого качества, в веб-версии — до 1920 px в WebP. При удалении или замене скриншота старый файл не удаляется автоматически, поэтому восстановленные резервные копии продолжают работать.
-- В **Настройки → Приложение и локальные файлы → Здоровье хранилища** видно, сколько места занимают журнал, скриншоты, предыдущая версия и резервные копии. Кнопка **Проверить** также находит файлы, на которые не ссылаются ни `journal.json`, ни `journal.previous.json`, ни одна резервная копия. Удалить можно только такие неиспользуемые файлы; перед удалением показывается список и размер, а ссылки перепроверяются ещё раз непосредственно перед очисткой.
-- Удаление приложения не удаляет журнал, скриншоты и резервные копии. Данные остаются в `%APPDATA%\TradeJournal`.
-- Папку `TradeJournal` можно скопировать целиком на другой компьютер, чтобы перенести журнал вместе со скриншотами и историей копий.
-- Служебный кэш WebView2 хранится отдельно в `%LOCALAPPDATA%\com.famasalo.tradejournal` и не содержит данных журнала.
-- Начиная с 2.2.0 в `journal.json` используется схема v3: у сделки появились `multiplier` и массив `exits`. При открытии старого файла один прежний выход `exit` превращается в единственный частичный выход, а полностью закрытая сделка сохраняет взвешенную цену выхода. Перед миграцией создаётся обычная резервная копия.
-- Начиная с 2.3.0 используется схема v4: время сделки хранится в UTC в поле `timeUtc`, а `date` и `time` остаются локальным отображением в часовом поясе счёта. Настройки счёта содержат `timezone` и массив `sessions` с названиями и временем начала сессий. При открытии схемы v3 прежние локальные дата и время переводятся в UTC в системном часовом поясе; при смене пояса дата и время пересчитываются из `timeUtc`.
+- The path and the **Open data folder**, **Create backup**, and **Restore** buttons are in **Settings → App and local files**.
+- An automatic backup is created on save, but no more than once every 10 minutes. A manual backup can be created at any time.
+- The last 20 automatic and manual backups are kept. Before a restore, the current state is also saved as a separate backup.
+- Screenshots are stored as separate files in `screenshots/`, and `journal.json` keeps only references. Images retain detail: in the Windows app, up to 2560 px without quality loss (PNG) or in high-quality WebP; in the web version, up to 1920 px in WebP. When a screenshot is deleted or replaced, the old file is not removed automatically, so restored backups continue to work.
+- **Settings → App and local files → Storage health** shows how much space the journal, screenshots, previous version, and backups use. **Scan** also finds files not referenced by `journal.json`, `journal.previous.json`, or any backup. Only such unused files can be deleted; the list and size are shown before deletion, and references are checked again immediately before cleanup.
+- Uninstalling the app does not delete the journal, screenshots, or backups. The data remains in `%APPDATA%\TradeJournal`.
+- The entire `TradeJournal` folder can be copied to another computer to move the journal with screenshots and backup history.
+- The WebView2 service cache is stored separately in `%LOCALAPPDATA%\com.famasalo.tradejournal` and does not contain journal data.
+- Starting with 2.2.0, `journal.json` uses schema v3: a trade has `multiplier` and an `exits` array. When an old file is opened, the previous single `exit` becomes the only partial exit, and a fully closed trade keeps the weighted exit price. A regular backup is created before migration.
+- Starting with 2.3.0, schema v4 is used: trade time is stored in UTC in `timeUtc`, while `date` and `time` remain the local representation in the account's time zone. Account settings contain `timezone` and a `sessions` array with session names and start times. When a v3 schema is opened, the previous local date and time are converted to UTC in the system time zone; when the time zone changes, date and time are recalculated from `timeUtc`.
 
-### Сборка
+### Build
 
-Требуется:
+Requirements:
 
-- Node.js 22.12+ и npm;
-- Rust stable с MSVC-тулчейном (`rustup default stable-x86_64-pc-windows-msvc`);
-- Visual Studio Build Tools с компонентом **Desktop development with C++** и Windows SDK;
-- Microsoft Edge WebView2 Runtime для запуска.
+- Node.js 22.12+ and npm;
+- stable Rust with the MSVC toolchain (`rustup default stable-x86_64-pc-windows-msvc`);
+- Visual Studio Build Tools with the **Desktop development with C++** component and the Windows SDK;
+- Microsoft Edge WebView2 Runtime to run the app.
 
-В Windows используйте `npm.cmd`, если PowerShell блокирует `npm.ps1`.
+On Windows, use `npm.cmd` if PowerShell blocks `npm.ps1`.
 
 ```powershell
 npm.cmd install
 npm.cmd run dev
 ```
 
-Сборка установщика:
+Build the installer:
 
 ```powershell
 npm.cmd run build
 ```
 
-Готовый установщик и исполняемый файл появляются здесь:
+The finished installer and executable appear here:
 
 ```text
 src-tauri\target\release\TradeJournal.exe
 src-tauri\target\release\bundle\nsis\TradeJournal_2.4.0_x64-setup.exe
 ```
 
-Портативную сборку можно получить, упаковав `TradeJournal.exe` в ZIP. Именно это делает CI-сборка в `.github/workflows/tauri.yml`.
+The portable build is produced by packing `TradeJournal.exe` into a ZIP. This is what the CI build in `.github/workflows/tauri.yml` does.
 
-Проверки перед сборкой:
+Checks before building:
 
 ```powershell
-npm.cmd test                  # node:test для хранилища, CSV, ZIP и PWA
-npm.cmd run check:versions    # версия во всех файлах должна совпадать
+npm.cmd test                  # node:test for storage, CSV, ZIP, and PWA
+npm.cmd run check:versions    # version must match in all files
 cargo fmt --check --manifest-path src-tauri/Cargo.toml
-npm.cmd run web:build         # подготовка dist/ для Tauri и cargo test
+npm.cmd run web:build         # prepare dist/ for Tauri and cargo test
 cargo test --manifest-path src-tauri/Cargo.toml
 ```
 
-`npm.cmd run web:build` копирует в `dist/` интерфейс, `manifest.webmanifest`, `sw.js` и иконки PWA. CI дополнительно запускает эти же проверки, собирает установщик с подписью обновления, формирует `latest.json` и `SHA256SUMS.txt`.
+`npm.cmd run web:build` copies the interface, `manifest.webmanifest`, `sw.js`, and PWA icons into `dist/`. CI also runs the same checks, builds the installer with the update signature, and generates `latest.json` and `SHA256SUMS.txt`.
 
-Если локально не установлены MSVC Build Tools, используйте готовую CI-сборку: отправьте изменения в ветку `main`, дождитесь завершения workflow **Build Tauri app** и скачайте артефакт.
+If MSVC Build Tools are not installed locally, use the ready CI build: push changes to the `main` branch, wait for the **Build Tauri app** workflow to finish, and download the artifact.
 
-### Релиз
+### Release
 
-Релиз публикуется автоматически по тегу:
+A release is published automatically from a tag:
 
 ```powershell
 git tag v2.4.0
 git push origin v2.4.0
 ```
 
-Тег должен совпадать с версией в `package.json`: для версии `2.4.0` нужен тег `v2.4.0`. При расхождении workflow завершится ошибкой. Сборка по тегу запускает workflow **Build Tauri app**, собирает установщик и все артефакты, а затем создаёт черновик GitHub Release с установщиком, подписью `.sig`, портативным ZIP, `latest.json` и `SHA256SUMS.txt`. Обычный push в `main` собирает артефакты, но черновик не создаёт. Если черновик или опубликованный релиз для тега уже существуют, workflow не перезаписывает их и завершается ошибкой.
+The tag must match the version in `package.json`: version `2.4.0` requires tag `v2.4.0`. If they differ, the workflow fails. A tag build runs the **Build Tauri app** workflow, builds the installer and all artifacts, and then creates a draft GitHub Release with the installer, `.sig` signature, portable ZIP, `latest.json`, and `SHA256SUMS.txt`. A regular push to `main` builds artifacts but does not create a draft. If a draft or published release already exists for the tag, the workflow does not overwrite it and fails.
 
-Пока черновик не опубликован кнопкой **Publish**, ссылки в `latest.json` не видны пользователям и автообновление версий 2.3.0 на 2.4.0 не затрагивается. После проверки файлов на Windows опубликуйте черновик на вкладке релиза; пользователи получат уведомление и смогут скачать и установить обновление. Чтобы откатиться после публикации, удалите релиз или опубликуйте исправленную версию.
+Until the draft is published with **Publish**, the links in `latest.json` are not visible to users and auto-update from 2.3.0 to 2.4.0 is unaffected. After checking the files on Windows, publish the draft on the release page; users will receive the notification and can download and install the update. To roll back after publication, delete the release or publish a fixed version.
 
-Перед публикацией пройдите [чек-лист ручной проверки релиза](docs/RELEASE-CHECKLIST.md).
+Before publishing, follow the [manual release checklist](docs/RELEASE-CHECKLIST.md) (in Russian).
 
-## Веб-версия
+## Web version
 
-1. Скачайте папку проекта.
-2. Откройте `index.html` в браузере.
+1. Download the project folder.
+2. Open `index.html` in a browser.
 
-Веб-версия остаётся статической: ей не нужен сервер, Node.js или установленное приложение. При первом запуске загружаются демо-данные. Их можно убрать кнопкой «Начать с нуля» на главной странице.
+The web version remains static: it needs no server, Node.js, or installed app. Demo data loads on first launch. You can remove it with the **Start from scratch** button on the home page.
 
-### Установка как приложение и офлайн-режим
+### Install as an app and offline mode
 
-- На GitHub Pages веб-версия регистрирует service worker и кэширует интерфейс, стили, скрипты, манифест и иконки. После первого открытия журнал работает без сети.
-- Браузер может предложить установить TradeJournal как отдельное приложение (Chrome/Edge: иконка установки в адресной строке; Android: «Добавить на главный экран»; iOS Safari: «На экран “Домой”»).
-- Кэш версионирован: при выходе новой версии service worker скачивает обновление в фоне, а в интерфейсе появляется баннер **«Доступно обновление»** с кнопкой **«Обновить»**.
-- Service worker и PWA-манифест работают только при открытии через HTTP(S) (GitHub Pages или локальный сервер). При открытии `index.html` напрямую через `file://` приложение работает как обычная страница, но без офлайн-кэша и установки.
-- Данные по-прежнему хранятся только в браузере (журнал — в `localStorage`, скриншоты — в IndexedDB) и не синхронизируются между устройствами.
+- On GitHub Pages, the web version registers a service worker and caches the interface, styles, scripts, manifest, and icons. After the first visit, the journal works offline.
+- The browser may offer to install TradeJournal as a separate app (Chrome/Edge: install icon in the address bar; Android: "Add to Home screen"; iOS Safari: "Add to Home Screen").
+- The cache is versioned: when a new version is released, the service worker downloads the update in the background, and an **Update available** banner with an **Update** button appears in the UI.
+- The service worker and PWA manifest work only when opened over HTTP(S) (GitHub Pages or a local server). Opening `index.html` directly via `file://` works as a regular page, but without offline caching and installation.
+- Data is still stored only in the browser (journal in `localStorage`, screenshots in IndexedDB) and is not synchronized between devices.
 
-## Хранение данных в веб-версии
+## Data storage in the web version
 
-Журнал находится в `localStorage` браузера под ключом `tradejournal.v1` (внутри хранится актуальная схема v4 с профилем, счетами, множителем контракта, частичными выходами, UTC-временем сделок, часовым поясом и настраиваемыми торговыми сессиями). Скриншоты веб-версии хранятся отдельно в IndexedDB под ссылками `idb:screenshots/<id>`. Старые схемы v1, v2 и v3 читаются и переводятся автоматически при первом открытии: локальные дата и время старых сделок переводятся в UTC в выбранном часовом поясе, а встроенные скриншоты переносятся в IndexedDB. Ничего не отправляется на сервер.
+The journal is stored in the browser's `localStorage` under the `tradejournal.v1` key; the stored value contains the current v4 schema with the profile, accounts, contract multiplier, partial exits, UTC trade times, time zone, and configurable trading sessions. Web-version screenshots are stored separately in IndexedDB under `idb:screenshots/<id>` references. Old v1, v2, and v3 schemas are read and migrated automatically on first open: local date and time of old trades are converted to UTC in the selected time zone, and embedded screenshots are moved to IndexedDB. Nothing is sent to a server.
 
-- Несохранённые черновики формы сделки лежат отдельно под ключами `tradejournal.draft.v1.<accountId>.<tradeId|new>`.
-- Данные привязаны к браузеру и адресу страницы: `file://` и GitHub Pages — разные хранилища.
-- Очистка данных сайта удалит журнал и скриншоты.
-- Браузер запрашивает постоянное хранилище для IndexedDB, чтобы снизить риск автоматической очистки. Фактический размер и квоту можно увидеть в **Настройки → Использование хранилища** — там показывается оценка `navigator.storage.estimate()`.
-- Для резервной копии используйте **Настройки → Экспорт JSON**. В экспорт встраиваются скриншоты из IndexedDB, поэтому файл можно перенести на другое устройство; при импорте они снова переносятся в IndexedDB.
-- После экспорта JSON или ZIP приложение запоминает дату в `tradejournal.meta`. Если копия не делалась больше 7 дней, при запуске один раз за сессию показывается напоминание; его можно отложить. Последняя дата экспорта видна в настройках.
-- Если сохранённые данные повреждены, приложение не перезаписывает их, а предлагает скачать исходный файл и только затем сбросить журнал.
-- Удаление сделок и записей, импорт, загрузку демо и очистку можно отменить сразу после действия через кнопку в уведомлении. Это краткосрочная страховка, а не замена резервной копии.
+- Unsaved trade-form drafts are stored separately under `tradejournal.draft.v1.<accountId>.<tradeId|new>`.
+- Data is tied to the browser and page address: `file://` and GitHub Pages use different storage.
+- Clearing site data deletes the journal and screenshots.
+- The browser requests persistent storage for IndexedDB to reduce the risk of automatic eviction. The actual size and quota are shown in **Settings → Storage usage**, which displays the `navigator.storage.estimate()` estimate.
+- For a backup, use **Settings → Export JSON**. Screenshots from IndexedDB are embedded in the export, so the file can be moved to another device; on import they are moved back to IndexedDB.
+- After exporting JSON or ZIP, the app remembers the export date in `tradejournal.meta`. If no backup has been made for more than 7 days, a reminder is shown once per session at startup; it can be postponed. The last export date is visible in settings.
+- If saved data is corrupted, the app does not overwrite it; it offers to download the original file and only then reset the journal.
+- Deleting trades and notes, importing, loading demo data, and clearing can be undone immediately after the action via a button in the notification. This is short-term insurance, not a replacement for a backup.
 
-## Структура
+## Project structure
 
 ```text
-index.html                  Разметка приложения и модальные окна
-css/styles.css              Стили и адаптивная вёрстка
-js/utils.js                 Форматирование, справочники, работа с датами
-js/blobstore.js             Скриншоты в IndexedDB и адаптер хранилища
-js/store.js                 Хранилище, модель данных v4 и расчёт метрик
-js/csv.js                   Разбор CSV, определение разделителя и предпросмотр импорта
-js/zip.js                   Сборка ZIP-архива без внешних библиотек
-js/pwa.js                   Регистрация service worker и баннер обновления
-js/desktop-bridge.js        Мост между интерфейсом и Tauri
-js/sample.js                Генератор демо-данных
-js/charts.js                Графики на canvas
-js/app.js                   Логика интерфейса и маршрутизация
-manifest.webmanifest        Манифест устанавливаемого веб-приложения
-sw.js                       Service worker с версионированным кэшем
-assets/icons/               Иконки PWA 192/512, maskable и apple-touch-icon
-assets/og-image.png         Обложка Open Graph и Twitter
-src-tauri/src/lib.rs        Rust-команды, файловое хранилище, копии и обновления
-src-tauri/src/main.rs       Точка входа Windows-приложения
-src-tauri/tauri.conf.json   Окно, CSP, NSIS, WebView2 и автообновление
-src-tauri/Cargo.toml        Rust-зависимости и оптимизация релиза
-src-tauri/capabilities/     Разрешения Tauri
-scripts/build-web.mjs       Подготовка dist/ для Tauri
-scripts/check-versions.mjs  Проверка совпадения версий во всех файлах
-tests/                      node:test для хранилища, CSV, ZIP, PWA и метаданных
-.github/workflows/web.yml   CI: линтер, тесты и сборка веб-версии
-.github/workflows/tauri.yml CI: проверки, тесты, сборка и latest.json
-build/icon.ico              Иконка приложения
-assets/preview.png          Превью для README
+index.html                  App markup and modal windows
+css/styles.css              Styles and responsive layout
+js/utils.js                 Formatting, reference data, date handling
+js/blobstore.js             IndexedDB screenshots and storage adapter
+js/store.js                 Storage, v4 data model, and metric calculations
+js/csv.js                   CSV parsing, delimiter detection, and import preview
+js/zip.js                   ZIP archive creation without external libraries
+js/pwa.js                   Service worker registration and update banner
+js/desktop-bridge.js        Bridge between the UI and Tauri
+js/sample.js                Demo data generator
+js/charts.js                Canvas charts
+js/app.js                   UI logic and routing
+manifest.webmanifest        Installable web app manifest
+sw.js                       Service worker with versioned cache
+assets/icons/               PWA 192/512, maskable, and apple-touch-icon icons
+assets/og-image.png         Open Graph and Twitter cover
+src-tauri/src/lib.rs        Rust commands, file storage, backups, and updates
+src-tauri/src/main.rs       Windows app entry point
+src-tauri/tauri.conf.json   Window, CSP, NSIS, WebView2, and auto-update
+src-tauri/Cargo.toml        Rust dependencies and release optimization
+src-tauri/capabilities/     Tauri permissions
+scripts/build-web.mjs       Prepare dist/ for Tauri
+scripts/check-versions.mjs  Check version consistency across files
+tests/                      node:test for storage, CSV, ZIP, PWA, and metadata
+.github/workflows/web.yml   CI: linter, tests, and web build
+.github/workflows/tauri.yml CI: checks, tests, build, and latest.json
+build/icon.ico              App icon
+assets/preview.png          README preview
 ```
 
-## Публикация веб-версии на GitHub Pages
+## Publishing the web version to GitHub Pages
 
-1. Загрузите файлы в репозиторий GitHub.
-2. Откройте **Settings → Pages**.
-3. В разделе **Build and deployment** выберите **Deploy from a branch**, ветку `main` и папку `/ (root)`.
-4. Сохраните настройки — сайт будет доступен по адресу `https://<username>.github.io/<repository>/`.
+1. Upload the files to a GitHub repository.
+2. Open **Settings → Pages**.
+3. Under **Build and deployment**, select **Deploy from a branch**, the `main` branch, and the `/ (root)` folder.
+4. Save the settings — the site will be available at `https://<username>.github.io/<repository>/`.
 
-Файлы Windows-сборки не публикуются на GitHub Pages и не коммитятся в репозиторий.
+Windows build files are not published to GitHub Pages and are not committed to the repository.
 
-## Лицензия
+## AI-assisted development
 
-Проект распространяется по лицензии MIT. Полный текст — в файле [LICENSE](LICENSE). Copyright (c) 2026 FamaSALO.
+TradeJournal is developed with extensive AI assistance. AI coding assistants help with implementation, tests, documentation, and release automation. Every change is reviewed, tested on Windows, and published by the maintainer, who remains responsible for the project. AI is a development tool here, not an author or maintainer.
+
+## License
+
+The project is distributed under the MIT License. The full text is in [LICENSE](LICENSE). Copyright (c) 2026 FamaSALO.
