@@ -11,6 +11,8 @@ A local-first trading journal in two editions:
 - **Windows app** — a lightweight installer built with Tauri 2 and Rust, with the same interface and file-based data storage.
 - **Web version** — a static page with no server that can be opened in a browser or published on GitHub Pages.
 
+> The app interface is currently in Russian. This README is available in English and Russian.
+
 [Download the latest version](https://github.com/FamaSALO/tradejournal/releases/latest)
 
 ![TradeJournal overview](assets/preview.png)
