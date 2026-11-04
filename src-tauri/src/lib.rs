@@ -55,6 +55,7 @@ struct DataInfo {
     screenshot_dir: String,
     version: String,
     is_desktop: bool,
+    platform: String,
 }
 
 #[derive(Serialize)]
@@ -999,6 +1000,7 @@ fn data_info(app: tauri::AppHandle, state: State<'_, AppState>) -> DataInfo {
         screenshot_dir: state.paths.screenshots.to_string_lossy().to_string(),
         version: app.package_info().version.to_string(),
         is_desktop: true,
+        platform: std::env::consts::OS.to_string(),
     }
 }
 

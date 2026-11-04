@@ -6,9 +6,10 @@ English | [Русский](README.ru.md)
 
 > **AI-assisted development.** The code, tests, and documentation are created with extensive AI assistance and reviewed by the maintainer. [Details](#ai-assisted-development).
 
-A local-first trading journal in two editions:
+A local-first trading journal in three editions:
 
 - **Windows app** — a lightweight installer built with Tauri 2 and Rust, with the same interface and file-based data storage.
+- **macOS app** — a universal build for Apple Silicon and Intel with the same interface, storage layout, and offline operation.
 - **Web version** — a static page with no server that can be opened in a browser or published on GitHub Pages.
 
 > The app interface is currently in Russian. This README is available in English and Russian.
@@ -19,7 +20,7 @@ A local-first trading journal in two editions:
 
 ## Technology and architecture
 
-The app uses no UI frameworks or interface bundler: the same interface is written in HTML5, CSS3, and vanilla JavaScript. The `index.html`, `css/`, and `js/` files work as a regular web page and are loaded inside the Windows app.
+The app uses no UI frameworks or interface bundler: the same interface is written in HTML5, CSS3, and vanilla JavaScript. The `index.html`, `css/`, and `js/` files work as a regular web page and are loaded inside the desktop app.
 
 - **Windows shell** — Tauri 2 and Rust. The window, file storage, backups, and system dialogs live in `src-tauri/src/lib.rs`.
 - **WebView2** — the app uses Microsoft Edge WebView2, the system component, instead of a bundled browser. This keeps the installer and installation folder small.
@@ -133,6 +134,7 @@ The Windows app checks for updates at startup and can update without manually do
 - If there is no network or GitHub is unavailable, the app keeps working and shows an error only during a manual check.
 - The portable version does not use auto-update: unpack the new ZIP over the old folder while keeping `%APPDATA%\TradeJournal`.
 - The private signing key is stored only in GitHub Actions Secrets (`TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`) and never enters the repository.
+- macOS builds do not use this updater yet; update them manually as described in [macOS app](#macos-app).
 
 ### Size and resource usage
 
@@ -151,7 +153,7 @@ RAM usage depends on the WebView2 version, the open section, and the amount of d
 
 ### Where data is stored
 
-The Windows app does not use the browser's `localStorage`. The journal lives in a separate user folder:
+The desktop app does not use the browser's `localStorage`. The journal lives in a separate user folder:
 
 ```text
 %APPDATA%\TradeJournal\
@@ -164,9 +166,9 @@ The Windows app does not use the browser's `localStorage`. The journal lives in 
 - The path and the **Open data folder**, **Create backup**, and **Restore** buttons are in **Settings → App and local files**.
 - An automatic backup is created on save, but no more than once every 10 minutes. A manual backup can be created at any time.
 - The last 20 automatic and manual backups are kept. Before a restore, the current state is also saved as a separate backup.
-- Screenshots are stored as separate files in `screenshots/`, and `journal.json` keeps only references. Images retain detail: in the Windows app, up to 2560 px without quality loss (PNG) or in high-quality WebP; in the web version, up to 1920 px in WebP. When a screenshot is deleted or replaced, the old file is not removed automatically, so restored backups continue to work.
+- Screenshots are stored as separate files in `screenshots/`, and `journal.json` keeps only references. Images retain detail: in the desktop app, up to 2560 px without quality loss (PNG) or in high-quality WebP; in the web version, up to 1920 px in WebP. When a screenshot is deleted or replaced, the old file is not removed automatically, so restored backups continue to work.
 - **Settings → App and local files → Storage health** shows how much space the journal, screenshots, previous version, and backups use. **Scan** also finds files not referenced by `journal.json`, `journal.previous.json`, or any backup. Only such unused files can be deleted; the list and size are shown before deletion, and references are checked again immediately before cleanup.
-- Uninstalling the app does not delete the journal, screenshots, or backups. The data remains in `%APPDATA%\TradeJournal`.
+- Uninstalling the app does not delete the journal, screenshots, or backups. On Windows the data remains in `%APPDATA%\TradeJournal`; on macOS, in `~/Library/Application Support/TradeJournal`.
 - The entire `TradeJournal` folder can be copied to another computer to move the journal with screenshots and backup history.
 - The WebView2 service cache is stored separately in `%LOCALAPPDATA%\com.famasalo.tradejournal` and does not contain journal data.
 - Starting with 2.2.0, `journal.json` uses schema v3: a trade has `multiplier` and an `exits` array. When an old file is opened, the previous single `exit` becomes the only partial exit, and a fully closed trade keeps the weighted exit price. A regular backup is created before migration.
@@ -232,6 +234,30 @@ Until the draft is published with **Publish**, the links in `latest.json` are no
 
 Before publishing, follow the [manual release checklist](docs/RELEASE-CHECKLIST.md) (in Russian).
 
+## macOS app
+
+The universal `TradeJournal_2.4.0_universal.dmg` runs on Apple Silicon and Intel Macs. It is built by the **Build macOS app** workflow in GitHub Actions and is available as a workflow artifact until the macOS build is added to a public release.
+
+The current build is not signed or notarized with an Apple Developer certificate. On first launch, macOS may block it:
+
+1. Open the DMG, drag **TradeJournal** to **Applications**, and try to launch it once.
+2. Open **System Settings → Privacy & Security** and click **Open Anyway** next to TradeJournal.
+3. If macOS still refuses to open the app, run `xattr -cr /Applications/TradeJournal.app` in Terminal.
+
+Data is stored in `~/Library/Application Support/TradeJournal` with the same `journal.json`, `screenshots/`, and `backups/` layout as on Windows. The journal is not stored in the browser and survives replacing the app.
+
+macOS builds currently update manually: download a new DMG from the releases page, replace the app in **Applications**, and keep the data folder. Auto-update remains Windows-only for now.
+
+To build locally on macOS:
+
+```bash
+rustup target add aarch64-apple-darwin x86_64-apple-darwin
+npm install
+npm run tauri build -- --target universal-apple-darwin --bundles dmg
+```
+
+The DMG appears in `src-tauri/target/universal-apple-darwin/release/bundle/dmg/`. The workflow in `.github/workflows/macos.yml` also runs tests, clippy, and Rust tests before packaging.
+
 ## Web version
 
 1. Download the project folder.
@@ -280,16 +306,19 @@ sw.js                       Service worker with versioned cache
 assets/icons/               PWA 192/512, maskable, and apple-touch-icon icons
 assets/og-image.png         Open Graph and Twitter cover
 src-tauri/src/lib.rs        Rust commands, file storage, backups, and updates
-src-tauri/src/main.rs       Windows app entry point
-src-tauri/tauri.conf.json   Window, CSP, NSIS, WebView2, and auto-update
+src-tauri/src/main.rs       Desktop app entry point
+src-tauri/tauri.conf.json   Window, CSP, Windows bundle, and auto-update
+src-tauri/tauri.macos.conf.json macOS bundle targets and icon
 src-tauri/Cargo.toml        Rust dependencies and release optimization
 src-tauri/capabilities/     Tauri permissions
 scripts/build-web.mjs       Prepare dist/ for Tauri
 scripts/check-versions.mjs  Check version consistency across files
 tests/                      node:test for storage, CSV, ZIP, PWA, and metadata
 .github/workflows/web.yml   CI: linter, tests, and web build
-.github/workflows/tauri.yml CI: checks, tests, build, and latest.json
+.github/workflows/tauri.yml CI: checks, tests, Windows build, and latest.json
+.github/workflows/macos.yml CI: checks, tests, and universal macOS DMG
 build/icon.ico              App icon
+assets/screenshots/         README screenshots
 assets/preview.png          README preview
 ```
 

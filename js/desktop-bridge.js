@@ -5,6 +5,8 @@
   if (!tauri || typeof tauri.invoke !== 'function' || window.tradeJournalDesktop) return;
 
   const invoke = tauri.invoke;
+  const userAgent = typeof navigator !== 'undefined' ? navigator.userAgent : '';
+  const platform = /Mac/i.test(userAgent) ? 'darwin' : /Win/i.test(userAgent) ? 'win32' : 'linux';
   let saveChain = Promise.resolve();
 
   function call(command, args) {
@@ -28,7 +30,7 @@
 
   window.tradeJournalDesktop = {
     isDesktop: true,
-    platform: 'win32',
+    platform: platform,
 
     hasData: function () {
       return waitForSaves().then(function () {
