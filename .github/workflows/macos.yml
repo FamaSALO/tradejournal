@@ -101,14 +101,8 @@ jobs:
           fi
           cp "$dmg" "artifacts/TradeJournal_${version}_universal.dmg"
 
-          app_tar=$(find src-tauri/target/universal-apple-darwin/release/bundle/macos -maxdepth 1 -name '*.app.tar.gz' | head -n 1)
-          if [ -n "$app_tar" ]; then
-            cp "$app_tar" "artifacts/TradeJournal_${version}_universal.app.tar.gz"
-            cp "$app_tar.sig" "artifacts/TradeJournal_${version}_universal.app.tar.gz.sig"
-          fi
-
           cd artifacts
-          shasum -a 256 *.dmg *.app.tar.gz > SHA256SUMS.txt
+          shasum -a 256 *.dmg > SHA256SUMS.txt
           ls -lh
 
       - name: Upload artifacts
