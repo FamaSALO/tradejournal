@@ -872,17 +872,15 @@ fn load_screenshot(state: &AppState, reference: &str) -> Result<String, String> 
 }
 
 fn resolve_paths(app: &tauri::AppHandle) -> Result<StorePaths, Box<dyn std::error::Error>> {
-    let app_data_root = std::env::var_os("APPDATA")
-        .map(PathBuf::from)
-        .or_else(|| {
-            app.path()
-                .app_data_dir()
-                .ok()
-                .and_then(|path| path.parent().map(Path::to_path_buf))
-        })
-        .ok_or_else(|| "Не удалось определить папку данных Windows.".to_string())?;
-
-    let data_dir = app_data_root.join("TradeJournal");
+    // %APPDATA%\TradeJournal on Windows, ~/Library/Application Support/TradeJournal
+    // on macOS, and the XDG data directory on Linux. The app-specific folder is
+    // resolved without the bundle identifier so existing Windows journals keep
+    // their historical location.
+    let data_dir = app
+        .path()
+        .data_dir()
+        .map_err(|error| format!("Не удалось определить папку данных приложения: {error}"))?
+        .join("TradeJournal");
     Ok(StorePaths {
         journal: data_dir.join("journal.json"),
         previous: data_dir.join("journal.previous.json"),

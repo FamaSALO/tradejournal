@@ -1,0 +1,11 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "targets": ["app", "dmg"],
+    "icon": ["icons/icon.icns"],
+    "category": "Finance",
+    "macOS": {
+      "minimumSystemVersion": "10.15"
+    }
+  }
+}
