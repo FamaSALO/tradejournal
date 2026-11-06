@@ -53,7 +53,13 @@ test('critical interface strings are translated', function () {
     'Тёмная': 'Dark',
     'Язык интерфейса': 'Interface language',
     'Тема оформления': 'Interface theme',
-    'Сбросить оформление': 'Reset appearance'
+    'Сбросить оформление': 'Reset appearance',
+    'Редактировать сделку': 'Edit trade',
+    'Сохранить сделку': 'Save trade',
+    'Сохранить изменения': 'Save changes',
+    'Удалить сделку?': 'Delete trade?',
+    'Закрыта': 'Closed',
+    'Количество выхода': 'Exit quantity'
   };
   Object.keys(expected).forEach(function (key) {
     assert.equal(dictionary[key], expected[key]);
