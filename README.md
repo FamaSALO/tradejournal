@@ -103,7 +103,7 @@ The screenshots use generated demo data; no real journal is shown.
 | ![Settings](assets/screenshots/settings.png) | ![Trade editor](assets/screenshots/trade-editor.png) |
 | Accounts, risk management, data, and updates | Partial exits, R/RR, screenshots, and notes |
 
-## What's new in 2.4.1
+## What's new in 2.4.2
 
 - **Interface language** — Russian and English; Russian stays the default. Switch in **Settings → Interface**; only interface labels are translated, never notes, trades, account names, symbols, or setups.
 - **Themes** — dark and light themes for the whole interface, including charts and the calendar.
@@ -117,9 +117,9 @@ The screenshots use generated demo data; no real journal is shown.
 
 The GitHub Release contains:
 
-- `TradeJournal_2.4.1_x64-setup.exe` — an NSIS installer for the current user, without administrator rights.
-- `TradeJournal_2.4.1_x64-setup.exe.sig` — the installer signature for auto-update.
-- `TradeJournal-portable-2.4.1-x64.zip` — a portable version that runs without installation.
+- `TradeJournal_2.4.2_x64-setup.exe` — an NSIS installer for the current user, without administrator rights.
+- `TradeJournal_2.4.2_x64-setup.exe.sig` — the installer signature for auto-update.
+- `TradeJournal-portable-2.4.2-x64.zip` — a portable version that runs without installation.
 - `latest.json` — the update manifest read by the Windows app.
 - `SHA256SUMS.txt` — file checksums.
 
@@ -204,7 +204,7 @@ The finished installer and executable appear here:
 
 ```text
 src-tauri\target\release\TradeJournal.exe
-src-tauri\target\release\bundle\nsis\TradeJournal_2.4.1_x64-setup.exe
+src-tauri\target\release\bundle\nsis\TradeJournal_2.4.2_x64-setup.exe
 ```
 
 The portable build is produced by packing `TradeJournal.exe` into a ZIP. This is what the CI build in `.github/workflows/tauri.yml` does.
@@ -228,13 +228,13 @@ If MSVC Build Tools are not installed locally, use the ready CI build: push chan
 A release is published automatically from a tag:
 
 ```powershell
-git tag v2.4.1
-git push origin v2.4.1
+git tag v2.4.2
+git push origin v2.4.2
 ```
 
-The tag must match the version in `package.json`: version `2.4.1` requires tag `v2.4.1`. If they differ, the workflow fails. A tag build runs the **Build Tauri app** workflow, builds the installer and all artifacts, and then creates a draft GitHub Release with the installer, `.sig` signature, portable ZIP, `latest.json`, and `SHA256SUMS.txt`. A regular push to `main` builds artifacts but does not create a draft. If a draft or published release already exists for the tag, the workflow does not overwrite it and fails.
+The tag must match the version in `package.json`: version `2.4.2` requires tag `v2.4.2`. If they differ, the workflow fails. A tag build runs the **Build Tauri app** workflow, builds the installer and all artifacts, and then creates a draft GitHub Release with the installer, `.sig` signature, portable ZIP, `latest.json`, and `SHA256SUMS.txt`. A regular push to `main` builds artifacts but does not create a draft. If a draft or published release already exists for the tag, the workflow does not overwrite it and fails.
 
-Until the draft is published with **Publish**, the links in `latest.json` are not visible to users and auto-update from 2.3.0 to 2.4.1 is unaffected. After checking the files on Windows, publish the draft on the release page; users will receive the notification and can download and install the update. To roll back after publication, delete the release or publish a fixed version.
+Until the draft is published with **Publish**, the links in `latest.json` are not visible to users and auto-update from 2.3.0 to 2.4.2 is unaffected. After checking the files on Windows, publish the draft on the release page; users will receive the notification and can download and install the update. To roll back after publication, delete the release or publish a fixed version.
 
 Before publishing, follow the [manual release checklist](docs/RELEASE-CHECKLIST.md) (in Russian).
 

@@ -1,7 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { loadTradeJournal } from './helpers/load-tj.mjs';
 import { fakeDocument } from './helpers/fake-dom.mjs';
+
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 function loadI18n(language) {
   const document = fakeDocument();
@@ -90,6 +95,49 @@ test('English mode does not translate unknown text or partial words', function (
   const { TJ } = loadI18n('en');
   assert.equal(TJ.i18n.t('Неизвестная строка'), 'Неизвестная строка');
   assert.equal(TJ.i18n.t('Сделкинг'), 'Сделкинг');
+});
+
+test('every Russian interface string in index.html has an English translation', function () {
+  const html = readFileSync(path.join(ROOT, 'index.html'), 'utf8')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ');
+  const CYRILLIC = /[А-Яа-яЁё]/;
+  const keys = Object.keys(dictionary).sort(function (a, b) { return b.length - a.length; });
+
+  function covered(text) {
+    if (dictionary[text]) return true;
+    let index = 0;
+    while (index < text.length) {
+      if (!CYRILLIC.test(text.charAt(index))) {
+        index++;
+        continue;
+      }
+      const key = keys.find(function (candidate) { return text.startsWith(candidate, index); });
+      if (!key) return false;
+      index += key.length;
+    }
+    return true;
+  }
+
+  const samples = [];
+  let depth = 0;
+  let buffer = '';
+  html.split(/(<[^>]+>)/).forEach(function (token) {
+    if (token.charAt(0) === '<') {
+      if (buffer.trim()) samples.push(buffer.replace(/\s+/g, ' ').trim());
+      buffer = '';
+      const name = (token.match(/^<\/?([a-zA-Z0-9-]+)/) || [])[1] || '';
+      if (/^(textarea|pre|code)$/i.test(name)) depth += token.charAt(1) === '/' ? -1 : 1;
+      return;
+    }
+    if (depth <= 0) buffer += ' ' + token;
+  });
+  if (buffer.trim()) samples.push(buffer.replace(/\s+/g, ' ').trim());
+
+  const missing = samples.filter(function (text) {
+    return CYRILLIC.test(text) && !covered(text);
+  });
+  assert.deepEqual(missing, [], 'untranslated interface strings: ' + JSON.stringify(missing));
 });
 
 test('switching language persists the preference', function () {

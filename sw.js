@@ -1,6 +1,6 @@
 'use strict';
 
-const CACHE_NAME = 'tradejournal-v2.4.1';
+const CACHE_NAME = 'tradejournal-v2.4.2';
 const APP_SHELL = [
   './',
   './index.html',
