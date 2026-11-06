@@ -103,19 +103,13 @@ The screenshots use generated demo data; no real journal is shown.
 | ![Settings](assets/screenshots/settings.png) | ![Trade editor](assets/screenshots/trade-editor.png) |
 | Accounts, risk management, data, and updates | Partial exits, R/RR, screenshots, and notes |
 
-## What's new in 2.4.0
+## What's new in 2.4.1
 
-- **Daily result** — daily P&L, the calendar, and daily limits are now calculated by exit dates; a trade with multiple partial exits is distributed across days.
-- **Drawdown** — maximum drawdown is shown separately in money and as a percentage of the account peak.
-- **Commissions** — when a position is partially closed, only the share of the commission for the closed volume is charged; the remainder is charged on the next exit.
-- **Screenshots in the web version** — stored in IndexedDB, migrated from old journals, embedded in exports, and restored on import. Settings now include a storage estimate and a request for persistent access.
-- **Backups** — the app remembers the date of the last export and, once per session, reminds you about a backup if there has not been one for more than 7 days.
-- **Offline updates** — the service worker bypasses the HTTP cache during installation and fetches fresh files immediately.
-- **Web metadata** — canonical URL, Open Graph and Twitter cards, a 512 maskable icon, and an updated PWA manifest.
-- **Reliability** — time zone tests across DST transitions, app shell integrity checks, ESLint, and a separate CI for web checks.
-- **ZIP import** — a ZIP backup can be restored directly through **Import JSON / ZIP**, without manually extracting `journal.json`; stored and Deflate entries are supported, and CRC-32, sizes, and name safety are checked.
-- **Releases** — a tag build publishes a draft GitHub Release; auto-update for users is enabled only after manual verification and clicking **Publish**.
-- **License** — the project is distributed under the MIT License.
+- **Interface language** — Russian and English; Russian stays the default. Switch in **Settings → Interface**; only interface labels are translated, never notes, trades, account names, symbols, or setups.
+- **Themes** — dark and light themes for the whole interface, including charts and the calendar.
+- **Interface colors** — accent presets or a custom accent, plus custom background and panel colors. Profit and loss stay green and red.
+- **Reset appearance** — restores the default theme and colors without changing the selected language.
+- **Local preferences** — language and appearance are stored on the device and do not touch the journal, screenshots, or backups.
 
 ## Windows app
 
@@ -123,9 +117,9 @@ The screenshots use generated demo data; no real journal is shown.
 
 The GitHub Release contains:
 
-- `TradeJournal_2.4.0_x64-setup.exe` — an NSIS installer for the current user, without administrator rights.
-- `TradeJournal_2.4.0_x64-setup.exe.sig` — the installer signature for auto-update.
-- `TradeJournal-portable-2.4.0-x64.zip` — a portable version that runs without installation.
+- `TradeJournal_2.4.1_x64-setup.exe` — an NSIS installer for the current user, without administrator rights.
+- `TradeJournal_2.4.1_x64-setup.exe.sig` — the installer signature for auto-update.
+- `TradeJournal-portable-2.4.1-x64.zip` — a portable version that runs without installation.
 - `latest.json` — the update manifest read by the Windows app.
 - `SHA256SUMS.txt` — file checksums.
 
@@ -210,7 +204,7 @@ The finished installer and executable appear here:
 
 ```text
 src-tauri\target\release\TradeJournal.exe
-src-tauri\target\release\bundle\nsis\TradeJournal_2.4.0_x64-setup.exe
+src-tauri\target\release\bundle\nsis\TradeJournal_2.4.1_x64-setup.exe
 ```
 
 The portable build is produced by packing `TradeJournal.exe` into a ZIP. This is what the CI build in `.github/workflows/tauri.yml` does.
@@ -234,13 +228,13 @@ If MSVC Build Tools are not installed locally, use the ready CI build: push chan
 A release is published automatically from a tag:
 
 ```powershell
-git tag v2.4.0
-git push origin v2.4.0
+git tag v2.4.1
+git push origin v2.4.1
 ```
 
-The tag must match the version in `package.json`: version `2.4.0` requires tag `v2.4.0`. If they differ, the workflow fails. A tag build runs the **Build Tauri app** workflow, builds the installer and all artifacts, and then creates a draft GitHub Release with the installer, `.sig` signature, portable ZIP, `latest.json`, and `SHA256SUMS.txt`. A regular push to `main` builds artifacts but does not create a draft. If a draft or published release already exists for the tag, the workflow does not overwrite it and fails.
+The tag must match the version in `package.json`: version `2.4.1` requires tag `v2.4.1`. If they differ, the workflow fails. A tag build runs the **Build Tauri app** workflow, builds the installer and all artifacts, and then creates a draft GitHub Release with the installer, `.sig` signature, portable ZIP, `latest.json`, and `SHA256SUMS.txt`. A regular push to `main` builds artifacts but does not create a draft. If a draft or published release already exists for the tag, the workflow does not overwrite it and fails.
 
-Until the draft is published with **Publish**, the links in `latest.json` are not visible to users and auto-update from 2.3.0 to 2.4.0 is unaffected. After checking the files on Windows, publish the draft on the release page; users will receive the notification and can download and install the update. To roll back after publication, delete the release or publish a fixed version.
+Until the draft is published with **Publish**, the links in `latest.json` are not visible to users and auto-update from 2.3.0 to 2.4.1 is unaffected. After checking the files on Windows, publish the draft on the release page; users will receive the notification and can download and install the update. To roll back after publication, delete the release or publish a fixed version.
 
 Before publishing, follow the [manual release checklist](docs/RELEASE-CHECKLIST.md) (in Russian).
 
