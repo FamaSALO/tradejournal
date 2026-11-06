@@ -110,6 +110,7 @@ The screenshots use generated demo data; no real journal is shown.
 - **Interface colors** — accent presets or a custom accent, plus custom background and panel colors. Profit and loss stay green and red.
 - **Reset appearance** — restores the default theme and colors without changing the selected language.
 - **Local preferences** — language and appearance are stored on the device and do not touch the journal, screenshots, or backups.
+- **Fix** — the storage note in Settings is fully translated, and a test now fails when any Russian interface string in `index.html` has no English translation.
 
 ## Windows app
 
