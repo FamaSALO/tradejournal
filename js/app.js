@@ -1150,14 +1150,17 @@
       const count = dayInfo ? dayInfo.count : 0;
       const hasNote = notesByDate[iso] && notesByDate[iso].length > 0;
       const ratio = maxAbs > 0 ? Math.abs(dayPnl) / maxAbs : 0;
-      let style = '';
-      if (dayPnl > 0.004) style = 'background:rgba(49,227,170,' + (0.05 + ratio * 0.24).toFixed(3) + ')';
-      else if (dayPnl < -0.004) style = 'background:rgba(255,107,129,' + (0.05 + ratio * 0.24).toFixed(3) + ')';
 
       const classes = ['cal-day'];
       if (!inMonth) classes.push('other');
       if (iso === today) classes.push('today');
       if (iso === state.selectedDay) classes.push('selected');
+
+      let style = '';
+      if (dayPnl > 0.004 || dayPnl < -0.004) {
+        classes.push(dayPnl > 0 ? 'pos' : 'neg');
+        style = '--heat:' + ratio.toFixed(3);
+      }
 
       const titleParts = [U.formatDate(iso, 'full')];
       if (count) titleParts.push(U.money(dayPnl, { sign: true }) + ' · ' + count + ' ' + pluralTrades(count));
