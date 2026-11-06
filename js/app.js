@@ -3250,16 +3250,16 @@
     const editor = $('#exitsEditor');
     if (!editor) return;
     if (!state.tradeExits.length) {
-      editor.innerHTML = '<div class="exits-empty">Выходов пока нет — позиция открыта</div>';
+      editor.innerHTML = '<div class="exits-empty">' + T('Выходов пока нет — позиция открыта') + '</div>';
       updateExitsSummary();
       return;
     }
     editor.innerHTML = state.tradeExits.map(function (row, index) {
       return '<div class="exit-row" data-exit-index="' + index + '">' +
-        '<input type="number" step="any" min="0" inputmode="decimal" data-exit-field="qty" value="' + U.escapeHtml(row.qty) + '" placeholder="Количество" aria-label="Количество выхода ' + (index + 1) + '">' +
-        '<input type="number" step="any" inputmode="decimal" data-exit-field="price" value="' + U.escapeHtml(row.price) + '" placeholder="Цена выхода" aria-label="Цена выхода ' + (index + 1) + '">' +
-        '<input type="date" data-exit-field="date" data-exit-date value="' + U.escapeHtml(row.date) + '" aria-label="Дата выхода ' + (index + 1) + '">' +
-        '<button type="button" class="icon-btn exit-remove" data-remove-exit="' + index + '" title="Удалить выход" aria-label="Удалить выход">×</button>' +
+        '<input type="number" step="any" min="0" inputmode="decimal" data-exit-field="qty" value="' + U.escapeHtml(row.qty) + '" placeholder="' + T('Количество') + '" aria-label="' + T('Количество выхода') + ' ' + (index + 1) + '">' +
+        '<input type="number" step="any" inputmode="decimal" data-exit-field="price" value="' + U.escapeHtml(row.price) + '" placeholder="' + T('Цена выхода') + '" aria-label="' + T('Цена выхода') + ' ' + (index + 1) + '">' +
+        '<input type="date" data-exit-field="date" data-exit-date value="' + U.escapeHtml(row.date) + '" aria-label="' + T('Дата выхода') + ' ' + (index + 1) + '">' +
+        '<button type="button" class="icon-btn exit-remove" data-remove-exit="' + index + '" title="' + T('Удалить выход') + '" aria-label="' + T('Удалить выход') + '">×</button>' +
         '</div>';
     }).join('');
     updateExitsSummary();
@@ -3285,21 +3285,30 @@
     const epsilon = store.QTY_EPSILON || 1e-9;
     let text;
     if (!state.tradeExits.length) {
-      text = 'Выходов нет — позиция открыта. Добавьте один или несколько частичных выходов; комиссия распределится по объёму выходов.';
+      text = T('Выходов нет — позиция открыта. Добавьте один или несколько частичных выходов; комиссия распределится по объёму выходов.');
     } else if (quantity === null || quantity <= 0) {
-      text = 'Укажите количество в сделке, чтобы рассчитать остаток позиции.';
+      text = T('Укажите количество в сделке, чтобы рассчитать остаток позиции.');
     } else if (totals.qty > quantity + epsilon) {
-      text = 'Сумма выходов ' + U.qty(totals.qty) + ' больше количества ' + U.qty(quantity) + '. Уменьшите объём выходов.';
+      text = T('Сумма выходов {closed} больше количества {quantity}. Уменьшите объём выходов.')
+        .replace('{closed}', U.qty(totals.qty))
+        .replace('{quantity}', U.qty(quantity));
     } else if (totals.remaining <= epsilon) {
-      text = 'Позиция закрыта полностью: ' + U.qty(totals.qty) + ' из ' + U.qty(quantity) + '.';
+      text = T('Позиция закрыта полностью: {closed} из {quantity}.')
+        .replace('{closed}', U.qty(totals.qty))
+        .replace('{quantity}', U.qty(quantity));
     } else {
-      text = 'Закрыто ' + U.qty(totals.qty) + ' из ' + U.qty(quantity) + ', остаток ' + U.qty(totals.remaining) + '. Сделка останется частично открытой.';
+      text = T('Закрыто {closed} из {quantity}, остаток {remaining}. Сделка останется частично открытой.')
+        .replace('{closed}', U.qty(totals.qty))
+        .replace('{quantity}', U.qty(quantity))
+        .replace('{remaining}', U.qty(totals.remaining));
     }
     if (totals.fees > 0 && state.tradeExits.length) {
       if (quantity !== null && quantity > 0 && totals.remaining <= epsilon) {
-        text += ' Комиссия ' + U.money(totals.fees) + ' распределится между выходами пропорционально количеству.';
+        text += ' ' + T('Комиссия {fee} распределится между выходами пропорционально количеству.')
+          .replace('{fee}', U.money(totals.fees));
       } else {
-        text += ' Комиссия ' + U.money(totals.fees) + ' распределится по закрытому объёму: спишется только доля выходов, остаток — при следующем выходе.';
+        text += ' ' + T('Комиссия {fee} распределится по закрытому объёму: спишется только доля выходов, остаток — при следующем выходе.')
+          .replace('{fee}', U.money(totals.fees));
       }
     }
     hint.textContent = text;
@@ -3517,7 +3526,7 @@
     state.draftShotWarned = false;
     state.draftScreenshotOmitted = false;
 
-    $('#tradeModalTitleText').textContent = trade ? 'Редактировать сделку' : 'Новая сделка';
+    $('#tradeModalTitleText').textContent = T(trade ? 'Редактировать сделку' : 'Новая сделка');
     applyTradeFields(state.tradeBaseline);
 
     let restored = false;
@@ -3536,7 +3545,7 @@
 
     $('#tradeError').hidden = true;
     $('#deleteTradeBtn').classList.toggle('hidden', !trade);
-    $('#saveTradeBtn').textContent = trade ? 'Сохранить изменения' : 'Сохранить сделку';
+    $('#saveTradeBtn').textContent = T(trade ? 'Сохранить изменения' : 'Сохранить сделку');
     $('#saveTradeBtn').disabled = false;
     $('#tradeShot').value = '';
     state.tradeInitializing = false;
@@ -3566,7 +3575,7 @@
     const level = U.clamp(Math.round(value || 0), 0, 5);
     $('#tradeDiscipline').value = level;
     const labels = ['не оценено', 'хаос', 'слабо', 'нормально', 'хорошо', 'идеально'];
-    $('#disciplineLabel').textContent = labels[level];
+    $('#disciplineLabel').textContent = T(labels[level]);
     $$('#disciplineStars .star').forEach(function (star) {
       star.classList.toggle('active', Number(star.dataset.star) <= level);
     });
@@ -4092,7 +4101,10 @@
     if (!trade) return;
     askConfirm({
       title: 'Удалить сделку?',
-      text: 'Сделка ' + trade.symbol + ' от ' + U.formatDate(trade.date, 'long') + ' будет удалена. Сразу после удаления действие можно будет отменить.',
+      text: T('Сделка {symbol} от {date} будет удалена. Сразу после удаления действие можно будет отменить.')
+        .replace('{symbol}', trade.symbol)
+        .replace('{date}', U.formatDate(trade.date, 'long')),
+      textReady: true,
       okLabel: 'Удалить'
     }).then(async function (confirmed) {
       if (!confirmed) return;
@@ -4210,7 +4222,9 @@
     if (!note) return;
     askConfirm({
       title: 'Удалить запись?',
-      text: 'Запись от ' + U.formatDate(note.date, 'long') + ' будет удалена. Сразу после удаления действие можно будет отменить.',
+      text: T('Запись от {date} будет удалена. Сразу после удаления действие можно будет отменить.')
+        .replace('{date}', U.formatDate(note.date, 'long')),
+      textReady: true,
       okLabel: 'Удалить'
     }).then(async function (confirmed) {
       if (!confirmed) return;
