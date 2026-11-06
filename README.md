@@ -11,7 +11,7 @@ A local-first trading journal in two editions:
 - **Windows app** — a lightweight installer built with Tauri 2 and Rust, with the same interface and file-based data storage.
 - **Web version** — a static page with no server that can be opened in a browser or published on GitHub Pages.
 
-> The app interface is currently in Russian. This README is available in English and Russian.
+> The app interface is available in Russian and English; Russian is the default. This README is available in both languages.
 
 [Download the latest version](https://github.com/FamaSALO/tradejournal/releases/latest)
 
@@ -61,11 +61,23 @@ src-tauri/src/lib.rs             Rust: window, files, backups, dialogs
 - **ZIP backups** — the archive contains `journal.json` with embedded screenshots and a `README.txt` with restore instructions. One file moves the entire journal to another device.
 - **PWA and offline** — the web version can be installed as an app from the browser; a service worker caches the interface, and an update banner with an **Update** button appears when a new version is available.
 - **Windows auto-update** — the app checks for signed updates in GitHub Releases, downloads the installer, and restarts. A check can also be started manually in settings.
+- **Interface language and themes** — Russian and English interfaces, dark and light themes, accent presets or a custom accent, and custom background and panel colors in **Settings → Interface**. Changes are saved on the device; notes, journal entries, account names, symbols, and setups are never translated.
 - **Drafts** — the trade form automatically saves unsaved changes, restores them when reopened, and warns when closing. Drafts are tied to an account and a trade.
 - **Discipline and emotions** — an execution quality score and analysis of how psychology affects results.
 - **Responsive layout** — a separate layout for phones in the web version.
 
 Keyboard shortcuts: `N` — new trade, `/` — search, `Esc` — close a window, `Ctrl+V` — paste a screenshot into an open trade editor, `Ctrl+Enter` or `Ctrl+S` — save the trade.
+
+## Interface language and appearance
+
+Open **Settings → Interface**:
+
+- **Language** — Russian or English. The interface reloads after switching; Russian is the default. Only interface labels are translated. User content — notes, journal entries, account names, symbols, and setups — is shown exactly as entered.
+- **Theme** — dark or light. The theme applies to the whole app, including charts and the calendar.
+- **Interface colors** — a preset accent or any custom accent color, plus custom background and panel colors. Profit and loss colors stay green and red regardless of the accent.
+- **Reset appearance** — returns the theme and colors to their defaults without changing the selected language.
+
+Preferences are stored locally in the browser or desktop app and do not affect the journal, screenshots, or backups.
 
 ## Screenshots
 

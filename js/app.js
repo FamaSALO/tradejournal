@@ -23,6 +23,7 @@
 
   const $ = function (selector, root) { return (root || document).querySelector(selector); };
   const $$ = function (selector, root) { return Array.prototype.slice.call((root || document).querySelectorAll(selector)); };
+  const T = function (text) { return NS.i18n && NS.i18n.t ? NS.i18n.t(text) : text; };
 
   const VIEW_META = {
     dashboard: { title: 'Обзор', subtitle: 'Статистика счёта и последние результаты' },
@@ -195,7 +196,7 @@
 
     $('#recoveryReload').addEventListener('click', function () { location.reload(); });
     $('#recoveryReset').addEventListener('click', async function () {
-      if (!window.confirm('Удалить повреждённые данные и загрузить демо-журнал? Убедитесь, что файл уже скачан.')) return;
+      if (!window.confirm(T('Удалить повреждённые данные и загрузить демо-журнал? Убедитесь, что файл уже скачан.'))) return;
       await store.clearRaw();
       location.reload();
     });
@@ -248,7 +249,7 @@
       if (busy) return;
       const name = select.value;
       if (!name) return;
-      if (!window.confirm('Восстановить выбранную резервную копию? Повреждённый текущий файл будет заменён.')) return;
+      if (!window.confirm(T('Восстановить выбранную резервную копию? Повреждённый текущий файл будет заменён.'))) return;
       setBusy(true);
       setStatus('Восстанавливаем резервную копию…');
       desktop.restoreBackup(name).then(function () {
@@ -262,7 +263,7 @@
 
     previousButton.addEventListener('click', function () {
       if (busy) return;
-      if (!window.confirm('Вернуть предыдущую версию журнала? Повреждённый текущий файл будет заменён.')) return;
+      if (!window.confirm(T('Вернуть предыдущую версию журнала? Повреждённый текущий файл будет заменён.'))) return;
       setBusy(true);
       setStatus('Восстанавливаем предыдущую версию…');
       desktop.restorePrevious().then(function () {
@@ -299,6 +300,15 @@
 
   function pad2(n) { return String(n).padStart(2, '0'); }
 
+  function decimal(value, digits) {
+    const num = Number(value);
+    if (!Number.isFinite(num)) return '—';
+    return new Intl.NumberFormat(U.locale(), {
+      minimumFractionDigits: digits,
+      maximumFractionDigits: digits
+    }).format(num);
+  }
+
   function navigate(view, options) {
     options = options || {};
     if (!VIEW_META[view]) view = 'dashboard';
@@ -312,9 +322,10 @@
     });
 
     const meta = VIEW_META[view];
-    $('#pageTitle').textContent = meta.title;
-    $('#pageSubtitle').textContent = meta.subtitle;
-    document.title = meta.title + ' — TradeJournal';
+    const title = T(meta.title);
+    $('#pageTitle').textContent = title;
+    $('#pageSubtitle').textContent = T(meta.subtitle);
+    document.title = title + ' — TradeJournal';
 
     const showPeriod = view === 'dashboard' || view === 'analytics';
     $('#periodWrap').classList.toggle('hidden', !showPeriod);
@@ -377,7 +388,7 @@
     const todayInfo = store.dayPnlMap(store.state.trades).get(today);
     const todayPnl = todayInfo ? todayInfo.pnl : 0;
     const todayEl = $('#sidebarToday');
-    todayEl.innerHTML = 'сегодня <b class="' + toneClass(todayPnl) + '">' + U.escapeHtml(U.money(todayPnl, { sign: true })) + '</b>';
+    todayEl.innerHTML = T('сегодня') + ' <b class="' + toneClass(todayPnl) + '">' + U.escapeHtml(U.money(todayPnl, { sign: true })) + '</b>';
 
     $('#navTradesCount').textContent = store.state.trades.length;
 
@@ -410,14 +421,17 @@
       }
     }
     const button = $('#avatarBtn');
-    if (button) button.title = name ? name + ' — профиль и настройки' : 'Профиль и настройки';
+    if (button) {
+      button.setAttribute('data-i18n-skip', '');
+      button.title = name ? name + ' — ' + T('Профиль и настройки') : T('Профиль и настройки');
+    }
   }
 
   function renderSidebarAccounts() {
     const select = $('#sidebarAccountSelect');
     if (!select) return;
     select.innerHTML = store.state.accounts.map(function (account) {
-      return '<option value="' + U.escapeHtml(account.id) + '">' + U.escapeHtml(account.name) + '</option>';
+      return '<option data-i18n-skip value="' + U.escapeHtml(account.id) + '">' + U.escapeHtml(account.name) + '</option>';
     }).join('');
     select.value = store.state.activeAccountId;
   }
@@ -439,11 +453,13 @@
     return ok;
   }
 
-  function toast(message, type, action) {
+  function toast(message, type, action, options) {
+    options = options || {};
+    const text = options.skip ? message : T(message);
     const box = document.createElement('div');
     box.className = 'toast ' + (type || 'success');
-    box.innerHTML = '<span class="toast-dot"></span><span class="toast-message">' + U.escapeHtml(message) + '</span>' +
-      (action && action.label ? '<button type="button" class="toast-action">' + U.escapeHtml(action.label) + '</button>' : '');
+    box.innerHTML = '<span class="toast-dot"></span><span class="toast-message"' + (options.skip ? ' data-i18n-skip' : '') + '>' + U.escapeHtml(text) + '</span>' +
+      (action && action.label ? '<button type="button" class="toast-action">' + U.escapeHtml(T(action.label)) + '</button>' : '');
     $('#toasts').appendChild(box);
     const life = action ? 8500 : 3400;
     setTimeout(function () { box.classList.add('out'); }, life);
@@ -581,7 +597,7 @@
 
   function renderKpis(m, base) {
     const roi = base > 0 ? (m.net / base) * 100 : 0;
-    const pf = m.profitFactor === Infinity ? '∞' : m.profitFactor.toFixed(2).replace('.', ',');
+    const pf = m.profitFactor === Infinity ? '∞' : decimal(m.profitFactor, 2);
     const hasR = m.rCount > 0;
     const streak = m.currentStreak
       ? m.currentStreak.n + (m.currentStreak.type === 'win' ? 'W' : 'L')
@@ -802,10 +818,10 @@
         ? (r !== null ? U.rfmt(r, { sign: true }) : '—')
         : (status === 'partial' ? 'частично · остаток ' + U.qty(store.remainingQty(trade)) : 'без выхода');
       return '<div class="mini-row" data-open-trade="' + U.escapeHtml(trade.id) + '" tabindex="0">' +
-        '<div class="mini-icon ' + trade.side + '">' + U.escapeHtml(trade.symbol.slice(0, 2)) + '</div>' +
-        '<div class="mini-main"><strong>' + U.escapeHtml(trade.symbol) + '</strong><span>' +
+        '<div class="mini-icon ' + trade.side + '" data-i18n-skip>' + U.escapeHtml(trade.symbol.slice(0, 2)) + '</div>' +
+        '<div class="mini-main"><strong data-i18n-skip>' + U.escapeHtml(trade.symbol) + '</strong><span>' +
         U.escapeHtml(U.formatDate(trade.date, 'med')) + (trade.time ? ' · ' + U.escapeHtml(trade.time) : '') +
-        ' · ' + (trade.side === 'long' ? 'Long' : 'Short') + (trade.setup ? ' · ' + U.escapeHtml(trade.setup) : '') +
+        ' · ' + (trade.side === 'long' ? 'Long' : 'Short') + (trade.setup ? ' · <span data-i18n-skip>' + U.escapeHtml(trade.setup) + '</span>' : '') +
         '</span></div>' +
         '<div class="mini-pnl"><strong class="' + (status === 'open' ? '' : toneClass(pnl)) + '">' +
         U.escapeHtml(pnlLabel) + '</strong><span>' + U.escapeHtml(statusLabel) +
@@ -825,7 +841,7 @@
     const max = Math.max.apply(null, groups.map(function (g) { return Math.abs(g.pnl); }).concat([1]));
     container.innerHTML = groups.map(function (group) {
       const width = Math.max(3, Math.abs(group.pnl) / max * 100);
-      return '<div class="hb-row"><div class="hb-top"><span class="hb-label">' + U.escapeHtml(group.key) +
+      return '<div class="hb-row"><div class="hb-top"><span class="hb-label"><span data-i18n-skip>' + U.escapeHtml(group.key) + '</span>' +
         '<small>' + group.count + ' ' + pluralTrades(group.count) + '</small></span>' +
         '<span class="hb-value ' + toneClass(group.pnl) + '">' + U.escapeHtml(U.money(group.pnl, { sign: true })) + '</span></div>' +
         '<div class="hb-track"><div class="hb-fill ' + (group.pnl < 0 ? 'neg' : '') + '" style="width:' + width + '%"></div></div></div>';
@@ -942,14 +958,14 @@
       '<button type="button" class="symbol-thumb' + (trade.screenshot ? ' has-shot' : '') + '"' +
       (trade.screenshot ? ' data-open-shot="' + U.escapeHtml(trade.id) + '" title="Открыть скриншот"' : ' tabindex="-1" aria-hidden="true"') + '>' +
       '<span class="thumb-empty"></span></button>' +
-      '<div class="symbol-line"><strong>' + U.escapeHtml(trade.symbol) + '</strong></div></div>' +
+      '<div class="symbol-line"><strong data-i18n-skip>' + U.escapeHtml(trade.symbol) + '</strong></div></div>' +
       '<span class="side-badge ' + trade.side + '"><span class="arr">' + (trade.side === 'long' ? '↑' : '↓') + '</span>' + (trade.side === 'long' ? 'Long' : 'Short') + '</span>' +
       statusHtml + '</div></td>' +
       '<td class="num">' + U.escapeHtml(U.price(trade.entry)) + '</td>' +
       '<td class="num exit-cell">' + exitHtml + '</td>' +
       '<td class="num pnl-cell">' + pnlHtml + '</td>' +
       '<td class="num ' + (r !== null ? toneClass(r) : '') + '">' + (r !== null ? U.escapeHtml(U.rfmt(r, { sign: true })) : '—') + '</td>' +
-      '<td>' + (trade.setup ? '<span class="setup-chip" title="' + U.escapeHtml(trade.setup) + '">' + U.escapeHtml(trade.setup) + '</span>' : '<span class="muted">—</span>') + '</td>' +
+      '<td>' + (trade.setup ? '<span class="setup-chip" data-i18n-skip title="' + U.escapeHtml(trade.setup) + '">' + U.escapeHtml(trade.setup) + '</span>' : '<span class="muted">—</span>') + '</td>' +
       '<td><span class="emotion-cell" title="' + U.escapeHtml(emotion.label) + '">' + U.escapeHtml(emotion.emoji) + ' <span class="muted" style="font-size:10px">' + U.escapeHtml(emotion.label) + '</span></span></td>' +
       '<td style="text-align:right"><span class="row-chevron">›</span></td>' +
       '</tr>';
@@ -1200,11 +1216,11 @@
         const hasEvent = dayEventPnl.has(trade.id);
         const pnl = hasEvent ? dayEventPnl.get(trade.id) : null;
         return '<div class="day-trade" data-open-trade="' + U.escapeHtml(trade.id) + '" tabindex="0">' +
-          '<span class="day-trade-symbol">' + U.escapeHtml(trade.symbol) +
+          '<span class="day-trade-symbol" data-i18n-skip>' + U.escapeHtml(trade.symbol) +
           ' <span class="day-trade-side">' + (trade.side === 'long' ? 'long' : 'short') + '</span>' +
-          (status === 'partial' ? ' <span class="partial-badge">частично</span>' : '') + '</span>' +
+          (status === 'partial' ? ' <span class="partial-badge">' + T('частично') + '</span>' : '') + '</span>' +
           '<span class="day-trade-pnl ' + (hasEvent ? toneClass(pnl) : 'neutral') + '">' +
-          (status === 'open' ? 'открыта' : (hasEvent ? U.escapeHtml(U.money(pnl, { sign: true })) : '—')) + '</span></div>';
+          (status === 'open' ? T('открыта') : (hasEvent ? U.escapeHtml(U.money(pnl, { sign: true })) : '—')) + '</span></div>';
       }).join('');
     }
 
@@ -1213,8 +1229,8 @@
       const note = dayNotes[0];
       const mood = U.moodMeta(note.mood);
       notesHtml = '<div class="day-sub">Запись в журнале</div>' +
-        '<div class="day-note"><div class="day-note-head">' + mood.emoji + ' ' + U.escapeHtml(note.title || mood.label) + '</div>' +
-        '<p>' + U.escapeHtml(U.truncate(note.text, 180)) + '</p>' +
+        '<div class="day-note"><div class="day-note-head">' + mood.emoji + ' <span data-i18n-skip>' + U.escapeHtml(note.title || mood.label) + '</span></div>' +
+        '<p data-i18n-skip>' + U.escapeHtml(U.truncate(note.text, 180)) + '</p>' +
         '<div style="margin-top:6px"><button type="button" class="link-btn" data-edit-note="' + U.escapeHtml(note.id) + '">Открыть запись</button>' +
         (dayNotes.length > 1 ? '<span class="muted small"> · ещё ' + (dayNotes.length - 1) + '</span>' : '') + '</div></div>';
     }
@@ -1231,8 +1247,8 @@
       (closedTrades.length ? U.escapeHtml(U.money(dayPnl, { sign: true })) : '—') + '</strong><small>' + U.escapeHtml(closedInfo) + '</small></div>' +
       tradesHtml + notesHtml +
       '<div class="day-actions">' +
-      '<button type="button" class="btn btn-primary btn-sm" data-action="new-trade" data-date="' + day + '">+ Сделка</button>' +
-      '<button type="button" class="btn btn-ghost btn-sm" data-action="new-note" data-date="' + day + '">Запись в журнал</button>' +
+      '<button type="button" class="btn btn-primary btn-sm" data-action="new-trade" data-date="' + day + '">' + T('+ Сделка') + '</button>' +
+      '<button type="button" class="btn btn-ghost btn-sm" data-action="new-note" data-date="' + day + '">' + T('Запись в журнал') + '</button>' +
       '</div>';
   }
 
@@ -1288,7 +1304,7 @@
       },
       {
         label: 'Профит-фактор',
-        value: m.count ? (m.profitFactor === Infinity ? '∞' : m.profitFactor.toFixed(2).replace('.', ',')) : '—',
+        value: m.count ? (m.profitFactor === Infinity ? '∞' : decimal(m.profitFactor, 2)) : '—',
         tone: m.count ? (m.profitFactor > 1 ? 'pos' : 'neg') : '',
         sub: m.count ? 'Валовая прибыль / убыток' : 'Нет данных'
       },
@@ -1315,6 +1331,7 @@
     renderSideBreakdown(rows);
 
     renderBreakdown($('#symbolBreakdown'), store.groupRows(rows, function (t) { return t.symbol; }), {
+      labelSkip: true,
       empty: 'Нет сделок за период'
     });
 
@@ -1435,12 +1452,12 @@
       if (m.avgDiscipline < 3.5) {
         out.push({
           tone: 'warn', icon: '◎',
-          text: 'Средняя дисциплина <b>' + m.avgDiscipline.toFixed(1).replace('.', ',') + ' / 5</b>. Сделки вне плана заметно ухудшают результат — начните с чек-листа перед входом.'
+          text: 'Средняя дисциплина <b>' + decimal(m.avgDiscipline, 1) + ' / 5</b>. Сделки вне плана заметно ухудшают результат — начните с чек-листа перед входом.'
         });
       } else if (m.avgDiscipline >= 4.2) {
         out.push({
           tone: 'pos', icon: '✓',
-          text: 'Средняя дисциплина <b>' + m.avgDiscipline.toFixed(1).replace('.', ',') + ' / 5</b>. Вы стабильно следуете плану — это важнее отдельной прибыльной сделки.'
+          text: 'Средняя дисциплина <b>' + decimal(m.avgDiscipline, 1) + ' / 5</b>. Вы стабильно следуете плану — это важнее отдельной прибыльной сделки.'
         });
       }
     }
@@ -1529,7 +1546,7 @@
       const label = options.labelFn ? options.labelFn(group.key) : group.key;
       const width = group.pnl === 0 ? 0 : Math.max(3, Math.abs(group.pnl) / max * 100);
       return '<div class="hb-row" title="' + U.escapeHtml(group.count + ' ' + pluralTrades(group.count) + ' · винрейт ' + U.percent(group.winRate, 0)) + '">' +
-        '<div class="hb-top"><span class="hb-label">' + U.escapeHtml(label) +
+        '<div class="hb-top"><span class="hb-label"' + (options.labelSkip ? ' data-i18n-skip' : '') + '>' + U.escapeHtml(label) +
         '<small>' + group.count + '</small></span>' +
         '<span class="hb-value ' + toneClass(group.pnl) + '">' + U.escapeHtml(U.money(group.pnl, { sign: true })) + '</span></div>' +
         '<div class="hb-track"><div class="hb-fill ' + (group.pnl < 0 ? 'neg' : '') + '" style="width:' + width + '%"></div></div></div>';
@@ -1538,7 +1555,7 @@
 
   function renderQuality(m) {
     const withR = m.rows.filter(function (row) { return row.r !== null; }).length;
-    const discipline = m.avgDiscipline > 0 ? m.avgDiscipline.toFixed(1).replace('.', ',') + ' / 5' : '—';
+    const discipline = m.avgDiscipline > 0 ? decimal(m.avgDiscipline, 1) + ' / 5' : '—';
     const totalR = withR ? U.rfmt(m.totalR, { sign: true }) : '—';
     $('#qualityBlock').innerHTML =
       '<div class="quality-row"><span>Всего R</span><b class="' + (withR ? toneClass(m.totalR) : '') + '">' + U.escapeHtml(totalR) + '</b></div>' +
@@ -1560,7 +1577,7 @@
       return;
     }
     tbody.innerHTML = groups.map(function (group) {
-      const pf = group.profitFactor === Infinity ? '∞' : group.profitFactor.toFixed(2).replace('.', ',');
+      const pf = group.profitFactor === Infinity ? '∞' : decimal(group.profitFactor, 2);
       const hasR = group.rCount > 0;
       return '<tr><td>' + U.escapeHtml(group.key) + '</td>' +
         '<td class="num">' + group.count + '</td>' +
@@ -1589,15 +1606,15 @@
     $('#journalStats').innerHTML =
       '<div class="jstat"><span>Записей</span><strong>' + notes.length + '</strong><small>в дневнике</small></div>' +
       '<div class="jstat"><span>Дней с записями</span><strong>' + dates.size + '</strong><small>из истории</small></div>' +
-      '<div class="jstat"><span>Среднее настроение</span><strong>' + (notes.length ? moodScore.toFixed(1).replace('.', ',') + ' / 5' : '—') + '</strong><small>по всем записям</small></div>' +
+      '<div class="jstat"><span>Среднее настроение</span><strong>' + (notes.length ? decimal(moodScore, 1) + ' / 5' : '—') + '</strong><small>по всем записям</small></div>' +
       '<div class="jstat"><span>Последняя запись</span><strong>' + (latest ? U.formatDate(latest, 'med') : '—') + '</strong><small>' + (latest ? U.formatDate(latest, 'weekday-full') : 'пока нет записей') + '</small></div>';
 
     const container = $('#journalList');
     if (!notes.length) {
       container.innerHTML = '<div class="card empty-state" style="grid-column:1/-1">' +
-        '<div class="empty-icon">📝</div><h3>Дневник пока пуст</h3>' +
-        '<p>Записывайте выводы после торгового дня: что сработало, что нет и что измените завтра.</p>' +
-        '<div class="empty-actions"><button class="btn btn-primary" data-action="new-note">Новая запись</button></div></div>';
+        '<div class="empty-icon">📝</div><h3>' + T('Дневник пока пуст') + '</h3>' +
+        '<p>' + T('Записывайте выводы после торгового дня: что сработало, что нет и что измените завтра.') + '</p>' +
+        '<div class="empty-actions"><button class="btn btn-primary" data-action="new-note">' + T('Новая запись') + '</button></div></div>';
       return;
     }
 
@@ -1611,9 +1628,9 @@
         '<span>' + U.escapeHtml(U.formatDate(note.date, 'weekday')) + '</span></span>' +
         '<span class="mood-chip">' + mood.emoji + ' ' + U.escapeHtml(mood.label) + '</span></div>' +
         (day.count ? '<span class="note-daypnl ' + toneClass(day.pnl) + '">' + U.escapeHtml(U.money(day.pnl, { sign: true })) + ' · ' + day.count + ' ' + pluralTrades(day.count) + '</span>' : '') +
-        '<h3>' + U.escapeHtml(note.title || 'Без заголовка') + '</h3>' +
-        '<p class="note-text">' + U.escapeHtml(note.text) + '</p>' +
-        (note.tags.length ? '<div class="note-tags">' + note.tags.map(function (tag) { return '<span class="tag">' + U.escapeHtml(tag) + '</span>'; }).join('') + '</div>' : '') +
+        '<h3 data-i18n-skip>' + U.escapeHtml(note.title || T('Без заголовка')) + '</h3>' +
+        '<p class="note-text" data-i18n-skip>' + U.escapeHtml(note.text) + '</p>' +
+        (note.tags.length ? '<div class="note-tags" data-i18n-skip>' + note.tags.map(function (tag) { return '<span class="tag">' + U.escapeHtml(tag) + '</span>'; }).join('') + '</div>' : '') +
         '<div class="note-foot"><span>' + (day.count ? day.count + ' ' + pluralTrades(day.count) + ' в этот день' : 'без сделок') + '</span>' +
         '<div class="note-actions">' +
         '<button type="button" class="icon-btn" data-edit-note="' + U.escapeHtml(note.id) + '" title="Редактировать" aria-label="Редактировать запись">' +
@@ -1682,7 +1699,7 @@
     $('#calcRiskAmount').textContent = riskAmount !== null ? U.money(riskAmount) : '—';
     $('#calcLoss').textContent = riskAmount !== null ? U.money(-riskAmount) : '—';
     $('#calcProfit').textContent = potentialProfit !== null ? U.money(potentialProfit, { sign: true }) : '—';
-    $('#calcRR').textContent = rr !== null ? '1 : ' + rr.toFixed(2).replace('.', ',') : '—';
+    $('#calcRR').textContent = rr !== null ? '1 : ' + decimal(rr, 2) : '—';
 
     let error = '';
     if (entry !== null && stop !== null && Math.abs(entry - stop) < 1e-12) error = 'Стоп-лосс не может совпадать с ценой входа.';
@@ -1765,9 +1782,9 @@
     const sessions = store.state.settings.sessions || U.normalizeSessions();
     box.innerHTML = sessions.map(function (session) {
       return '<div class="session-setting-row" data-session-key="' + U.escapeHtml(session.key) + '">' +
-        '<input type="text" data-session-name maxlength="24" value="' + U.escapeHtml(session.name) + '" aria-label="Название сессии" autocomplete="off">' +
-        '<span class="session-dash">с</span>' +
-        '<input type="time" data-session-start value="' + U.escapeHtml(session.start) + '" aria-label="Начало сессии ' + U.escapeHtml(session.name) + '">' +
+        '<input type="text" data-session-name data-i18n-skip maxlength="24" value="' + U.escapeHtml(session.name) + '" aria-label="' + T('Название сессии') + '" autocomplete="off">' +
+        '<span class="session-dash">' + T('с') + '</span>' +
+        '<input type="time" data-session-start value="' + U.escapeHtml(session.start) + '" aria-label="' + T('Начало сессии') + '">' +
         '</div>';
     }).join('');
   }
@@ -1796,13 +1813,16 @@
     const accountSelect = $('#accountSelect');
     if (accountSelect) {
       accountSelect.innerHTML = store.state.accounts.map(function (item) {
-        return '<option value="' + U.escapeHtml(item.id) + '">' + U.escapeHtml(item.name) + '</option>';
+        return '<option data-i18n-skip value="' + U.escapeHtml(item.id) + '">' + U.escapeHtml(item.name) + '</option>';
       }).join('');
       accountSelect.value = store.state.activeAccountId;
     }
-    $('#activeAccountChip').textContent = account ? account.name : '—';
-    $('#accountMeta').textContent = account
-      ? account.name + ' · ' + account.trades.length + ' ' + pluralTrades(account.trades.length) + ' · ' +
+    const chip = $('#activeAccountChip');
+    chip.setAttribute('data-i18n-skip', '');
+    chip.textContent = account ? account.name : '—';
+    const meta = $('#accountMeta');
+    meta.innerHTML = account
+      ? '<span data-i18n-skip>' + U.escapeHtml(account.name) + '</span> · ' + account.trades.length + ' ' + pluralTrades(account.trades.length) + ' · ' +
         account.notes.length + ' ' + pluralNotes(account.notes.length)
       : '—';
     $('#deleteAccountBtn').disabled = store.state.accounts.length <= 1;
@@ -1822,11 +1842,57 @@
     renderBackupMeta();
 
     if (desktop) refreshDesktopBackups();
+    renderAppearance();
+  }
+
+  function renderAppearance() {
+    if (!NS.prefs) return;
+    const prefs = NS.prefs.get();
+    const base = NS.prefs.defaultsFor(prefs.theme);
+    const accent = prefs.accent || base.accent;
+    const bg = prefs.bg || base.bg;
+    const panel = prefs.panel || base.panel;
+
+    $$('#languageSegmented [data-lang-option]').forEach(function (button) {
+      button.classList.toggle('active', button.dataset.langOption === prefs.lang);
+    });
+    $$('#themeSegmented [data-theme-option]').forEach(function (button) {
+      button.classList.toggle('active', button.dataset.themeOption === prefs.theme);
+    });
+    const chip = $('#appearanceThemeChip');
+    if (chip) {
+      chip.setAttribute('data-i18n-skip', '');
+      chip.textContent = T(prefs.theme === 'light' ? 'Светлая' : 'Тёмная');
+    }
+
+    const swatches = $('#accentSwatches');
+    if (swatches) {
+      swatches.innerHTML = NS.prefs.ACCENTS.map(function (item) {
+        return '<button type="button" class="swatch" data-accent-value="' + item.color + '"' +
+          ' style="background:' + item.color + '" aria-label="' + U.escapeHtml(T(item.label)) + '" title="' + U.escapeHtml(T(item.label)) + '"></button>';
+      }).join('');
+      $$('.swatch', swatches).forEach(function (button) {
+        button.classList.toggle('active', button.dataset.accentValue.toLowerCase() === accent.toLowerCase());
+      });
+    }
+    const accentInput = $('#accentColor');
+    if (accentInput) accentInput.value = accent;
+    const bgInput = $('#bgColor');
+    if (bgInput) bgInput.value = bg;
+    const panelInput = $('#panelColor');
+    if (panelInput) panelInput.value = panel;
+  }
+
+  function saveAppearance(patch, redraw) {
+    if (!NS.prefs) return;
+    NS.prefs.save(patch);
+    renderAppearance();
+    if (redraw) renderCurrentView();
   }
 
   function renderStorageMeter(size, limit) {
     const pct = limit > 0 ? Math.min(100, size / limit * 100) : 0;
-    $('#storageText').textContent = U.bytes(size) + ' · ' + pct.toFixed(1).replace('.', ',') + '%';
+    $('#storageText').textContent = U.bytes(size) + ' · ' + U.percent(pct, 1);
     $('#storageBar').style.width = Math.max(pct > 0 ? 2 : 0, pct) + '%';
   }
 
@@ -1847,7 +1913,7 @@
       renderStorageMeter(data.usage, data.quota);
       const pct = data.usage / data.quota * 100;
       note.textContent = 'Оценка браузера: ' + U.bytes(data.usage) + ' из ' + U.bytes(data.quota) +
-        ' (' + pct.toFixed(1).replace('.', ',') + '%). Скриншоты хранятся в IndexedDB.' +
+        ' (' + U.percent(pct, 1) + '). Скриншоты хранятся в IndexedDB.' +
         (persisted ? ' Постоянное хранилище включено.' : '');
     });
   }
@@ -1886,7 +1952,7 @@
   function formatBackupDate(timestamp) {
     const date = new Date(timestamp);
     if (Number.isNaN(date.getTime())) return '—';
-    return date.toLocaleString('ru-RU', {
+    return date.toLocaleString(U.locale(), {
       day: '2-digit',
       month: '2-digit',
       year: 'numeric',
@@ -2317,7 +2383,7 @@
     renderSidebar();
     renderCurrentView();
     if (ok) {
-      $('#settingsSavedAt').textContent = 'Сохранено в ' + new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+      $('#settingsSavedAt').textContent = T('Сохранено в') + ' ' + new Date().toLocaleTimeString(U.locale(), { hour: '2-digit', minute: '2-digit' });
       toast('Настройки сохранены');
     }
   }
@@ -2334,7 +2400,7 @@
     state.profileAvatarDraft = store.state.profile.avatar || '';
     renderSidebar();
     renderProfileAvatar();
-    $('#profileSavedAt').textContent = 'Сохранено в ' + new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+    $('#profileSavedAt').textContent = T('Сохранено в') + ' ' + new Date().toLocaleTimeString(U.locale(), { hour: '2-digit', minute: '2-digit' });
     toast('Профиль сохранён');
   }
 
@@ -2448,7 +2514,7 @@
     state.selectedDay = todayInAccount();
     renderAll();
     const account = store.activeAccount();
-    toast('Активный счёт: ' + (account ? account.name : '—'));
+    toast(T('Активный счёт') + ': ' + (account ? account.name : '—'), 'success', null, { skip: true });
   }
 
   function deleteActiveAccount() {
@@ -2460,7 +2526,8 @@
     }
     askConfirm({
       title: 'Удалить счёт?',
-      text: 'Счёт «' + account.name + '» и все его сделки и записи будут удалены. Сразу после удаления действие можно будет отменить.',
+      text: T('Счёт') + ' «' + account.name + '» ' + T('и все его сделки и записи будут удалены. Сразу после удаления действие можно будет отменить.'),
+      textReady: true,
       okLabel: 'Удалить'
     }).then(async function (confirmed) {
       if (!confirmed) return;
@@ -2532,7 +2599,7 @@
     const ms = Date.parse(value);
     if (!Number.isFinite(ms)) return '';
     try {
-      return new Date(ms).toLocaleString('ru-RU', {
+      return new Date(ms).toLocaleString(U.locale(), {
         day: '2-digit',
         month: '2-digit',
         year: 'numeric',
@@ -2768,8 +2835,8 @@
         (result.warnings.length > 5 ? ' …' : '') + '</div>');
     }
     const account = store.activeAccount();
-    alertHtml.push('<div class="csv-alert info">Сделки будут добавлены в активный счёт «' +
-      U.escapeHtml(account ? account.name : '—') + '». Существующие сделки не изменятся.</div>');
+    alertHtml.push('<div class="csv-alert info">Сделки будут добавлены в активный счёт «<span data-i18n-skip>' +
+      U.escapeHtml(account ? account.name : '—') + '</span>». Существующие сделки не изменятся.</div>');
     if (!result.trades.length) {
       alertHtml.push('<div class="csv-alert warn">Нет строк, готовых к импорту. Исправьте файл и попробуйте снова.</div>');
     }
@@ -2787,13 +2854,13 @@
         }).join(' | ');
         return '<tr>' +
           '<td>' + U.escapeHtml(U.formatDate(trade.date, 'med')) + '</td>' +
-          '<td><b>' + U.escapeHtml(trade.symbol) + '</b></td>' +
+          '<td><b data-i18n-skip>' + U.escapeHtml(trade.symbol) + '</b></td>' +
           '<td><span class="side-badge ' + trade.side + '">' + (trade.side === 'long' ? 'Long' : 'Short') + '</span></td>' +
           '<td class="num">' + U.escapeHtml(U.price(trade.entry)) + '</td>' +
           '<td class="num">' + U.escapeHtml(exitText || '—') + '</td>' +
           '<td class="num">' + U.escapeHtml(U.qty(trade.qty)) + '</td>' +
           '<td class="num ' + (pnl !== null ? toneClass(pnl) : '') + '">' + (pnl !== null ? U.escapeHtml(U.money(pnl, { sign: true })) : '—') + '</td>' +
-          '<td>' + U.escapeHtml(trade.setup || '—') + '</td>' +
+          '<td data-i18n-skip>' + U.escapeHtml(trade.setup || '—') + '</td>' +
           '</tr>';
       }).join('') + (result.trades.length > 200 ? '<tr><td colspan="8" class="csv-empty">Показаны первые 200 из ' + result.trades.length + ' строк</td></tr>' : '');
     }
@@ -3183,16 +3250,16 @@
     const editor = $('#exitsEditor');
     if (!editor) return;
     if (!state.tradeExits.length) {
-      editor.innerHTML = '<div class="exits-empty">Выходов пока нет — позиция открыта</div>';
+      editor.innerHTML = '<div class="exits-empty">' + T('Выходов пока нет — позиция открыта') + '</div>';
       updateExitsSummary();
       return;
     }
     editor.innerHTML = state.tradeExits.map(function (row, index) {
       return '<div class="exit-row" data-exit-index="' + index + '">' +
-        '<input type="number" step="any" min="0" inputmode="decimal" data-exit-field="qty" value="' + U.escapeHtml(row.qty) + '" placeholder="Количество" aria-label="Количество выхода ' + (index + 1) + '">' +
-        '<input type="number" step="any" inputmode="decimal" data-exit-field="price" value="' + U.escapeHtml(row.price) + '" placeholder="Цена выхода" aria-label="Цена выхода ' + (index + 1) + '">' +
-        '<input type="date" data-exit-field="date" data-exit-date value="' + U.escapeHtml(row.date) + '" aria-label="Дата выхода ' + (index + 1) + '">' +
-        '<button type="button" class="icon-btn exit-remove" data-remove-exit="' + index + '" title="Удалить выход" aria-label="Удалить выход">×</button>' +
+        '<input type="number" step="any" min="0" inputmode="decimal" data-exit-field="qty" value="' + U.escapeHtml(row.qty) + '" placeholder="' + T('Количество') + '" aria-label="' + T('Количество выхода') + ' ' + (index + 1) + '">' +
+        '<input type="number" step="any" inputmode="decimal" data-exit-field="price" value="' + U.escapeHtml(row.price) + '" placeholder="' + T('Цена выхода') + '" aria-label="' + T('Цена выхода') + ' ' + (index + 1) + '">' +
+        '<input type="date" data-exit-field="date" data-exit-date value="' + U.escapeHtml(row.date) + '" aria-label="' + T('Дата выхода') + ' ' + (index + 1) + '">' +
+        '<button type="button" class="icon-btn exit-remove" data-remove-exit="' + index + '" title="' + T('Удалить выход') + '" aria-label="' + T('Удалить выход') + '">×</button>' +
         '</div>';
     }).join('');
     updateExitsSummary();
@@ -3218,21 +3285,30 @@
     const epsilon = store.QTY_EPSILON || 1e-9;
     let text;
     if (!state.tradeExits.length) {
-      text = 'Выходов нет — позиция открыта. Добавьте один или несколько частичных выходов; комиссия распределится по объёму выходов.';
+      text = T('Выходов нет — позиция открыта. Добавьте один или несколько частичных выходов; комиссия распределится по объёму выходов.');
     } else if (quantity === null || quantity <= 0) {
-      text = 'Укажите количество в сделке, чтобы рассчитать остаток позиции.';
+      text = T('Укажите количество в сделке, чтобы рассчитать остаток позиции.');
     } else if (totals.qty > quantity + epsilon) {
-      text = 'Сумма выходов ' + U.qty(totals.qty) + ' больше количества ' + U.qty(quantity) + '. Уменьшите объём выходов.';
+      text = T('Сумма выходов {closed} больше количества {quantity}. Уменьшите объём выходов.')
+        .replace('{closed}', U.qty(totals.qty))
+        .replace('{quantity}', U.qty(quantity));
     } else if (totals.remaining <= epsilon) {
-      text = 'Позиция закрыта полностью: ' + U.qty(totals.qty) + ' из ' + U.qty(quantity) + '.';
+      text = T('Позиция закрыта полностью: {closed} из {quantity}.')
+        .replace('{closed}', U.qty(totals.qty))
+        .replace('{quantity}', U.qty(quantity));
     } else {
-      text = 'Закрыто ' + U.qty(totals.qty) + ' из ' + U.qty(quantity) + ', остаток ' + U.qty(totals.remaining) + '. Сделка останется частично открытой.';
+      text = T('Закрыто {closed} из {quantity}, остаток {remaining}. Сделка останется частично открытой.')
+        .replace('{closed}', U.qty(totals.qty))
+        .replace('{quantity}', U.qty(quantity))
+        .replace('{remaining}', U.qty(totals.remaining));
     }
     if (totals.fees > 0 && state.tradeExits.length) {
       if (quantity !== null && quantity > 0 && totals.remaining <= epsilon) {
-        text += ' Комиссия ' + U.money(totals.fees) + ' распределится между выходами пропорционально количеству.';
+        text += ' ' + T('Комиссия {fee} распределится между выходами пропорционально количеству.')
+          .replace('{fee}', U.money(totals.fees));
       } else {
-        text += ' Комиссия ' + U.money(totals.fees) + ' распределится по закрытому объёму: спишется только доля выходов, остаток — при следующем выходе.';
+        text += ' ' + T('Комиссия {fee} распределится по закрытому объёму: спишется только доля выходов, остаток — при следующем выходе.')
+          .replace('{fee}', U.money(totals.fees));
       }
     }
     hint.textContent = text;
@@ -3450,7 +3526,7 @@
     state.draftShotWarned = false;
     state.draftScreenshotOmitted = false;
 
-    $('#tradeModalTitleText').textContent = trade ? 'Редактировать сделку' : 'Новая сделка';
+    $('#tradeModalTitleText').textContent = T(trade ? 'Редактировать сделку' : 'Новая сделка');
     applyTradeFields(state.tradeBaseline);
 
     let restored = false;
@@ -3469,7 +3545,7 @@
 
     $('#tradeError').hidden = true;
     $('#deleteTradeBtn').classList.toggle('hidden', !trade);
-    $('#saveTradeBtn').textContent = trade ? 'Сохранить изменения' : 'Сохранить сделку';
+    $('#saveTradeBtn').textContent = T(trade ? 'Сохранить изменения' : 'Сохранить сделку');
     $('#saveTradeBtn').disabled = false;
     $('#tradeShot').value = '';
     state.tradeInitializing = false;
@@ -3499,7 +3575,7 @@
     const level = U.clamp(Math.round(value || 0), 0, 5);
     $('#tradeDiscipline').value = level;
     const labels = ['не оценено', 'хаос', 'слабо', 'нормально', 'хорошо', 'идеально'];
-    $('#disciplineLabel').textContent = labels[level];
+    $('#disciplineLabel').textContent = T(labels[level]);
     $$('#disciplineStars .star').forEach(function (star) {
       star.classList.toggle('active', Number(star.dataset.star) <= level);
     });
@@ -3796,7 +3872,7 @@
     rEl.textContent = r !== null ? U.rfmt(r, { sign: true }) : '—';
     rEl.className = r !== null ? toneClass(r) : '';
 
-    $('#previewRR').textContent = rr !== null ? '1 : ' + rr.toFixed(2).replace('.', ',') : '—';
+    $('#previewRR').textContent = rr !== null ? '1 : ' + decimal(rr, 2) : '—';
     $('#previewRR').className = '';
 
     const remainingEl = $('#previewRemaining');
@@ -4025,7 +4101,10 @@
     if (!trade) return;
     askConfirm({
       title: 'Удалить сделку?',
-      text: 'Сделка ' + trade.symbol + ' от ' + U.formatDate(trade.date, 'long') + ' будет удалена. Сразу после удаления действие можно будет отменить.',
+      text: T('Сделка {symbol} от {date} будет удалена. Сразу после удаления действие можно будет отменить.')
+        .replace('{symbol}', trade.symbol)
+        .replace('{date}', U.formatDate(trade.date, 'long')),
+      textReady: true,
       okLabel: 'Удалить'
     }).then(async function (confirmed) {
       if (!confirmed) return;
@@ -4063,7 +4142,7 @@
     $('#moodPicker').innerHTML = Object.keys(NS.MOODS).map(function (key) {
       const mood = NS.MOODS[key];
       return '<button type="button" class="mood-btn" data-mood="' + key + '" style="--mood-color:' + mood.color + '">' +
-        '<span class="m-emoji">' + mood.emoji + '</span>' + U.escapeHtml(mood.label) + '</button>';
+        '<span class="m-emoji">' + mood.emoji + '</span>' + U.escapeHtml(U.moodMeta(key).label) + '</button>';
     }).join('');
     setNoteMood('neutral');
   }
@@ -4079,7 +4158,7 @@
   function openNoteModal(id, presetDate) {
     const note = id ? store.state.notes.find(function (n) { return n.id === id; }) : null;
     state.noteId = note ? note.id : null;
-    $('#noteModalTitle').textContent = note ? 'Редактировать запись' : 'Новая запись';
+    $('#noteModalTitle').textContent = note ? T('Редактировать запись') : T('Новая запись');
     $('#noteDate').value = note ? note.date : (presetDate || todayInAccount());
     $('#noteTitle').value = note ? (note.title || '') : '';
     $('#noteText').value = note ? note.text : '';
@@ -4121,7 +4200,7 @@
     } else {
       store.state.notes.push(note);
       state.noteId = note.id;
-      $('#noteModalTitle').textContent = 'Редактировать запись';
+      $('#noteModalTitle').textContent = T(note ? 'Редактировать запись' : 'Новая запись');
       $('#deleteNoteBtn').classList.remove('hidden');
       $('#saveNoteBtn').textContent = 'Сохранить изменения';
     }
@@ -4143,7 +4222,9 @@
     if (!note) return;
     askConfirm({
       title: 'Удалить запись?',
-      text: 'Запись от ' + U.formatDate(note.date, 'long') + ' будет удалена. Сразу после удаления действие можно будет отменить.',
+      text: T('Запись от {date} будет удалена. Сразу после удаления действие можно будет отменить.')
+        .replace('{date}', U.formatDate(note.date, 'long')),
+      textReady: true,
       okLabel: 'Удалить'
     }).then(async function (confirmed) {
       if (!confirmed) return;
@@ -4223,9 +4304,9 @@
         previous(false);
       }
       state.confirmResolver = resolve;
-      $('#confirmTitle').textContent = options.title || 'Подтвердите действие';
-      $('#confirmText').textContent = options.text || '';
-      $('#confirmOk').textContent = options.okLabel || 'Подтвердить';
+      $('#confirmTitle').textContent = T(options.title || 'Подтвердите действие');
+      $('#confirmText').textContent = options.textReady ? (options.text || '') : T(options.text || '');
+      $('#confirmOk').textContent = T(options.okLabel || 'Подтвердить');
       $('#confirmOk').className = 'btn ' + (options.danger === false ? 'btn-primary' : 'btn-danger');
       openModal('confirmModal');
       setTimeout(function () { $('#confirmCancel').focus(); }, 40);
@@ -4379,6 +4460,42 @@
 
     $('#settingsForm').addEventListener('submit', saveSettings);
     $('#profileForm').addEventListener('submit', saveProfile);
+    $('#languageSegmented').addEventListener('click', function (event) {
+      const button = event.target.closest('button[data-lang-option]');
+      if (!button) return;
+      const lang = button.dataset.langOption === 'en' ? 'en' : 'ru';
+      if (NS.prefs && NS.prefs.get().lang === lang) return;
+      if (NS.i18n && NS.i18n.setLanguage) NS.i18n.setLanguage(lang, { reload: true });
+      else { saveAppearance({ lang: lang }); location.reload(); }
+    });
+    $('#themeSegmented').addEventListener('click', function (event) {
+      const button = event.target.closest('button[data-theme-option]');
+      if (!button) return;
+      saveAppearance({ theme: button.dataset.themeOption === 'light' ? 'light' : 'dark' }, true);
+    });
+    $('#accentSwatches').addEventListener('click', function (event) {
+      const button = event.target.closest('button[data-accent-value]');
+      if (!button) return;
+      saveAppearance({ accent: button.dataset.accentValue }, true);
+    });
+    $('#accentColor').addEventListener('input', function (event) {
+      saveAppearance({ accent: event.target.value }, false);
+    });
+    $('#accentColor').addEventListener('change', function () { renderCurrentView(); });
+    $('#bgColor').addEventListener('input', function (event) {
+      saveAppearance({ bg: event.target.value }, false);
+    });
+    $('#bgColor').addEventListener('change', function () { renderCurrentView(); });
+    $('#panelColor').addEventListener('input', function (event) {
+      saveAppearance({ panel: event.target.value }, false);
+    });
+    $('#panelColor').addEventListener('change', function () { renderCurrentView(); });
+    $('#resetAppearanceBtn').addEventListener('click', function () {
+      if (!NS.prefs) return;
+      NS.prefs.reset({ keepLanguage: true });
+      renderAppearance();
+      renderCurrentView();
+    });
     $('#profileName').addEventListener('input', function () {
       if (!state.profileAvatarDraft) renderProfileAvatar();
     });

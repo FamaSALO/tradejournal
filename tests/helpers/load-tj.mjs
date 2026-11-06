@@ -19,7 +19,7 @@ function memoryStorage() {
 
 export function loadTradeJournal(extraFiles, options) {
   options = options || {};
-  const storage = memoryStorage();
+  const storage = options.storage || memoryStorage();
   const sandbox = {
     console: console,
     Intl: Intl,
@@ -38,6 +38,9 @@ export function loadTradeJournal(extraFiles, options) {
   };
   sandbox.window = sandbox;
   sandbox.globalThis = sandbox;
+  Object.keys(options.globals || {}).forEach(function (key) {
+    sandbox[key] = options.globals[key];
+  });
   if (options.indexedDB) sandbox.indexedDB = options.indexedDB;
   if (options.desktop) sandbox.tradeJournalDesktop = options.desktop;
   vm.createContext(sandbox);
