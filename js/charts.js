@@ -5,12 +5,33 @@
   const charts = {};
 
   const FONT = '"Inter", "Segoe UI", Arial, sans-serif';
-  const GRID = 'rgba(148, 178, 212, 0.09)';
-  const MUTED = '#617185';
-  const POS = '#31e3aa';
-  const NEG = '#ff6b81';
+  let GRID = 'rgba(148, 178, 212, 0.09)';
+  let MUTED = '#617185';
+  let POS = '#31e3aa';
+  let NEG = '#ff6b81';
+  let AXIS = 'rgba(148, 178, 212, 0.2)';
+  let HOVER = 'rgba(255, 255, 255, 0.035)';
+
+  function cssVar(name, fallback) {
+    const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    return value || fallback;
+  }
+
+  function readPalette() {
+    GRID = cssVar('--border', GRID);
+    AXIS = cssVar('--border-strong', AXIS);
+    MUTED = cssVar('--muted-2', MUTED);
+    POS = cssVar('--green', POS);
+    NEG = cssVar('--red', NEG);
+    HOVER = cssVar('--hover-bg', HOVER);
+  }
+
+  function tr(value) {
+    return NS.i18n && NS.i18n.t ? NS.i18n.t(value) : value;
+  }
 
   function prepare(canvas) {
+    readPalette();
     const rect = canvas.getBoundingClientRect();
     if (!rect.width || !rect.height) return null;
     const dpr = window.devicePixelRatio || 1;
@@ -35,13 +56,13 @@
     const env = prepare(canvas);
     if (!env) return;
     const ctx = env.ctx;
-    ctx.fillStyle = 'rgba(148, 178, 212, 0.06)';
+    ctx.fillStyle = GRID;
     ctx.fillRect(0, env.h / 2 - 0.5, env.w, 1);
     ctx.fillStyle = MUTED;
     ctx.font = '10.5px ' + FONT;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText(message || 'Нет данных за выбранный период', env.w / 2, env.h / 2 - 14);
+    ctx.fillText(tr(message || 'Нет данных за выбранный период'), env.w / 2, env.h / 2 - 14);
     canvas._tjMove = null;
     canvas._tjLeave = null;
   }
@@ -280,7 +301,7 @@
         const point = points[hoverIndex];
         const x = xAt(hoverIndex);
         const y = yAt(point.value);
-        ctx.strokeStyle = 'rgba(148, 178, 212, 0.3)';
+        ctx.strokeStyle = AXIS;
         ctx.lineWidth = 1;
         ctx.setLineDash([3, 3]);
         ctx.beginPath();
@@ -373,7 +394,7 @@
         seen.add(key);
         const y = yAt(value);
         if (y < pad.t - 4 || y > h - pad.b + 4) return;
-        ctx.strokeStyle = Math.abs(value) < 0.0001 ? 'rgba(148, 178, 212, 0.18)' : GRID;
+        ctx.strokeStyle = Math.abs(value) < 0.0001 ? AXIS : GRID;
         ctx.lineWidth = 1;
         ctx.beginPath();
         ctx.moveTo(pad.l, Math.round(y) + 0.5);
@@ -386,7 +407,7 @@
       });
 
       if (hoverIndex !== null && hoverIndex !== undefined) {
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.035)';
+        ctx.fillStyle = HOVER;
         ctx.fillRect(pad.l + slot * hoverIndex + 1, pad.t, Math.max(2, slot - 2), plotH);
       }
 
@@ -399,16 +420,16 @@
 
         let fill;
         if (Math.abs(value) < 0.0001) {
-          fill = 'rgba(148, 178, 212, 0.22)';
+          fill = AXIS;
         } else if (positive) {
           const gradient = ctx.createLinearGradient(0, y, 0, zeroY);
-          gradient.addColorStop(0, hoverIndex === index ? '#67f7cb' : POS);
-          gradient.addColorStop(1, 'rgba(20, 143, 107, 0.5)');
+          gradient.addColorStop(0, hoverIndex === index ? POS : hexToRgba(POS, 0.78));
+          gradient.addColorStop(1, hexToRgba(POS, 0.35));
           fill = gradient;
         } else {
           const gradient = ctx.createLinearGradient(0, zeroY, 0, y + barH);
-          gradient.addColorStop(0, 'rgba(170, 47, 65, 0.55)');
-          gradient.addColorStop(1, hoverIndex === index ? '#ff8fa0' : NEG);
+          gradient.addColorStop(0, hexToRgba(NEG, 0.4));
+          gradient.addColorStop(1, hoverIndex === index ? NEG : hexToRgba(NEG, 0.8));
           fill = gradient;
         }
         ctx.fillStyle = fill;
@@ -427,8 +448,8 @@
         ctx.fillText(axisDate(point.label), x, h - pad.b + 7);
       });
 
-      // обводка нулевой линии поверх баров
-      ctx.strokeStyle = 'rgba(148, 178, 212, 0.2)';
+      // draw the zero line above the bars
+      ctx.strokeStyle = AXIS;
       ctx.lineWidth = 1;
       ctx.beginPath();
       ctx.moveTo(pad.l, Math.round(zeroY) + 0.5);
@@ -480,7 +501,7 @@
       ctx.stroke();
     };
 
-    drawRing(0, Math.PI * 2, 'rgba(148, 178, 212, 0.08)');
+    drawRing(0, Math.PI * 2, GRID);
 
     if (!total) return;
 
