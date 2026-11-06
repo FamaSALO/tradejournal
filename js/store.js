@@ -94,10 +94,15 @@
     return account;
   }
 
+  function localizedDefaultName() {
+    return NS.i18n && typeof NS.i18n.t === 'function' ? NS.i18n.t(DEFAULT_ACCOUNT_NAME) : DEFAULT_ACCOUNT_NAME;
+  }
+
   function accountName(value, index) {
     const text = String(value || '').trim().slice(0, 40);
     if (text) return text;
-    return index === 0 ? DEFAULT_ACCOUNT_NAME : 'Счёт ' + (index + 1);
+    if (index === 0) return localizedDefaultName();
+    return (NS.i18n && typeof NS.i18n.t === 'function' ? NS.i18n.t('Счёт') : 'Счёт') + ' ' + (index + 1);
   }
 
   function createAccount(name, settings, index) {
@@ -113,7 +118,7 @@
   }
 
   function blankRoot() {
-    const account = createAccount(DEFAULT_ACCOUNT_NAME, DEFAULT_SETTINGS, 0);
+    const account = createAccount(localizedDefaultName(), DEFAULT_SETTINGS, 0);
     return {
       version: SCHEMA_VERSION,
       profile: { name: '', avatar: '' },
@@ -549,7 +554,7 @@
     }
 
     if (!accounts.length) {
-      accounts = [createAccount(DEFAULT_ACCOUNT_NAME, raw.settings, 0)];
+      accounts = [createAccount(localizedDefaultName(), raw.settings, 0)];
     }
 
     const seenAccountIds = new Set();

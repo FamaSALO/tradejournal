@@ -2,14 +2,61 @@
   'use strict';
   const NS = (window.TJ = window.TJ || {});
 
-  const moneyFmt = new Intl.NumberFormat('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  const intFmt = new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 0 });
+  function language() {
+    return NS.i18n && typeof NS.i18n.lang === 'function' ? NS.i18n.lang() : 'ru';
+  }
+
+  function isEnglish() {
+    return language() === 'en';
+  }
+
+  function locale() {
+    return isEnglish() ? 'en-US' : 'ru-RU';
+  }
+
+  function tr(value) {
+    return NS.i18n && typeof NS.i18n.t === 'function' ? NS.i18n.t(value) : value;
+  }
+
+  function decimalSep() {
+    return isEnglish() ? '.' : ',';
+  }
+
+  function fixed(value, digits) {
+    return Number(value).toFixed(digits).replace('.', decimalSep());
+  }
+
+  let moneyFmtLocale = '';
+  let moneyFmt = null;
+  let intFmtLocale = '';
+  let intFmt = null;
+
+  function moneyFormatter() {
+    if (moneyFmtLocale !== locale()) {
+      moneyFmtLocale = locale();
+      moneyFmt = new Intl.NumberFormat(locale(), { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    }
+    return moneyFmt;
+  }
+
+  function intFormatter() {
+    if (intFmtLocale !== locale()) {
+      intFmtLocale = locale();
+      intFmt = new Intl.NumberFormat(locale(), { maximumFractionDigits: 0 });
+    }
+    return intFmt;
+  }
 
   const MONTHS_NOM = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
   const MONTHS_GEN = ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня', 'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'];
   const MONTHS_SHORT = ['янв', 'фев', 'мар', 'апр', 'май', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'];
   const WEEKDAYS_FULL = ['понедельник', 'вторник', 'среда', 'четверг', 'пятница', 'суббота', 'воскресенье'];
   const WEEKDAYS_SHORT = ['пн', 'вт', 'ср', 'чт', 'пт', 'сб', 'вс'];
+
+  const MONTHS_NOM_EN = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+  const MONTHS_SHORT_EN = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const WEEKDAYS_FULL_EN = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+  const WEEKDAYS_SHORT_EN = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
   const MOODS = {
     great: { label: 'Отлично', emoji: '🚀', score: 5, color: '#31e3aa' },
@@ -43,7 +90,9 @@
     'Двойное дно / вершина'
   ];
 
-  const WEEKDAY_LABELS = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
+  const WEEKDAY_LABELS = isEnglish()
+    ? ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+    : ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
 
   // Session boundaries are stored as start times in the account's timezone.
   // The last session wraps around midnight and lasts until the first one.
@@ -231,11 +280,11 @@
     list.forEach(function (session) {
       if (minutes >= sessionStartMinutes(session)) current = session;
     });
-    return current.name;
+    return sessionLabel(current.name);
   }
 
   function sessionNames(sessions) {
-    return sessionList(sessions).map(function (session) { return session.name; });
+    return sessionList(sessions).map(function (session) { return sessionLabel(session.name); });
   }
 
   function symbol() {
@@ -264,7 +313,7 @@
     let sign = '';
     if (num < 0) sign = '−';
     else if (opts.sign && Math.abs(num) > 0.0000001) sign = '+';
-    const body = opts.compact ? compactBody(Math.abs(num)) : moneyFmt.format(Math.abs(num));
+    const body = opts.compact ? compactBody(Math.abs(num)) : moneyFormatter().format(Math.abs(num));
     return sign + symbol() + body;
   }
 
@@ -273,7 +322,7 @@
     if (abs >= 1e6) return trim(abs / 1e6) + 'M';
     if (abs >= 100000) return Math.round(abs / 1000) + 'k';
     if (abs >= 1000) return trim(abs / 1000) + 'k';
-    return intFmt.format(Math.round(abs));
+    return intFormatter().format(Math.round(abs));
   }
 
   function compactMoney(value, opts) {
@@ -285,14 +334,14 @@
   }
 
   function trim(num) {
-    return Number(num.toFixed(1)).toString().replace('.', ',');
+    return Number(num.toFixed(1)).toString().replace('.', decimalSep());
   }
 
   function percent(value, digits) {
     const num = parseNum(value);
     if (num === null) return '—';
     const d = digits === undefined ? 1 : digits;
-    return num.toFixed(d).replace('.', ',').replace('-', '−') + '%';
+    return fixed(num, d).replace('-', '−') + '%';
   }
 
   function rfmt(value, opts) {
@@ -300,7 +349,7 @@
     const num = parseNum(value);
     if (num === null) return '—';
     const sign = num > 0 && opts.sign ? '+' : (num < 0 ? '−' : '');
-    return sign + Math.abs(num).toFixed(2).replace('.', ',') + 'R';
+    return sign + fixed(Math.abs(num), 2) + 'R';
   }
 
   function price(value) {
@@ -312,13 +361,13 @@
     else if (abs < 10) digits = 4;
     else if (abs < 1000) digits = 2;
     const rounded = Number(num.toFixed(digits));
-    return new Intl.NumberFormat('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: digits }).format(rounded);
+    return new Intl.NumberFormat(locale(), { minimumFractionDigits: 2, maximumFractionDigits: digits }).format(rounded);
   }
 
   function qty(value) {
     const num = parseNum(value);
     if (num === null) return '—';
-    return new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 4 }).format(num);
+    return new Intl.NumberFormat(locale(), { maximumFractionDigits: 4 }).format(num);
   }
 
   function pad(n) { return n < 10 ? '0' + n : String(n); }
@@ -355,11 +404,21 @@
     const day = d.getDate();
     const month = d.getMonth();
     const year = d.getFullYear();
+    const weekdayIndex = (d.getDay() + 6) % 7;
+    if (isEnglish()) {
+      if (mode === 'short') return pad(month + 1) + '/' + pad(day);
+      if (mode === 'med') return MONTHS_SHORT_EN[month] + ' ' + day;
+      if (mode === 'full') return WEEKDAYS_SHORT_EN[weekdayIndex] + ', ' + MONTHS_SHORT_EN[month] + ' ' + day + ', ' + year;
+      if (mode === 'weekday') return WEEKDAYS_SHORT_EN[weekdayIndex];
+      if (mode === 'weekday-full') return WEEKDAYS_FULL_EN[weekdayIndex];
+      if (mode === 'month') return MONTHS_NOM_EN[month] + ' ' + year;
+      return MONTHS_NOM_EN[month] + ' ' + day + ', ' + year;
+    }
     if (mode === 'short') return pad(day) + '.' + pad(month + 1);
     if (mode === 'med') return day + ' ' + MONTHS_SHORT[month];
-    if (mode === 'full') return day + ' ' + MONTHS_GEN[month] + ' ' + year + ', ' + WEEKDAYS_SHORT[(d.getDay() + 6) % 7];
-    if (mode === 'weekday') return WEEKDAYS_SHORT[(d.getDay() + 6) % 7];
-    if (mode === 'weekday-full') return WEEKDAYS_FULL[(d.getDay() + 6) % 7];
+    if (mode === 'full') return day + ' ' + MONTHS_GEN[month] + ' ' + year + ', ' + WEEKDAYS_SHORT[weekdayIndex];
+    if (mode === 'weekday') return WEEKDAYS_SHORT[weekdayIndex];
+    if (mode === 'weekday-full') return WEEKDAYS_FULL[weekdayIndex];
     if (mode === 'month') return MONTHS_NOM[month] + ' ' + year;
     return day + ' ' + MONTHS_GEN[month] + ' ' + year;
   }
@@ -371,7 +430,7 @@
   }
 
   function monthTitle(year, month) {
-    return MONTHS_NOM[month] + ' ' + year;
+    return (isEnglish() ? MONTHS_NOM_EN[month] : MONTHS_NOM[month]) + ' ' + year;
   }
 
   function capitalize(str) {
@@ -395,6 +454,11 @@
   }
 
   function plural(n, forms) {
+    if (isEnglish()) {
+      const one = tr(forms[0]);
+      const many = tr(forms[2]);
+      return Math.abs(n) === 1 ? one : many;
+    }
     const abs = Math.abs(n) % 100;
     const last = abs % 10;
     if (abs > 10 && abs < 20) return forms[2];
@@ -404,11 +468,19 @@
   }
 
   function emotionMeta(key) {
-    return EMOTIONS.find(function (e) { return e.key === key; }) || { key: key || '', label: key || '—', emoji: '•' };
+    const base = EMOTIONS.find(function (e) { return e.key === key; }) || { key: key || '', label: key || '—', emoji: '•' };
+    return { key: base.key, label: tr(base.label), emoji: base.emoji };
   }
 
   function moodMeta(key) {
-    return MOODS[key] || MOODS.neutral;
+    const base = MOODS[key] || MOODS.neutral;
+    return Object.assign({}, base, { label: tr(base.label) });
+  }
+
+  function sessionLabel(name) {
+    if (!isEnglish()) return name;
+    const preset = DEFAULT_SESSIONS.some(function (session) { return session.name === name; });
+    return preset ? tr(name) : name;
   }
 
   function sum(list, fn) {
@@ -488,9 +560,9 @@
 
   function bytes(value) {
     if (!Number.isFinite(value)) return '—';
-    if (value >= 1024 * 1024) return (value / (1024 * 1024)).toFixed(2).replace('.', ',') + ' МБ';
-    if (value >= 1024) return Math.round(value / 1024) + ' КБ';
-    return Math.round(value) + ' Б';
+    if (value >= 1024 * 1024) return fixed(value / (1024 * 1024), 2) + (isEnglish() ? ' MB' : ' МБ');
+    if (value >= 1024) return Math.round(value / 1024) + (isEnglish() ? ' KB' : ' КБ');
+    return Math.round(value) + (isEnglish() ? ' B' : ' Б');
   }
 
   const BACKUP_REMIND_MS = 7 * 24 * 60 * 60 * 1000;
@@ -519,6 +591,7 @@
 
   NS.utils = {
     escapeHtml: escapeHtml,
+    locale: locale,
     parseNum: parseNum,
     money: money,
     compactMoney: compactMoney,

@@ -28,6 +28,9 @@
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="apple-touch-icon" href="assets/icons/apple-touch-icon.png">
   <meta name="theme-color" content="#080d13">
+  <script src="js/preferences.js"></script>
+  <script src="js/i18n-en.js"></script>
+  <script src="js/i18n.js"></script>
   <link rel="stylesheet" href="css/styles.css">
 </head>
 <body>
@@ -487,7 +490,7 @@
           <article class="card span-12 profile-accounts-card">
             <header class="card-head">
               <div class="card-title"><h2>Профиль и счета</h2><p>Профиль общий для всех счетов, у каждого счёта своя статистика и настройки</p></div>
-              <span class="chip" id="activeAccountChip">Основной счёт</span>
+              <span class="chip" id="activeAccountChip" data-i18n-skip>Основной счёт</span>
             </header>
             <div class="profile-layout">
               <form id="profileForm" class="profile-panel" autocomplete="off">
@@ -529,6 +532,56 @@
                   <button type="button" class="btn btn-danger-ghost btn-sm" id="deleteAccountBtn">Удалить</button>
                 </div>
                 <p class="muted small">У каждого счёта свои сделки, записи и риск-настройки. Профиль и аватар общие.</p>
+              </div>
+            </div>
+          </article>
+
+          <article class="card span-12 appearance-card">
+            <header class="card-head">
+              <div class="card-title"><h2>Интерфейс</h2><p>Язык и оформление — применяются сразу и сохраняются на этом устройстве</p></div>
+              <span class="chip" id="appearanceThemeChip">Тёмная</span>
+            </header>
+            <div class="appearance-grid">
+              <div class="appearance-block">
+                <span class="desktop-label">Язык</span>
+                <div class="segmented appearance-segmented" id="languageSegmented" role="group" aria-label="Язык интерфейса">
+                  <button type="button" data-lang-option="ru" class="active">Русский</button>
+                  <button type="button" data-lang-option="en">English</button>
+                </div>
+                <p class="muted small">Выберите язык интерфейса. Заметки, записи журнала и названия счетов не переводятся.</p>
+              </div>
+              <div class="appearance-block">
+                <span class="desktop-label">Тема</span>
+                <div class="segmented appearance-segmented" id="themeSegmented" role="group" aria-label="Тема оформления">
+                  <button type="button" data-theme-option="dark" class="active">Тёмная</button>
+                  <button type="button" data-theme-option="light">Светлая</button>
+                </div>
+                <p class="muted small">Тема применяется ко всему приложению. Свои цвета можно выбрать ниже.</p>
+              </div>
+              <div class="appearance-block span-2">
+                <span class="desktop-label">Цвета интерфейса</span>
+                <div class="appearance-colors">
+                  <div class="appearance-row">
+                    <span class="appearance-label">Акцентный цвет</span>
+                    <div class="swatches" id="accentSwatches"></div>
+                    <label class="color-picker" title="Свой акцентный цвет">
+                      <input type="color" id="accentColor" aria-label="Акцентный цвет">
+                      <span>Свой</span>
+                    </label>
+                  </div>
+                  <div class="appearance-row">
+                    <span class="appearance-label">Фон и панели</span>
+                    <label class="color-picker">
+                      <input type="color" id="bgColor" aria-label="Цвет фона">
+                      <span>Фон</span>
+                    </label>
+                    <label class="color-picker">
+                      <input type="color" id="panelColor" aria-label="Цвет панелей">
+                      <span>Панели</span>
+                    </label>
+                    <button type="button" class="btn btn-ghost btn-sm" id="resetAppearanceBtn">Сбросить оформление</button>
+                  </div>
+                </div>
               </div>
             </div>
           </article>
@@ -997,7 +1050,7 @@
       </button>
     </header>
     <div class="modal-body">
-      <p class="confirm-text" id="confirmText"></p>
+      <p class="confirm-text" id="confirmText" data-i18n-skip></p>
     </div>
     <footer class="modal-foot">
       <div class="spacer"></div>
