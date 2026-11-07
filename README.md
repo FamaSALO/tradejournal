@@ -104,15 +104,12 @@ The screenshots use generated demo data; no real journal is shown.
 | ![Settings](assets/screenshots/settings.png) | ![Trade editor](assets/screenshots/trade-editor.png) |
 | Accounts, risk management, data, and updates | Partial exits, R/RR, screenshots, and notes |
 
-## What's new in 2.4.3
+## What's new in 2.4.4
 
-- **Ready-made templates** — eight curated themes (Mint, Graphite, Midnight, Ocean, Sunset, Morning, Cream, Steel) in **Settings → Interface**. One click sets the theme, accent, and background and panel colors together; the selected template stays highlighted until you change any color manually.
-- **Calendar colors** — profit and loss days in the calendar use the same green and red as the rest of the interface, with a readable heat scale in both dark and light themes.
-- **Interface language** — Russian and English; Russian stays the default. Switch in **Settings → Interface**; only interface labels are translated, never notes, trades, account names, symbols, or setups.
-- **Themes** — dark and light themes for the whole interface, including charts and the calendar.
-- **Interface colors** — accent presets or a custom accent, plus custom background and panel colors. Profit and loss stay green and red.
-- **Reset appearance** — restores the default theme and colors without changing the selected language.
-- **Local preferences** — language and appearance are stored on the device and do not touch the journal, screenshots, or backups.
+- **Theme-matched data cards** — account statistics, analytics cards, and chart tooltips now use the selected theme and template colors instead of a fixed dark background.
+- **Readable journal cards** — journal entries follow the theme's panel colors in both dark and light themes.
+- **Light-theme readability** — the daily-limit warning, limit values, chart labels, badges, and secondary values now use theme-aware colors, so they stay readable on light backgrounds.
+- **Template consistency** — the account panel, avatar, and accent highlights follow the active accent color.
 
 ## Windows app
 
@@ -120,9 +117,9 @@ The screenshots use generated demo data; no real journal is shown.
 
 The GitHub Release contains:
 
-- `TradeJournal_2.4.3_x64-setup.exe` — an NSIS installer for the current user, without administrator rights.
-- `TradeJournal_2.4.3_x64-setup.exe.sig` — the installer signature for auto-update.
-- `TradeJournal-portable-2.4.3-x64.zip` — a portable version that runs without installation.
+- `TradeJournal_2.4.4_x64-setup.exe` — an NSIS installer for the current user, without administrator rights.
+- `TradeJournal_2.4.4_x64-setup.exe.sig` — the installer signature for auto-update.
+- `TradeJournal-portable-2.4.4-x64.zip` — a portable version that runs without installation.
 - `latest.json` — the update manifest read by the Windows app.
 - `SHA256SUMS.txt` — file checksums.
 
@@ -207,7 +204,7 @@ The finished installer and executable appear here:
 
 ```text
 src-tauri\target\release\TradeJournal.exe
-src-tauri\target\release\bundle\nsis\TradeJournal_2.4.3_x64-setup.exe
+src-tauri\target\release\bundle\nsis\TradeJournal_2.4.4_x64-setup.exe
 ```
 
 The portable build is produced by packing `TradeJournal.exe` into a ZIP. This is what the CI build in `.github/workflows/tauri.yml` does.
@@ -231,13 +228,13 @@ If MSVC Build Tools are not installed locally, use the ready CI build: push chan
 A release is published automatically from a tag:
 
 ```powershell
-git tag v2.4.3
-git push origin v2.4.3
+git tag v2.4.4
+git push origin v2.4.4
 ```
 
-The tag must match the version in `package.json`: version `2.4.3` requires tag `v2.4.3`. If they differ, the workflow fails. A tag build runs the **Build Tauri app** workflow, builds the installer and all artifacts, and then creates a draft GitHub Release with the installer, `.sig` signature, portable ZIP, `latest.json`, and `SHA256SUMS.txt`. A regular push to `main` builds artifacts but does not create a draft. If a draft or published release already exists for the tag, the workflow does not overwrite it and fails.
+The tag must match the version in `package.json`: version `2.4.4` requires tag `v2.4.4`. If they differ, the workflow fails. A tag build runs the **Build Tauri app** workflow, builds the installer and all artifacts, and then creates a draft GitHub Release with the installer, `.sig` signature, portable ZIP, `latest.json`, and `SHA256SUMS.txt`. A regular push to `main` builds artifacts but does not create a draft. If a draft or published release already exists for the tag, the workflow does not overwrite it and fails.
 
-Until the draft is published with **Publish**, the links in `latest.json` are not visible to users and auto-update from 2.3.0 to 2.4.3 is unaffected. After checking the files on Windows, publish the draft on the release page; users will receive the notification and can download and install the update. To roll back after publication, delete the release or publish a fixed version.
+Until the draft is published with **Publish**, the links in `latest.json` are not visible to users and auto-update from 2.3.0 to 2.4.4 is unaffected. After checking the files on Windows, publish the draft on the release page; users will receive the notification and can download and install the update. To roll back after publication, delete the release or publish a fixed version.
 
 Before publishing, follow the [manual release checklist](docs/RELEASE-CHECKLIST.md) (in Russian).
 

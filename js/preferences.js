@@ -190,6 +190,8 @@
     root.style.setProperty('--panel', panel);
     root.style.setProperty('--panel-2', shade(panel, lightPanel ? -0.03 : -0.04));
     root.style.setProperty('--text', text);
+    root.style.setProperty('--text-strong', lightBg ? '#243040' : '#cfdae8');
+    root.style.setProperty('--text-soft', lightBg ? '#41566d' : '#aebdd0');
     root.style.setProperty('--muted', muted);
     root.style.setProperty('--muted-2', muted2);
     root.style.setProperty('--border', rgba(lightBg ? '#1a2633' : '#94b2d4', 0.16));

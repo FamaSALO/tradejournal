@@ -61,6 +61,8 @@ test('light theme applies light CSS variables and persists the choice', function
   assert.equal(doc.properties['--bg'], '#f4f7fb');
   assert.equal(doc.properties['--panel'], '#ffffff');
   assert.equal(doc.properties['--text'], '#1a2633');
+  assert.equal(doc.properties['--text-strong'], '#243040');
+  assert.equal(doc.properties['--text-soft'], '#41566d');
   assert.equal(doc.documentElement.lang, 'ru');
 
   const stored = JSON.parse(storage.getItem(prefs.KEY));
