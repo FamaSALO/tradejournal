@@ -1709,7 +1709,7 @@ svg { display: block; }
   #tradesTable tbody tr {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto auto;
-    grid-template-areas: "date pnl pnl" "symbol pnl pnl" "setup emotion r";
+    grid-template-areas: "date session pnl" "symbol symbol pnl" "setup emotion r";
     align-items: center;
     column-gap: 12px;
     row-gap: 4px;
@@ -1718,7 +1718,8 @@ svg { display: block; }
   }
   #tradesTable tbody td { display: block; padding: 0; border: 0; white-space: normal; }
   #tradesTable tbody td:nth-child(1) { grid-area: date; }
-  #tradesTable tbody td:nth-child(2) { display: none; }
+  #tradesTable tbody td:nth-child(2) { grid-area: session; text-align: right; }
+  #tradesTable tbody td:nth-child(2) .session-chip { max-width: 92px; font-size: 9px; padding: 2px 6px; }
   #tradesTable tbody td:nth-child(3) { grid-area: symbol; }
   #tradesTable tbody td:nth-child(4), #tradesTable tbody td:nth-child(5) { display: none; }
   #tradesTable tbody td:nth-child(6) { grid-area: pnl; text-align: right; align-self: center; }
