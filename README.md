@@ -61,7 +61,7 @@ src-tauri/src/lib.rs             Rust: window, files, backups, dialogs
 - **ZIP backups** — the archive contains `journal.json` with embedded screenshots and a `README.txt` with restore instructions. One file moves the entire journal to another device.
 - **PWA and offline** — the web version can be installed as an app from the browser; a service worker caches the interface, and an update banner with an **Update** button appears when a new version is available.
 - **Windows auto-update** — the app checks for signed updates in GitHub Releases, downloads the installer, and restarts. A check can also be started manually in settings.
-- **Interface language and themes** — Russian and English interfaces, dark and light themes, accent presets or a custom accent, and custom background and panel colors in **Settings → Interface**. Changes are saved on the device; notes, journal entries, account names, symbols, and setups are never translated.
+- **Interface language and themes** — Russian and English interfaces, dark and light themes, eight ready-made templates, accent presets or a custom accent, and custom background and panel colors in **Settings → Interface**. Changes are saved on the device; notes, journal entries, account names, symbols, and setups are never translated.
 - **Drafts** — the trade form automatically saves unsaved changes, restores them when reopened, and warns when closing. Drafts are tied to an account and a trade.
 - **Discipline and emotions** — an execution quality score and analysis of how psychology affects results.
 - **Responsive layout** — a separate layout for phones in the web version.
@@ -74,6 +74,7 @@ Open **Settings → Interface**:
 
 - **Language** — Russian or English. The interface reloads after switching; Russian is the default. Only interface labels are translated. User content — notes, journal entries, account names, symbols, and setups — is shown exactly as entered.
 - **Theme** — dark or light. The theme applies to the whole app, including charts and the calendar.
+- **Ready-made templates** — eight curated sets in one click: Mint, Graphite, Midnight, Ocean, Sunset, Morning, Cream, and Steel. A template sets the theme, accent, background, and panel colors together. After applying one, any color can still be adjusted manually; the template highlight disappears as soon as the colors stop matching.
 - **Interface colors** — a preset accent or any custom accent color, plus custom background and panel colors. Profit and loss colors stay green and red regardless of the accent.
 - **Reset appearance** — returns the theme and colors to their defaults without changing the selected language.
 
@@ -103,14 +104,15 @@ The screenshots use generated demo data; no real journal is shown.
 | ![Settings](assets/screenshots/settings.png) | ![Trade editor](assets/screenshots/trade-editor.png) |
 | Accounts, risk management, data, and updates | Partial exits, R/RR, screenshots, and notes |
 
-## What's new in 2.4.2
+## What's new in 2.4.3
 
+- **Ready-made templates** — eight curated themes (Mint, Graphite, Midnight, Ocean, Sunset, Morning, Cream, Steel) in **Settings → Interface**. One click sets the theme, accent, and background and panel colors together; the selected template stays highlighted until you change any color manually.
+- **Calendar colors** — profit and loss days in the calendar use the same green and red as the rest of the interface, with a readable heat scale in both dark and light themes.
 - **Interface language** — Russian and English; Russian stays the default. Switch in **Settings → Interface**; only interface labels are translated, never notes, trades, account names, symbols, or setups.
 - **Themes** — dark and light themes for the whole interface, including charts and the calendar.
 - **Interface colors** — accent presets or a custom accent, plus custom background and panel colors. Profit and loss stay green and red.
 - **Reset appearance** — restores the default theme and colors without changing the selected language.
 - **Local preferences** — language and appearance are stored on the device and do not touch the journal, screenshots, or backups.
-- **Fix** — the storage note in Settings is fully translated, and a test now fails when any Russian interface string in `index.html` has no English translation.
 
 ## Windows app
 
@@ -118,9 +120,9 @@ The screenshots use generated demo data; no real journal is shown.
 
 The GitHub Release contains:
 
-- `TradeJournal_2.4.2_x64-setup.exe` — an NSIS installer for the current user, without administrator rights.
-- `TradeJournal_2.4.2_x64-setup.exe.sig` — the installer signature for auto-update.
-- `TradeJournal-portable-2.4.2-x64.zip` — a portable version that runs without installation.
+- `TradeJournal_2.4.3_x64-setup.exe` — an NSIS installer for the current user, without administrator rights.
+- `TradeJournal_2.4.3_x64-setup.exe.sig` — the installer signature for auto-update.
+- `TradeJournal-portable-2.4.3-x64.zip` — a portable version that runs without installation.
 - `latest.json` — the update manifest read by the Windows app.
 - `SHA256SUMS.txt` — file checksums.
 
@@ -205,7 +207,7 @@ The finished installer and executable appear here:
 
 ```text
 src-tauri\target\release\TradeJournal.exe
-src-tauri\target\release\bundle\nsis\TradeJournal_2.4.2_x64-setup.exe
+src-tauri\target\release\bundle\nsis\TradeJournal_2.4.3_x64-setup.exe
 ```
 
 The portable build is produced by packing `TradeJournal.exe` into a ZIP. This is what the CI build in `.github/workflows/tauri.yml` does.
@@ -229,13 +231,13 @@ If MSVC Build Tools are not installed locally, use the ready CI build: push chan
 A release is published automatically from a tag:
 
 ```powershell
-git tag v2.4.2
-git push origin v2.4.2
+git tag v2.4.3
+git push origin v2.4.3
 ```
 
-The tag must match the version in `package.json`: version `2.4.2` requires tag `v2.4.2`. If they differ, the workflow fails. A tag build runs the **Build Tauri app** workflow, builds the installer and all artifacts, and then creates a draft GitHub Release with the installer, `.sig` signature, portable ZIP, `latest.json`, and `SHA256SUMS.txt`. A regular push to `main` builds artifacts but does not create a draft. If a draft or published release already exists for the tag, the workflow does not overwrite it and fails.
+The tag must match the version in `package.json`: version `2.4.3` requires tag `v2.4.3`. If they differ, the workflow fails. A tag build runs the **Build Tauri app** workflow, builds the installer and all artifacts, and then creates a draft GitHub Release with the installer, `.sig` signature, portable ZIP, `latest.json`, and `SHA256SUMS.txt`. A regular push to `main` builds artifacts but does not create a draft. If a draft or published release already exists for the tag, the workflow does not overwrite it and fails.
 
-Until the draft is published with **Publish**, the links in `latest.json` are not visible to users and auto-update from 2.3.0 to 2.4.2 is unaffected. After checking the files on Windows, publish the draft on the release page; users will receive the notification and can download and install the update. To roll back after publication, delete the release or publish a fixed version.
+Until the draft is published with **Publish**, the links in `latest.json` are not visible to users and auto-update from 2.3.0 to 2.4.3 is unaffected. After checking the files on Windows, publish the draft on the release page; users will receive the notification and can download and install the update. To roll back after publication, delete the release or publish a fixed version.
 
 Before publishing, follow the [manual release checklist](docs/RELEASE-CHECKLIST.md) (in Russian).
 

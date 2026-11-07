@@ -4,7 +4,7 @@
   const U = NS.utils;
   const store = NS.store;
   const desktop = window.tradeJournalDesktop || null;
-  const APP_VERSION = '2.4.2';
+  const APP_VERSION = '2.4.3';
   const DRAFT_PREFIX = 'tradejournal.draft.v1.';
   const META_KEY = store.META_KEY;
   // Drafts live in localStorage even on desktop, so a full screenshot data URL
@@ -1884,6 +1884,35 @@
     if (bgInput) bgInput.value = bg;
     const panelInput = $('#panelColor');
     if (panelInput) panelInput.value = panel;
+
+    const presetBox = $('#themePresets');
+    if (presetBox) {
+      const activeId = prefs.preset || findMatchingPresetId(prefs.theme, accent, bg, panel);
+      presetBox.innerHTML = NS.prefs.PRESETS.map(function (item) {
+        const active = item.id === activeId;
+        const preview = '--preset-bg:' + item.bg + ';--preset-panel:' + item.panel + ';--preset-accent:' + item.accent;
+        return '<button type="button" class="preset-card' + (active ? ' active' : '') + '"' +
+          ' data-preset-id="' + item.id + '" aria-pressed="' + (active ? 'true' : 'false') + '"' +
+          ' title="' + U.escapeHtml(T(item.label)) + '" style="' + preview + '">' +
+          '<span class="preset-preview" aria-hidden="true"><i></i><i></i><i></i></span>' +
+          '<span class="preset-name"><span>' + U.escapeHtml(T(item.label)) + '</span>' +
+          '<svg class="preset-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" ' +
+          'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6L9 17l-5-5"/></svg>' +
+          '</span></button>';
+      }).join('');
+    }
+  }
+
+  // Resolved colors can match a preset even when the saved id was cleared
+  // (for example after switching theme back to a preset's values).
+  function findMatchingPresetId(theme, accent, bg, panel) {
+    const found = NS.prefs.PRESETS.filter(function (item) {
+      return item.theme === theme &&
+        item.accent.toLowerCase() === accent.toLowerCase() &&
+        item.bg.toLowerCase() === bg.toLowerCase() &&
+        item.panel.toLowerCase() === panel.toLowerCase();
+    });
+    return found.length ? found[0].id : '';
   }
 
   function saveAppearance(patch, redraw) {
@@ -4480,6 +4509,13 @@
       const button = event.target.closest('button[data-accent-value]');
       if (!button) return;
       saveAppearance({ accent: button.dataset.accentValue }, true);
+    });
+    $('#themePresets').addEventListener('click', function (event) {
+      const button = event.target.closest('button[data-preset-id]');
+      if (!button || !NS.prefs) return;
+      NS.prefs.usePreset(button.dataset.presetId);
+      renderAppearance();
+      renderCurrentView();
     });
     $('#accentColor').addEventListener('input', function (event) {
       saveAppearance({ accent: event.target.value }, false);

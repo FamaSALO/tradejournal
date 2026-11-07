@@ -19,10 +19,23 @@
   };
 
   const LIGHT = {
-    accent: '#0f9d76',
+    accent: '#0b7a5c',
     bg: '#f4f7fb',
     panel: '#ffffff'
   };
+
+  // Curated presets: every one keeps readable text contrast and keeps
+  // profit/loss colors untouched.
+  const PRESETS = [
+    { id: 'mint', label: 'Мята', theme: 'dark', accent: '#31e3aa', bg: '#070a0f', panel: '#101822' },
+    { id: 'graphite', label: 'Графит', theme: 'dark', accent: '#9db4d4', bg: '#0c0f13', panel: '#171c23' },
+    { id: 'midnight', label: 'Полночь', theme: 'dark', accent: '#b9a3ff', bg: '#0a0813', panel: '#15112a' },
+    { id: 'ocean', label: 'Океан', theme: 'dark', accent: '#38bdf8', bg: '#05131a', panel: '#0c1e28' },
+    { id: 'sunset', label: 'Закат', theme: 'dark', accent: '#f5a524', bg: '#150e0b', panel: '#221714' },
+    { id: 'daylight', label: 'Утро', theme: 'light', accent: '#0b7a5c', bg: '#f4f7fb', panel: '#ffffff' },
+    { id: 'cream', label: 'Крем', theme: 'light', accent: '#a16207', bg: '#faf6ee', panel: '#fffdf7' },
+    { id: 'steel', label: 'Сталь', theme: 'light', accent: '#2563eb', bg: '#eef2f7', panel: '#ffffff' }
+  ];
 
   function defaultsFor(theme) {
     return theme === 'light' ? LIGHT : DARK;
@@ -87,13 +100,50 @@
 
   function normalize(raw) {
     const source = raw && typeof raw === 'object' ? raw : {};
+    const known = PRESETS.filter(function (item) { return item.id === source.preset; })[0];
+    // The preset id is only meaningful while theme and colors still match it.
+    const preset = known &&
+      known.theme === (source.theme === 'light' ? 'light' : 'dark') &&
+      known.accent === validColor(source.accent) &&
+      known.bg === validColor(source.bg) &&
+      known.panel === validColor(source.panel)
+      ? known.id
+      : '';
     return {
       theme: source.theme === 'light' ? 'light' : 'dark',
       lang: source.lang === 'en' ? 'en' : 'ru',
       accent: validColor(source.accent),
       bg: validColor(source.bg),
-      panel: validColor(source.panel)
+      panel: validColor(source.panel),
+      preset: preset
     };
+  }
+
+  function findPreset(id) {
+    return PRESETS.filter(function (item) { return item.id === id; })[0] || null;
+  }
+
+  // A preset replaces theme and all three colors at once.
+  function usePreset(id) {
+    const preset = findPreset(id);
+    if (!preset) return read();
+    return save({
+      theme: preset.theme,
+      accent: preset.accent,
+      bg: preset.bg,
+      panel: preset.panel,
+      preset: preset.id
+    });
+  }
+
+  // Any manual color or theme change stops the interface from claiming a preset.
+  function matchesPreset(state) {
+    return PRESETS.some(function (item) {
+      return item.theme === state.theme &&
+        item.accent.toLowerCase() === state.accent.toLowerCase() &&
+        item.bg.toLowerCase() === state.bg.toLowerCase() &&
+        item.panel.toLowerCase() === state.panel.toLowerCase();
+    });
   }
 
   function read() {
@@ -184,6 +234,10 @@
   NS.prefs = {
     KEY: KEY,
     ACCENTS: ACCENTS,
+    PRESETS: PRESETS,
+    usePreset: usePreset,
+    findPreset: findPreset,
+    matchesPreset: matchesPreset,
     defaultsFor: defaultsFor,
     get: read,
     save: save,
