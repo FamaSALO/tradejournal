@@ -229,31 +229,44 @@
     return new Date(guess).toISOString();
   }
 
+  function validSessionKey(value) {
+    return typeof value === 'string' && /^[A-Za-z0-9_-]{1,40}$/.test(value);
+  }
+
+  let sessionKeySeq = 0;
+
+  function newSessionKey() {
+    sessionKeySeq += 1;
+    return 'session-' + Date.now().toString(36) + '-' + sessionKeySeq.toString(36);
+  }
+
   function sessionList(sessions) {
     const source = Array.isArray(sessions) ? sessions : [];
     const key = JSON.stringify(source);
     if (sessionCache && key === sessionCacheKey) return sessionCache;
-    const byKey = {};
+    const seenKeys = new Set();
+    const list = [];
     source.forEach(function (item, index) {
       if (!item || typeof item !== 'object') return;
-      const fallback = DEFAULT_SESSIONS[index];
-      const keyName = DEFAULT_SESSIONS.some(function (session) { return session.key === item.key; })
-        ? item.key
-        : (fallback ? fallback.key : '');
-      if (!keyName) return;
-      const definition = DEFAULT_SESSIONS.find(function (session) { return session.key === keyName; });
-      byKey[keyName] = {
-        key: keyName,
-        name: String(item.name || '').trim().slice(0, 24) || definition.name,
-        start: validTimeHM(item.start) || definition.start
-      };
+      const definition = DEFAULT_SESSIONS.find(function (session) { return session.key === item.key; });
+      let itemKey = String(item.key || '').trim();
+      if (!validSessionKey(itemKey) || seenKeys.has(itemKey)) {
+        itemKey = 'session-' + (index + 1);
+        while (seenKeys.has(itemKey)) itemKey += '-x';
+      }
+      const name = String(item.name || '').trim().slice(0, 24) || (definition ? definition.name : '');
+      const start = validTimeHM(item.start) || (definition ? definition.start : '');
+      if (!name || !start) return;
+      seenKeys.add(itemKey);
+      list.push({ key: itemKey, name: name, start: start });
     });
-    const list = DEFAULT_SESSIONS.map(function (definition) {
-      return byKey[definition.key] || { key: definition.key, name: definition.name, start: definition.start };
-    });
+    if (!list.length) {
+      DEFAULT_SESSIONS.forEach(function (session) {
+        list.push({ key: session.key, name: session.name, start: session.start });
+      });
+    }
     list.sort(function (a, b) {
-      return a.start.localeCompare(b.start) || DEFAULT_SESSIONS.findIndex(function (s) { return s.key === a.key; })
-        - DEFAULT_SESSIONS.findIndex(function (s) { return s.key === b.key; });
+      return a.start.localeCompare(b.start) || a.key.localeCompare(b.key);
     });
     sessionCacheKey = key;
     sessionCache = list;
@@ -270,21 +283,42 @@
     return Number(session.start.slice(0, 2)) * 60 + Number(session.start.slice(3, 5));
   }
 
-  function sessionOf(time, sessions) {
-    if (!time || typeof time !== 'string') return 'Без времени';
+  function sessionInfo(time, sessions) {
+    if (!time || typeof time !== 'string') return null;
     const value = validTimeHM(time);
-    if (!value) return 'Без времени';
+    if (!value) return null;
     const minutes = Number(value.slice(0, 2)) * 60 + Number(value.slice(3, 5));
     const list = sessionList(sessions);
     let current = list[list.length - 1];
     list.forEach(function (session) {
       if (minutes >= sessionStartMinutes(session)) current = session;
     });
-    return sessionLabel(current.name);
+    return {
+      key: current.key,
+      name: current.name,
+      start: current.start,
+      label: sessionLabel(current.name)
+    };
+  }
+
+  function sessionOf(time, sessions) {
+    const info = sessionInfo(time, sessions);
+    return info ? info.label : 'Без времени';
   }
 
   function sessionNames(sessions) {
     return sessionList(sessions).map(function (session) { return sessionLabel(session.name); });
+  }
+
+  function timeZoneOffsetLabel(timeZone, date) {
+    const zone = validTimeZone(timeZone) ? timeZone : systemTimeZone();
+    const moment = date && typeof date.getTime === 'function' && Number.isFinite(date.getTime()) ? date : new Date();
+    const parts = zonedParts(moment.getTime(), zone);
+    const asUtc = Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute, parts.second || 0);
+    const minutes = Math.round((asUtc - moment.getTime()) / 60000);
+    const sign = minutes < 0 ? '-' : '+';
+    const abs = Math.abs(minutes);
+    return 'UTC' + sign + pad(Math.floor(abs / 60)) + ':' + pad(abs % 60);
   }
 
   function symbol() {
@@ -611,8 +645,11 @@
     uid: uid,
     plural: plural,
     sessionOf: sessionOf,
+    sessionInfo: sessionInfo,
     sessionNames: sessionNames,
     normalizeSessions: normalizeSessions,
+    newSessionKey: newSessionKey,
+    timeZoneOffsetLabel: timeZoneOffsetLabel,
     systemTimeZone: systemTimeZone,
     validTimeZone: validTimeZone,
     validDateISO: validDateISO,

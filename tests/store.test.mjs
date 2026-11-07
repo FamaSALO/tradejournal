@@ -410,6 +410,76 @@ test('session boundaries are configurable and wrap around midnight', function ()
   assert.equal(U.sessionNames(custom).join(','), 'Азия,Лондон,Нью-Йорк,Вечер');
 });
 
+test('custom sessions can be added, reordered and removed', function () {
+  const base = [
+    { key: 'tokyo', name: 'Токио', start: '02:00' },
+    { key: 'frankfurt', name: 'Франкфурт', start: '09:00' }
+  ];
+  assert.equal(JSON.stringify(U.normalizeSessions(base)), JSON.stringify(base));
+
+  const key = U.newSessionKey();
+  assert.match(key, /^[A-Za-z0-9_-]{1,40}$/);
+  const added = U.normalizeSessions(base.concat([{ key: key, name: 'Сессия 3', start: '14:30' }]));
+  assert.equal(added.map(function (session) { return session.name; }).join(','), 'Токио,Франкфурт,Сессия 3');
+
+  const removed = U.normalizeSessions(added.filter(function (session) { return session.key !== 'frankfurt'; }));
+  assert.equal(JSON.stringify(removed), JSON.stringify([
+    { key: 'tokyo', name: 'Токио', start: '02:00' },
+    { key: key, name: 'Сессия 3', start: '14:30' }
+  ]));
+});
+
+test('session normalization accepts arbitrary keys and repairs duplicates', function () {
+  const normalized = U.normalizeSessions([
+    { key: 'tokyo', name: 'Токио', start: '07:30' },
+    { key: 'dup', name: 'Первый', start: '12:00' },
+    { key: 'dup', name: 'Второй', start: '18:00' },
+    { key: 'bad key', name: 'Третий', start: 'bad' }
+  ]);
+  assert.equal(normalized.map(function (session) { return session.name; }).join(','), 'Токио,Первый,Второй');
+  assert.equal(normalized[0].key, 'tokyo');
+  assert.equal(new Set(normalized.map(function (session) { return session.key; })).size, 3);
+});
+
+test('empty or broken session settings fall back to the defaults', function () {
+  const defaults = ['asia', 'london', 'newYork', 'evening'];
+  assert.equal(U.normalizeSessions([]).map(function (session) { return session.key; }).join(','), defaults.join(','));
+  assert.equal(
+    U.normalizeSessions([{ key: 'custom', name: '', start: '' }]).map(function (session) { return session.key; }).join(','),
+    defaults.join(',')
+  );
+});
+
+test('sessionInfo returns the current session with its key and start', function () {
+  const custom = [
+    { key: 'tokyo', name: 'Токио', start: '02:00' },
+    { key: 'london', name: 'Лондон', start: '09:00' },
+    { key: 'newYork', name: 'Нью-Йорк', start: '14:00' }
+  ];
+  assert.equal(JSON.stringify(U.sessionInfo('00:30', custom)), JSON.stringify({
+    key: 'newYork', name: 'Нью-Йорк', start: '14:00', label: 'Нью-Йорк'
+  }));
+  assert.equal(JSON.stringify(U.sessionInfo('02:00', custom)), JSON.stringify({
+    key: 'tokyo', name: 'Токио', start: '02:00', label: 'Токио'
+  }));
+  assert.equal(JSON.stringify(U.sessionInfo('13:59', custom)), JSON.stringify({
+    key: 'london', name: 'Лондон', start: '09:00', label: 'Лондон'
+  }));
+  assert.equal(U.sessionInfo('', custom), null);
+  assert.equal(U.sessionInfo('25:00', custom), null);
+});
+
+test('time zone offset labels follow daylight saving time', function () {
+  const winter = new Date('2026-01-15T12:00:00.000Z');
+  const summer = new Date('2026-07-15T12:00:00.000Z');
+  assert.equal(U.timeZoneOffsetLabel('UTC', winter), 'UTC+00:00');
+  assert.equal(U.timeZoneOffsetLabel('Europe/Moscow', winter), 'UTC+03:00');
+  assert.equal(U.timeZoneOffsetLabel('America/New_York', winter), 'UTC-05:00');
+  assert.equal(U.timeZoneOffsetLabel('America/New_York', summer), 'UTC-04:00');
+  assert.equal(U.timeZoneOffsetLabel('Asia/Kolkata', winter), 'UTC+05:30');
+  assert.equal(U.timeZoneOffsetLabel('Asia/Kathmandu', winter), 'UTC+05:45');
+});
+
 test('import drops broken dates instead of replacing them with today', async function () {
   const raw = {
     accounts: [{

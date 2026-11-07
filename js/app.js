@@ -4,7 +4,7 @@
   const U = NS.utils;
   const store = NS.store;
   const desktop = window.tradeJournalDesktop || null;
-  const APP_VERSION = '2.4.4';
+  const APP_VERSION = '2.5.0';
   const DRAFT_PREFIX = 'tradejournal.draft.v1.';
   const META_KEY = store.META_KEY;
   // Drafts live in localStorage even on desktop, so a full screenshot data URL
@@ -75,6 +75,47 @@
   };
 
   const EMOTION_OPTIONS = NS.EMOTIONS;
+
+  // Popular trading zones are listed first; every other IANA zone follows.
+  const COMMON_TIMEZONES = [
+    'UTC',
+    'Europe/London',
+    'Europe/Dublin',
+    'Europe/Lisbon',
+    'Europe/Paris',
+    'Europe/Berlin',
+    'Europe/Zurich',
+    'Europe/Madrid',
+    'Europe/Rome',
+    'Europe/Amsterdam',
+    'Europe/Stockholm',
+    'Europe/Warsaw',
+    'Europe/Kiev',
+    'Europe/Moscow',
+    'Europe/Istanbul',
+    'Africa/Johannesburg',
+    'Africa/Lagos',
+    'Asia/Dubai',
+    'Asia/Karachi',
+    'Asia/Kolkata',
+    'Asia/Almaty',
+    'Asia/Bangkok',
+    'Asia/Shanghai',
+    'Asia/Hong_Kong',
+    'Asia/Singapore',
+    'Asia/Tokyo',
+    'Asia/Seoul',
+    'Australia/Perth',
+    'Australia/Sydney',
+    'Pacific/Auckland',
+    'America/New_York',
+    'America/Chicago',
+    'America/Denver',
+    'America/Los_Angeles',
+    'America/Toronto',
+    'America/Mexico_City',
+    'America/Sao_Paulo'
+  ];
 
   /* ============================================================
      Init
@@ -891,6 +932,18 @@
         bv = (b.date || '') + ' ' + (b.time || '00:00');
         return av.localeCompare(bv) * dir;
       }
+      if (key === 'session') {
+        const sessions = store.state.settings.sessions;
+        const aSession = U.sessionInfo(a.time, sessions);
+        const bSession = U.sessionInfo(b.time, sessions);
+        if (!aSession && !bSession) return 0;
+        if (!aSession) return 1;
+        if (!bSession) return -1;
+        const aStart = timeToMinutes(aSession.start);
+        const bStart = timeToMinutes(bSession.start);
+        if (aStart !== bStart) return (aStart - bStart) * dir;
+        return ((a.date || '') + ' ' + (a.time || '')).localeCompare((b.date || '') + ' ' + (b.time || '')) * dir;
+      }
       if (key === 'symbol' || key === 'setup') {
         av = String(a[key] || '').toLowerCase();
         bv = String(b[key] || '').toLowerCase();
@@ -939,6 +992,7 @@
     const pnl = store.tradePnl(trade);
     const r = store.tradeR(trade);
     const emotion = U.emotionMeta(trade.emotion);
+    const session = U.sessionInfo(trade.time, store.state.settings.sessions);
     const weighted = store.weightedExit(trade);
     const remaining = store.remainingQty(trade);
     const exitHtml = status === 'open'
@@ -954,6 +1008,7 @@
       : (status === 'open' ? '<span class="open-badge">открыта</span>' : '');
     return '<tr data-open-trade="' + U.escapeHtml(trade.id) + '" tabindex="0">' +
       '<td><div class="cell-date"><strong>' + U.escapeHtml(U.formatDate(trade.date, 'med')) + '</strong><span>' + U.escapeHtml(trade.time || '—') + '</span></div></td>' +
+      '<td>' + (session ? '<span class="session-chip" data-i18n-skip>' + U.escapeHtml(session.label) + '</span>' : '<span class="muted">—</span>') + '</td>' +
       '<td><div class="symbol-cell"><div class="symbol-main">' +
       '<button type="button" class="symbol-thumb' + (trade.screenshot ? ' has-shot' : '') + '"' +
       (trade.screenshot ? ' data-open-shot="' + U.escapeHtml(trade.id) + '" title="Открыть скриншот"' : ' tabindex="-1" aria-hidden="true"') + '>' +
@@ -1365,7 +1420,7 @@
     const sessionGroups = store.groupRows(rows, function (t) { return U.sessionOf(t.time, sessions); });
     const sessionOrder = U.sessionNames(sessions).concat('Без времени');
     sessionGroups.sort(function (a, b) { return sessionOrder.indexOf(a.key) - sessionOrder.indexOf(b.key); });
-    renderBreakdown($('#sessionBreakdown'), sessionGroups, { preserveOrder: true, empty: 'Нет сделок за период' });
+    renderBreakdown($('#sessionBreakdown'), sessionGroups, { preserveOrder: true, labelSkip: true, empty: 'Нет сделок за период' });
 
     renderQuality(m);
     renderSetupTable(rows);
@@ -1743,53 +1798,64 @@
      Settings & data
      ============================================================ */
 
-  function fillTimezoneOptions() {
-    const list = $('#timezoneList');
-    if (!list || list.dataset.filled === '1') return;
-    const common = [
-      'UTC',
-      'Europe/Moscow',
-      'Europe/London',
-      'Europe/Berlin',
-      'Europe/Kiev',
-      'Europe/Istanbul',
-      'Asia/Almaty',
-      'Asia/Dubai',
-      'Asia/Tokyo',
-      'Asia/Shanghai',
-      'Asia/Singapore',
-      'America/New_York',
-      'America/Chicago',
-      'America/Los_Angeles',
-      'Australia/Sydney'
-    ];
-    let zones = [];
+  function fillTimezoneOptions(selected) {
+    const select = $('#settingTimezone');
+    if (!select) return;
+    let supported = [];
     try {
-      if (typeof Intl.supportedValuesOf === 'function') zones = Intl.supportedValuesOf('timeZone');
-    } catch (err) { zones = []; }
+      if (typeof Intl.supportedValuesOf === 'function') supported = Intl.supportedValuesOf('timeZone');
+    } catch (err) { supported = []; }
+    const common = COMMON_TIMEZONES.filter(function (zone) { return U.validTimeZone(zone); });
     const seen = new Set();
-    const all = common.concat(zones).filter(function (zone) {
-      if (!zone || seen.has(zone)) return false;
+    const all = [];
+    common.concat(supported).forEach(function (zone) {
+      if (!zone || seen.has(zone) || !U.validTimeZone(zone)) return;
       seen.add(zone);
-      return true;
+      all.push(zone);
     });
-    list.innerHTML = all.map(function (zone) {
-      return '<option value="' + U.escapeHtml(zone) + '"></option>';
-    }).join('');
-    list.dataset.filled = '1';
+    if (selected && U.validTimeZone(selected) && !seen.has(selected)) {
+      seen.add(selected);
+      all.push(selected);
+    }
+    const commonSet = new Set(common);
+    const rest = all.filter(function (zone) { return !commonSet.has(zone); });
+    const now = new Date();
+    const offsetLabel = function (zone) {
+      return U.escapeHtml(zone + ' · ' + U.timeZoneOffsetLabel(zone, now));
+    };
+    const option = function (zone) {
+      return '<option value="' + U.escapeHtml(zone) + '">' + offsetLabel(zone) + '</option>';
+    };
+    select.innerHTML =
+      '<optgroup label="' + U.escapeHtml(T('Популярные')) + '">' + common.map(option).join('') + '</optgroup>' +
+      (rest.length ? '<optgroup label="' + U.escapeHtml(T('Все часовые пояса')) + '">' + rest.map(option).join('') + '</optgroup>' : '');
+    if (selected && U.validTimeZone(selected)) select.value = selected;
+  }
+
+  function sessionRowHtml(session) {
+    return '<div class="session-setting-row" data-session-key="' + U.escapeHtml(session.key) + '">' +
+      '<input type="text" data-session-name data-i18n-skip maxlength="24" value="' + U.escapeHtml(session.name) + '" aria-label="' + T('Название сессии') + '" autocomplete="off">' +
+      '<span class="session-dash">' + T('с') + '</span>' +
+      '<input type="time" data-session-start value="' + U.escapeHtml(session.start) + '" aria-label="' + T('Начало сессии') + '">' +
+      '<button type="button" class="session-remove" data-remove-session aria-label="' + T('Удалить сессию') + '" title="' + T('Удалить сессию') + '">' +
+      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M6 7l1 13h10l1-13"/><path d="M9 7V4h6v3"/></svg>' +
+      '</button></div>';
+  }
+
+  function syncSessionRemoveButtons() {
+    const rows = $$('#sessionSettings .session-setting-row');
+    rows.forEach(function (row) {
+      const button = row.querySelector('[data-remove-session]');
+      if (button) button.disabled = rows.length <= 1;
+    });
   }
 
   function renderSessionSettings() {
     const box = $('#sessionSettings');
     if (!box) return;
     const sessions = store.state.settings.sessions || U.normalizeSessions();
-    box.innerHTML = sessions.map(function (session) {
-      return '<div class="session-setting-row" data-session-key="' + U.escapeHtml(session.key) + '">' +
-        '<input type="text" data-session-name data-i18n-skip maxlength="24" value="' + U.escapeHtml(session.name) + '" aria-label="' + T('Название сессии') + '" autocomplete="off">' +
-        '<span class="session-dash">' + T('с') + '</span>' +
-        '<input type="time" data-session-start value="' + U.escapeHtml(session.start) + '" aria-label="' + T('Начало сессии') + '">' +
-        '</div>';
-    }).join('');
+    box.innerHTML = sessions.map(sessionRowHtml).join('');
+    syncSessionRemoveButtons();
   }
 
   function readSessionSettings() {
@@ -1802,12 +1868,88 @@
     });
   }
 
+  function timeToMinutes(time) {
+    const match = /^(\d{2}):(\d{2})$/.exec(String(time || ''));
+    return match ? Number(match[1]) * 60 + Number(match[2]) : null;
+  }
+
+  function nextSessionStart(sessions) {
+    const starts = new Set(sessions.map(function (session) { return session.start; }));
+    if (!sessions.length) return '00:00';
+    const sorted = sessions.slice().sort(function (a, b) { return a.start.localeCompare(b.start); });
+    let minutes = (timeToMinutes(sorted[sorted.length - 1].start) + 60) % 1440;
+    for (let i = 0; i < 48; i++) {
+      const value = pad2(Math.floor(minutes / 60)) + ':' + pad2(minutes % 60);
+      if (!starts.has(value)) return value;
+      minutes = (minutes + 30) % 1440;
+    }
+    return '00:00';
+  }
+
+  function nextSessionName(sessions) {
+    const base = T('Сессия');
+    const names = new Set(sessions.map(function (session) { return session.name.toLowerCase(); }));
+    let index = sessions.length + 1;
+    let name = base + ' ' + index;
+    while (names.has(name.toLowerCase())) {
+      index += 1;
+      name = base + ' ' + index;
+    }
+    return name;
+  }
+
+  function addSessionRow() {
+    const box = $('#sessionSettings');
+    if (!box) return;
+    const sessions = readSessionSettings();
+    const session = {
+      key: U.newSessionKey(),
+      name: nextSessionName(sessions),
+      start: nextSessionStart(sessions)
+    };
+    box.insertAdjacentHTML('beforeend', sessionRowHtml(session));
+    syncSessionRemoveButtons();
+    const rows = $$('#sessionSettings .session-setting-row');
+    const input = rows[rows.length - 1].querySelector('[data-session-name]');
+    if (input) input.focus();
+    renderClockSettings();
+  }
+
+  function renderClockSettings() {
+    const select = $('#settingTimezone');
+    const zone = select && U.validTimeZone(select.value) ? select.value : U.systemTimeZone();
+    const now = new Date();
+    const zoned = U.utcToZoned(now.toISOString(), zone);
+    const offset = U.timeZoneOffsetLabel(zone, now);
+    const nowLabel = $('#timezoneNow');
+    if (nowLabel) nowLabel.textContent = T('Сейчас') + ': ' + (zoned ? zoned.time : '—') + ' · ' + offset;
+
+    const nameLabel = $('#sessionNowName');
+    const metaLabel = $('#sessionNowMeta');
+    if (!nameLabel || !metaLabel) return;
+    const sessions = U.normalizeSessions(readSessionSettings());
+    const info = zoned ? U.sessionInfo(zoned.time, sessions) : null;
+    if (!info) {
+      nameLabel.textContent = '—';
+      metaLabel.textContent = '';
+      return;
+    }
+    nameLabel.textContent = info.label;
+    if (sessions.length > 1) {
+      const index = sessions.findIndex(function (session) { return session.key === info.key; });
+      const next = sessions[(index + 1) % sessions.length];
+      metaLabel.textContent = T('до') + ' ' + next.start;
+    } else {
+      metaLabel.textContent = T('круглосуточно');
+    }
+  }
+
   function renderSettings() {
     const settings = store.state.settings;
     const account = store.activeAccount();
     const profile = store.state.profile || {};
 
-    fillTimezoneOptions();
+    fillTimezoneOptions(settings.timezone || U.systemTimeZone());
     $('#profileName').value = profile.name || '';
     state.profileAvatarDraft = profile.avatar || '';
     renderProfileAvatar();
@@ -1837,6 +1979,7 @@
     $('#settingMaxTrades').value = settings.maxTradesPerDay;
     $('#settingTimezone').value = settings.timezone || U.systemTimeZone();
     renderSessionSettings();
+    renderClockSettings();
     $('#settingsSavedAt').textContent = '';
     setVersionLabel(APP_VERSION);
 
@@ -2384,18 +2527,27 @@
       return toast('Часовой пояс не распознан. Укажите зону IANA, например Europe/Moscow или America/New_York.', 'error');
     }
 
+    if (!sessions.length) return toast('Добавьте хотя бы одну торговую сессию.', 'error');
+
     const seenNames = new Set();
     const seenStarts = new Set();
+    const seenKeys = new Set();
+    const cleaned = [];
     for (const session of sessions) {
-      const name = String(session.name || '').trim();
+      const name = String(session.name || '').trim().slice(0, 24);
       if (!name) return toast('У каждой торговой сессии должно быть название.', 'error');
       if (seenNames.has(name.toLowerCase())) return toast('Названия торговых сессий должны быть разными.', 'error');
-      if (!U.validTimeHM(session.start)) return toast('Укажите время начала для сессии «' + name + '».', 'error');
-      if (seenStarts.has(session.start)) return toast('Время начала торговых сессий должно быть разным.', 'error');
+      const start = U.validTimeHM(session.start);
+      if (!start) return toast('Укажите время начала для сессии «' + name + '».', 'error');
+      if (seenStarts.has(start)) return toast('Время начала торговых сессий должно быть разным.', 'error');
+      let key = String(session.key || '').trim();
+      if (!/^[A-Za-z0-9_-]{1,40}$/.test(key) || seenKeys.has(key)) key = U.newSessionKey();
       seenNames.add(name.toLowerCase());
-      seenStarts.add(session.start);
+      seenStarts.add(start);
+      seenKeys.add(key);
+      cleaned.push({ key: key, name: name, start: start });
     }
-    sessions.sort(function (a, b) { return a.start.localeCompare(b.start); });
+    cleaned.sort(function (a, b) { return a.start.localeCompare(b.start); });
 
     store.state.settings = {
       currency: currency,
@@ -2404,9 +2556,7 @@
       dailyLossLimit: daily,
       maxTradesPerDay: Math.round(maxTrades),
       timezone: timezone,
-      sessions: sessions.map(function (session) {
-        return { key: session.key, name: String(session.name).trim(), start: session.start };
-      })
+      sessions: cleaned
     };
     state.selectedDay = todayInAccount();
     store.state.demo = false;
@@ -4492,6 +4642,22 @@
 
     $('#settingsForm').addEventListener('submit', saveSettings);
     $('#profileForm').addEventListener('submit', saveProfile);
+    $('#addSessionBtn').addEventListener('click', addSessionRow);
+    $('#settingTimezone').addEventListener('change', renderClockSettings);
+    $('#sessionSettings').addEventListener('input', renderClockSettings);
+    $('#sessionSettings').addEventListener('click', function (event) {
+      const button = event.target.closest('[data-remove-session]');
+      if (!button || button.disabled) return;
+      const row = button.closest('.session-setting-row');
+      if (!row) return;
+      if ($$('#sessionSettings .session-setting-row').length <= 1) return;
+      row.remove();
+      syncSessionRemoveButtons();
+      renderClockSettings();
+    });
+    setInterval(function () {
+      if (state.view === 'settings' && !document.hidden) renderClockSettings();
+    }, 30000);
     $('#languageSegmented').addEventListener('click', function (event) {
       const button = event.target.closest('button[data-lang-option]');
       if (!button) return;
