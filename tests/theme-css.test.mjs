@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const css = readFileSync(path.join(ROOT, 'css/styles.css'), 'utf8');
+const app = readFileSync(path.join(ROOT, 'js/app.js'), 'utf8');
 
 function block(selector) {
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -42,4 +43,15 @@ test('light and dark themes define strong and soft text tones', function () {
   const light = block(':root[data-theme="light"]');
   assert.match(light, /--text-strong:\s*#243040/);
   assert.match(light, /--text-soft:\s*#41566d/);
+});
+
+test('view switching and the sticky header avoid flicker-prone effects', function () {
+  assert.doesNotMatch(css, /\.view\.active[^{]*\{[^}]*animation/,
+    'views must not animate on every switch: the fade left the screen blank for a frame');
+  assert.doesNotMatch(css, /html\s*\{[^}]*scroll-behavior:\s*smooth/,
+    'smooth page scrolling makes section changes look like a flash');
+  assert.doesNotMatch(block('.topbar'), /backdrop-filter/,
+    'the sticky topbar must not blur the page while scrolling in WebView2');
+  assert.doesNotMatch(app, /scrollTo\(\{[^}]*behavior:\s*'smooth'/,
+    'navigation must return to the top of the section instantly');
 });

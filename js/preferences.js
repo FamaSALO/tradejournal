@@ -202,7 +202,7 @@
     root.style.setProperty('--shadow', state.theme === 'light'
       ? '0 22px 60px rgba(23, 43, 77, 0.12)'
       : '0 24px 70px rgba(0, 0, 0, 0.45)');
-    root.style.setProperty('--topbar-bg', rgba(shade(bg, lightBg ? -0.04 : 0.02), 0.82));
+    root.style.setProperty('--topbar-bg', shade(bg, lightBg ? -0.04 : 0.02));
     root.style.setProperty('--sidebar-bg', shade(bg, lightBg ? -0.025 : 0.02));
     root.style.setProperty('--card-bg-a', shade(panel, lightPanel ? -0.012 : 0.03));
     root.style.setProperty('--card-bg-b', shade(panel, lightPanel ? -0.03 : -0.02));

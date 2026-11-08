@@ -34,7 +34,7 @@
   --accent-border: rgba(49, 227, 170, 0.28);
   --accent-ring: rgba(49, 227, 170, 0.55);
   --accent-contrast: #041612;
-  --topbar-bg: rgba(7, 10, 15, 0.76);
+  --topbar-bg: #070a0f;
   --sidebar-bg: #080d13;
   --card-bg-a: rgba(20, 29, 41, 0.88);
   --card-bg-b: rgba(11, 17, 25, 0.94);
@@ -49,7 +49,7 @@
 
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
-html { scroll-behavior: smooth; }
+
 body {
   margin: 0;
   min-height: 100vh;
@@ -251,9 +251,9 @@ svg { display: block; }
   align-items: center;
   gap: 16px;
   padding: 22px 32px 18px;
+  /* Opaque on purpose: blurring a sticky header makes WebView2 repaint the
+     whole page while scrolling, which looks like flicker. */
   background: var(--topbar-bg);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
   border-bottom: 1px solid var(--border);
 }
 .page-heading { min-width: 0; }
@@ -383,11 +383,9 @@ svg { display: block; }
 
 /* ============================ Cards, view ============================ */
 .view { display: none; }
-.view.active { display: block; animation: viewIn 0.28s ease both; }
-@keyframes viewIn {
-  from { opacity: 0; transform: translateY(7px); }
-  to { opacity: 1; transform: none; }
-}
+/* No entrance animation: with animation-fill-mode "both" a view can stay at
+   opacity 0 until the first frame, and every switch flashed the whole screen. */
+.view.active { display: block; }
 
 .grid { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 16px; }
 .span-4 { grid-column: span 4; }
@@ -1644,7 +1642,7 @@ svg { display: block; }
     box-shadow: 30px 0 80px rgba(0, 0, 0, 0.5);
   }
   body.sidebar-open .sidebar { transform: none; }
-  body.sidebar-open .sidebar-overlay { display: block; position: fixed; inset: 0; z-index: 70; background: rgba(3, 6, 10, 0.6); backdrop-filter: blur(3px); }
+  body.sidebar-open .sidebar-overlay { display: block; position: fixed; inset: 0; z-index: 70; background: rgba(3, 6, 10, 0.72); }
   .main { margin-left: 0; }
   #menuBtn { display: inline-grid; }
   .topbar { padding: 18px 24px 16px; }
