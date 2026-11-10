@@ -4,7 +4,7 @@
   const U = NS.utils;
   const store = NS.store;
   const desktop = window.tradeJournalDesktop || null;
-  const APP_VERSION = '2.5.1';
+  const APP_VERSION = '2.5.2';
   const DRAFT_PREFIX = 'tradejournal.draft.v1.';
   const META_KEY = store.META_KEY;
   // Drafts live in localStorage even on desktop, so a full screenshot data URL
@@ -1246,14 +1246,10 @@
 
     const dayInfo = store.dayPnlMap(store.state.trades).get(day) || { pnl: 0, count: 0 };
     const dayPnl = dayInfo.pnl;
-    const dayEventPnl = new Map();
+    const dayEventPnl = store.dayEventPnlMap(store.state.trades, day);
     const dayTrades = store.state.trades
       .filter(function (trade) {
-        if (trade.date === day) return true;
-        const events = store.tradePnlEvents(trade).filter(function (event) { return event.date === day; });
-        if (!events.length) return false;
-        dayEventPnl.set(trade.id, events.reduce(function (sum, event) { return sum + event.pnl; }, 0));
-        return true;
+        return trade.date === day || dayEventPnl.has(trade.id);
       })
       .sort(function (a, b) { return (a.time || '').localeCompare(b.time || ''); });
     const closedTrades = dayTrades.filter(function (trade) { return dayEventPnl.has(trade.id); });

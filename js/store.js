@@ -1044,6 +1044,24 @@
     return map;
   }
 
+  // Returns the P&L realized on a specific day for each trade, including
+  // trades that were both opened and exited on that day. The day panel uses
+  // this map both to build its trade list and to show per-trade results.
+  function dayEventPnlMap(trades, day) {
+    const map = new Map();
+    (trades || []).forEach(function (trade) {
+      if (!trade) return;
+      const events = tradePnlEvents(trade).filter(function (event) {
+        return event.date === day;
+      });
+      if (!events.length) return;
+      map.set(trade.id, events.reduce(function (sum, event) {
+        return sum + event.pnl;
+      }, 0));
+    });
+    return map;
+  }
+
   // Stable exit-event order used by the equity curve and drawdown.
   function pnlEventRows(trades) {
     const rows = [];
@@ -1327,6 +1345,7 @@
     tradePnl: tradePnl,
     tradePnlEvents: tradePnlEvents,
     dayPnlMap: dayPnlMap,
+    dayEventPnlMap: dayEventPnlMap,
     tradeFees: tradeFees,
     tradeRisk: tradeRisk,
     openRisk: openRisk,

@@ -160,6 +160,36 @@ test('daily P&L events split a Monday-to-Wednesday trade across exit dates', fun
   assert.equal(days.get('2026-01-07').count, 1);
 });
 
+test('day event PnL includes same-day exits for trades opened that day', function () {
+  const closed = trade({
+    id: 'same-day',
+    date: '2026-01-05',
+    qty: 10,
+    exits: [{ id: 'e1', qty: 10, price: 110, date: '2026-01-05' }]
+  });
+  const partial = trade({
+    id: 'partial-same-day',
+    date: '2026-01-05',
+    qty: 10,
+    exits: [{ id: 'e2', qty: 4, price: 110, date: '2026-01-05' }]
+  });
+  const later = trade({
+    id: 'later',
+    date: '2026-01-05',
+    qty: 10,
+    exits: [{ id: 'e3', qty: 10, price: 120, date: '2026-01-06' }]
+  });
+
+  const sameDay = store.dayEventPnlMap([closed, partial, later], '2026-01-05');
+  assert.equal(sameDay.get('same-day'), 100);
+  assert.equal(sameDay.get('partial-same-day'), 40);
+  assert.equal(sameDay.has('later'), false);
+
+  const nextDay = store.dayEventPnlMap([closed, partial, later], '2026-01-06');
+  assert.equal(nextDay.has('same-day'), false);
+  assert.equal(nextDay.get('later'), 200);
+});
+
 test('an exit without a date falls back to the trade entry date', function () {
   const normalized = trade({
     date: '2026-01-05',
