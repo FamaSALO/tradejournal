@@ -2173,6 +2173,10 @@
 
   async function checkDesktopUpdate(manual) {
     if (!desktop || typeof desktop.checkUpdate !== 'function' || desktopUpdate.checking || desktopUpdate.installing) return;
+    if (desktop.platform === 'darwin') {
+      setDesktopUpdateStatus('Для macOS обновления устанавливаются вручную: скачайте новый DMG со страницы релизов.');
+      return;
+    }
     desktopUpdate.checking = true;
     const button = $('#checkUpdateBtn');
     if (button) {
@@ -2270,6 +2274,11 @@
         $('#desktopDataPath').title = path;
       }
       if (info && info.version) setDesktopVersionLabel(info.version);
+      const badge = document.querySelector('.desktop-badge');
+      if (badge && info && info.platform) {
+        const labels = { windows: 'Windows', macos: 'macOS', linux: 'Linux' };
+        badge.textContent = labels[info.platform] || 'Desktop';
+      }
     } catch (err) {
       $('#desktopDataPath').textContent = 'Не удалось получить путь к данным';
     }

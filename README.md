@@ -6,9 +6,10 @@ English | [Русский](README.ru.md)
 
 > **AI-assisted development.** The code, tests, and documentation are created with extensive AI assistance and reviewed by the maintainer. [Details](#ai-assisted-development).
 
-A local-first trading journal in two editions:
+A local-first trading journal in three editions:
 
 - **Windows app** — a lightweight installer built with Tauri 2 and Rust, with the same interface and file-based data storage.
+- **macOS app** — a universal Apple Silicon and Intel build in DMG format with the same interface and file-based data storage.
 - **Web version** — a static page with no server that can be opened in a browser or published on GitHub Pages.
 
 > The app interface is available in Russian and English; Russian is the default. This README is available in both languages.
@@ -108,6 +109,7 @@ The screenshots use generated demo data; no real journal is shown.
 
 - **No flicker when switching sections** — the entrance animation is gone: it flashed the whole screen on every switch and could leave content transparent until the first frame.
 - **No shimmer while scrolling** — the sticky header and the mobile menu backdrop no longer blur the page: in WebView2 that forced a full-page repaint on every scroll. Section changes now jump to the top instantly.
+- **macOS build** — a universal DMG for Apple Silicon and Intel. Data is stored in `~/Library/Application Support/TradeJournal`, and updates are installed manually for now.
 
 ## What's new in 2.5.0
 
@@ -243,6 +245,66 @@ Until the draft is published with **Publish**, the links in `latest.json` are no
 
 Before publishing, follow the [manual release checklist](docs/RELEASE-CHECKLIST.md) (in Russian).
 
+## macOS app
+
+Version 2.5.1 is built as a universal app for Apple Silicon (arm64) and Intel (x86_64). The minimum system version is macOS 10.15 Catalina.
+
+### Installation
+
+The `TradeJournal-macos-<sha>` CI artifact contains:
+
+- `TradeJournal_2.5.1_universal.dmg` — the app image;
+- `SHA256SUMS.txt` — the DMG checksum.
+
+1. Open the DMG and drag `TradeJournal.app` into the **Applications** folder.
+2. Launch the app. The build is not signed with an Apple certificate and is not notarized, so Gatekeeper may show "Apple cannot check it for malicious software".
+3. Open **System Settings → Privacy & Security**, scroll down, and click **Open Anyway** next to TradeJournal, then confirm the launch.
+
+If the button is missing or the app still does not start, remove the quarantine flag in Terminal:
+
+```bash
+xattr -cr /Applications/TradeJournal.app
+open /Applications/TradeJournal.app
+```
+
+### Where data is stored
+
+The macOS app uses the same file storage as the Windows version:
+
+```text
+~/Library/Application Support/TradeJournal/
+├── journal.json            main journal file
+├── journal.previous.json   previous version of the file
+├── screenshots/            trade screenshot files
+└── backups/                backups
+```
+
+The path and the **Open data folder**, **Create backup**, and **Restore** buttons are available in **Settings → App and local files**. Uninstalling the app does not delete the journal, screenshots, or backups. The entire `TradeJournal` folder can be copied to move the journal to another Mac.
+
+### Updates
+
+Automatic updates are available in the Windows version only. On macOS, a new version is installed manually: download the new DMG from the releases page, replace the app in **Applications**, and confirm the launch in **Privacy & Security** again if needed. The journal and settings are preserved.
+
+### Building the universal DMG
+
+The build runs in the **Build macOS app** GitHub Actions workflow (`.github/workflows/macos.yml`) on `macos-15`:
+
+```bash
+gh workflow run macos.yml --ref main
+```
+
+When it finishes, download the `TradeJournal-macos-<sha>` artifact — it contains `TradeJournal_2.5.1_universal.dmg` and `SHA256SUMS.txt`.
+
+Locally on a Mac:
+
+```bash
+rustup target add aarch64-apple-darwin x86_64-apple-darwin
+npm install
+npm run tauri build -- --target universal-apple-darwin --bundles dmg
+```
+
+The finished DMG appears in `src-tauri/target/universal-apple-darwin/release/bundle/dmg/`.
+
 ## Web version
 
 1. Download the project folder.
@@ -291,8 +353,9 @@ sw.js                       Service worker with versioned cache
 assets/icons/               PWA 192/512, maskable, and apple-touch-icon icons
 assets/og-image.png         Open Graph and Twitter cover
 src-tauri/src/lib.rs        Rust commands, file storage, backups, and updates
-src-tauri/src/main.rs       Windows app entry point
+src-tauri/src/main.rs       Desktop app entry point
 src-tauri/tauri.conf.json   Window, CSP, NSIS, WebView2, and auto-update
+src-tauri/tauri.macos.conf.json  macOS build: DMG, icon.icns, minimum version
 src-tauri/Cargo.toml        Rust dependencies and release optimization
 src-tauri/capabilities/     Tauri permissions
 scripts/build-web.mjs       Prepare dist/ for Tauri
@@ -300,6 +363,7 @@ scripts/check-versions.mjs  Check version consistency across files
 tests/                      node:test for storage, CSV, ZIP, PWA, and metadata
 .github/workflows/web.yml   CI: linter, tests, and web build
 .github/workflows/tauri.yml CI: checks, tests, build, and latest.json
+.github/workflows/macos.yml CI: universal macOS DMG build
 build/icon.ico              App icon
 assets/preview.png          README preview
 ```
@@ -311,7 +375,7 @@ assets/preview.png          README preview
 3. Under **Build and deployment**, select **Deploy from a branch**, the `main` branch, and the `/ (root)` folder.
 4. Save the settings — the site will be available at `https://<username>.github.io/<repository>/`.
 
-Windows build files are not published to GitHub Pages and are not committed to the repository.
+Desktop build files for Windows and macOS are not published to GitHub Pages and are not committed to the repository.
 
 ## AI-assisted development
 

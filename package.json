@@ -2,7 +2,7 @@
   "name": "tradejournal",
   "version": "2.5.1",
   "private": true,
-  "description": "TradeJournal — локальный дневник трейдера для Windows",
+  "description": "TradeJournal — локальный дневник трейдера для Windows и macOS",
   "author": "FamaSALO",
   "license": "MIT",
   "scripts": {
