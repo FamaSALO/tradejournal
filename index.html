@@ -267,14 +267,14 @@
             <table class="data-table" id="tradesTable">
               <thead>
                 <tr>
-                  <th data-sort="date">Дата</th>
-                  <th data-sort="session">Сессия</th>
-                  <th data-sort="symbol">Инструмент</th>
-                  <th class="num" data-sort="entry">Вход</th>
-                  <th class="num" data-sort="exit">Выход</th>
-                  <th class="num" data-sort="pnl">P&L</th>
-                  <th class="num" data-sort="r">R</th>
-                  <th data-sort="setup">Сетап</th>
+                  <th tabindex="0" role="button" aria-sort="none" data-sort="date">Дата</th>
+                  <th tabindex="0" role="button" aria-sort="none" data-sort="session">Сессия</th>
+                  <th tabindex="0" role="button" aria-sort="none" data-sort="symbol">Инструмент</th>
+                  <th class="num" tabindex="0" role="button" aria-sort="none" data-sort="entry">Вход</th>
+                  <th class="num" tabindex="0" role="button" aria-sort="none" data-sort="exit">Выход</th>
+                  <th class="num" tabindex="0" role="button" aria-sort="none" data-sort="pnl">P&L</th>
+                  <th class="num" tabindex="0" role="button" aria-sort="none" data-sort="r">R</th>
+                  <th tabindex="0" role="button" aria-sort="none" data-sort="setup">Сетап</th>
                   <th>Эмоция</th>
                   <th class="th-end"></th>
                 </tr>
@@ -498,7 +498,7 @@
                 <div class="profile-avatar-wrap">
                   <div class="profile-avatar" id="profileAvatarPreview"><span>TJ</span></div>
                   <div class="profile-avatar-actions">
-                    <label class="btn btn-ghost btn-sm" for="profileAvatarInput">Загрузить фото</label>
+                    <button type="button" class="btn btn-ghost btn-sm" id="uploadAvatarBtn">Загрузить фото</button>
                     <input type="file" id="profileAvatarInput" accept="image/*" hidden>
                     <button type="button" class="btn btn-ghost btn-sm" id="removeAvatarBtn">Удалить</button>
                   </div>
@@ -912,7 +912,7 @@
             <span>Скриншот графика</span>
             <div class="shot-actions">
               <button type="button" class="btn btn-ghost btn-sm" id="pasteShot">Вставить</button>
-              <label class="btn btn-ghost btn-sm" for="tradeShot">Загрузить</label>
+              <button type="button" class="btn btn-ghost btn-sm" id="uploadShotBtn">Загрузить</button>
               <button type="button" class="link-btn hidden" id="removeShot">Удалить</button>
             </div>
           </div>

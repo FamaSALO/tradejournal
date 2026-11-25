@@ -204,3 +204,94 @@ test('calcUpdate validates negative risk, non-positive entry, same-side target a
   assert.equal(els['#calcError'].hidden, false);
   assert.equal(els['#calcQtyValue'].textContent, '—');
 });
+
+test('openModal/closeModal preserves nested focus stack and traps Tab inside top modal', function () {
+  const triggerBtn = {
+    id: 'newTradeBtn',
+    focused: false,
+    focus: function () { this.focused = true; doc.activeElement = this; },
+    closest: function () { return null; }
+  };
+  const saveBtn = {
+    id: 'saveTradeBtn',
+    focused: false,
+    focus: function () { this.focused = true; doc.activeElement = this; },
+    closest: function () { return null; }
+  };
+  const cancelBtn = {
+    id: 'confirmCancel',
+    focused: false,
+    focus: function () { this.focused = true; doc.activeElement = this; },
+    closest: function () { return null; }
+  };
+  const okBtn = {
+    id: 'confirmOk',
+    focused: false,
+    focus: function () { this.focused = true; doc.activeElement = this; },
+    closest: function () { return null; }
+  };
+  const confirmPanel = {
+    querySelectorAll: function () { return [cancelBtn, okBtn]; },
+    contains: function (el) { return el === cancelBtn || el === okBtn; }
+  };
+  const tradePanel = {
+    querySelectorAll: function () { return [saveBtn]; },
+    contains: function (el) { return el === saveBtn; }
+  };
+  const tradeModal = {
+    id: 'tradeModal',
+    hidden: true,
+    querySelector: function (sel) { return sel === '.modal-panel' ? tradePanel : null; }
+  };
+  const confirmModal = {
+    id: 'confirmModal',
+    hidden: true,
+    querySelector: function (sel) { return sel === '.modal-panel' ? confirmPanel : null; }
+  };
+
+  const doc = fakeDocument();
+  doc.readyState = 'loading';
+  doc.body = { classList: { toggle: function () {} } };
+  doc.activeElement = triggerBtn;
+  doc.contains = function () { return true; };
+  doc.getElementById = function (id) {
+    if (id === 'tradeModal') return tradeModal;
+    if (id === 'confirmModal') return confirmModal;
+    return null;
+  };
+  doc.querySelectorAll = function (sel) {
+    if (sel === '.modal') return [tradeModal, confirmModal];
+    return [];
+  };
+  const origQuery = doc.querySelector;
+  doc.querySelector = function (sel, root) {
+    if (sel === '.modal-panel' && root) return root.querySelector('.modal-panel');
+    return origQuery.call(doc, sel);
+  };
+
+  const { TJ } = loadTradeJournal(['js/app.js'], { globals: { document: doc } });
+
+  TJ.app.openModal('tradeModal');
+  saveBtn.focus();
+  TJ.app.openModal('confirmModal');
+  okBtn.focus();
+
+  let prevented = false;
+  TJ.app.handleKeydown({
+    key: 'Tab',
+    shiftKey: false,
+    ctrlKey: false,
+    metaKey: false,
+    altKey: false,
+    target: okBtn,
+    preventDefault: function () { prevented = true; }
+  });
+  assert.equal(prevented, true);
+  assert.equal(doc.activeElement, cancelBtn);
+
+  TJ.app.closeModal('confirmModal');
+  assert.equal(doc.activeElement, saveBtn);
+
+  TJ.app.closeModal('tradeModal');
+  assert.equal(doc.activeElement, triggerBtn);
+});

@@ -67,7 +67,7 @@
     profileAvatarDraft: '',
     accountModalMode: 'create',
     confirmResolver: null,
-    lastFocus: null,
+    focusStack: [],
     storageHealthData: null,
     storageHealthScanning: false,
     storageHealthCleaning: false,
@@ -862,7 +862,7 @@
       const statusLabel = status === 'closed'
         ? (r !== null ? U.rfmt(r, { sign: true }) : '—')
         : (status === 'partial' ? 'частично · остаток ' + U.qty(store.remainingQty(trade)) : 'без выхода');
-      return '<div class="mini-row" data-open-trade="' + U.escapeHtml(trade.id) + '" tabindex="0">' +
+      return '<div class="mini-row" role="button" data-open-trade="' + U.escapeHtml(trade.id) + '" tabindex="0">' +
         '<div class="mini-icon ' + trade.side + '" data-i18n-skip>' + U.escapeHtml(trade.symbol.slice(0, 2)) + '</div>' +
         '<div class="mini-main"><strong data-i18n-skip>' + U.escapeHtml(trade.symbol) + '</strong><span>' +
         U.escapeHtml(U.formatDate(trade.date, 'med')) + (trade.time ? ' · ' + U.escapeHtml(trade.time) : '') +
@@ -1107,8 +1107,13 @@
     const hasAny = store.state.trades.length > 0;
 
     $$('#tradesTable th[data-sort]').forEach(function (th) {
-      if (th.dataset.sort === state.sort.key) th.dataset.dir = state.sort.dir;
-      else th.removeAttribute('data-dir');
+      if (th.dataset.sort === state.sort.key) {
+        th.dataset.dir = state.sort.dir;
+        th.setAttribute('aria-sort', state.sort.dir === 'asc' ? 'ascending' : 'descending');
+      } else {
+        th.removeAttribute('data-dir');
+        th.setAttribute('aria-sort', 'none');
+      }
     });
 
     if (!list.length) {
@@ -1299,7 +1304,7 @@
         const status = store.tradeStatus(trade);
         const hasEvent = dayEventPnl.has(trade.id);
         const pnl = hasEvent ? dayEventPnl.get(trade.id) : null;
-        return '<div class="day-trade" data-open-trade="' + U.escapeHtml(trade.id) + '" tabindex="0">' +
+        return '<div class="day-trade" role="button" data-open-trade="' + U.escapeHtml(trade.id) + '" tabindex="0">' +
           '<span class="day-trade-symbol" data-i18n-skip>' + U.escapeHtml(trade.symbol) +
           ' <span class="day-trade-side">' + (trade.side === 'long' ? 'long' : 'short') + '</span>' +
           (status === 'partial' ? ' <span class="partial-badge">' + T('частично') + '</span>' : '') + '</span>' +
@@ -4499,15 +4504,66 @@
     document.body.classList.toggle('modal-open', anyModalOpen());
   }
 
+  function focusableElements(container) {
+    if (!container || typeof container.querySelectorAll !== 'function') return [];
+    const selector = 'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+    return Array.prototype.slice.call(container.querySelectorAll(selector)).filter(function (el) {
+      if (typeof el.closest === 'function' && (el.closest('[hidden]') || el.closest('.hidden'))) return false;
+      if (typeof window.getComputedStyle === 'function') {
+        const style = window.getComputedStyle(el);
+        if (style && (style.display === 'none' || style.visibility === 'hidden')) return false;
+      }
+      return true;
+    });
+  }
+
+  function trapFocusInContainer(event, container) {
+    if (!container) return;
+    const items = focusableElements(container);
+    if (!items.length) {
+      event.preventDefault();
+      return;
+    }
+    const first = items[0];
+    const last = items[items.length - 1];
+    const active = document.activeElement;
+    if (event.shiftKey) {
+      if (active === first || (typeof container.contains === 'function' && !container.contains(active))) {
+        event.preventDefault();
+        last.focus();
+      }
+    } else if (active === last || (typeof container.contains === 'function' && !container.contains(active))) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
+
+  function topOpenModal() {
+    for (let i = state.focusStack.length - 1; i >= 0; i--) {
+      const candidate = document.getElementById(state.focusStack[i].id);
+      if (candidate && !candidate.hidden) return candidate;
+    }
+    const open = $$('.modal').filter(function (modal) { return !modal.hidden; });
+    return open.length ? open[open.length - 1] : null;
+  }
+
   function openModal(id, focusSelector) {
     const modal = document.getElementById(id);
     if (!modal) return;
-    state.lastFocus = document.activeElement;
+    if (modal.hidden) {
+      state.focusStack.push({ id: id, trigger: document.activeElement });
+    }
     modal.hidden = false;
     syncModalClass();
     setTimeout(function () {
+      if (modal.hidden) return;
       const target = focusSelector ? $(focusSelector, modal) : null;
-      if (target) target.focus();
+      if (target) {
+        target.focus();
+      } else {
+        const items = focusableElements((typeof modal.querySelector === 'function' && modal.querySelector('.modal-panel')) || modal);
+        if (items.length) items[0].focus();
+      }
     }, 40);
   }
 
@@ -4521,8 +4577,18 @@
       resolve(false);
     }
     syncModalClass();
-    if (state.lastFocus && document.contains(state.lastFocus) && !anyModalOpen()) {
-      try { state.lastFocus.focus(); } catch (err) { /* ignore */ }
+    let entry = null;
+    for (let i = state.focusStack.length - 1; i >= 0; i--) {
+      if (state.focusStack[i].id === id) {
+        entry = state.focusStack.splice(i, 1)[0];
+        break;
+      }
+    }
+    const trigger = entry && entry.trigger;
+    const isHiddenModal = trigger && typeof trigger.closest === 'function' && trigger.closest('.modal[hidden]');
+    const inDoc = trigger && (typeof document.contains !== 'function' || document.contains(trigger));
+    if (trigger && trigger !== document.body && inDoc && !isHiddenModal) {
+      try { trigger.focus(); } catch (err) { /* ignore */ }
     }
   }
 
@@ -4539,8 +4605,7 @@
       $('#confirmText').textContent = options.textReady ? (options.text || '') : T(options.text || '');
       $('#confirmOk').textContent = T(options.okLabel || 'Подтвердить');
       $('#confirmOk').className = 'btn ' + (options.danger === false ? 'btn-primary' : 'btn-danger');
-      openModal('confirmModal');
-      setTimeout(function () { $('#confirmCancel').focus(); }, 40);
+      openModal('confirmModal', '#confirmCancel');
     });
   }
 
@@ -4630,14 +4695,24 @@
     $('#filterResult').addEventListener('change', function (event) { state.filters.result = event.target.value; state.page = 1; renderTrades(); });
     $('#filterSetup').addEventListener('change', function (event) { state.filters.setup = event.target.value; state.page = 1; renderTrades(); });
     $('#clearFilters').addEventListener('click', resetFilters);
-    $('#tradesTable').querySelector('thead').addEventListener('click', function (event) {
-      const th = event.target.closest('th[data-sort]');
+    const tradesHead = $('#tradesTable').querySelector('thead');
+    function toggleTradeSort(th) {
       if (!th) return;
       const key = th.dataset.sort;
       if (state.sort.key === key) state.sort.dir = state.sort.dir === 'desc' ? 'asc' : 'desc';
       else { state.sort.key = key; state.sort.dir = 'desc'; }
       state.page = 1;
       renderTrades();
+    }
+    tradesHead.addEventListener('click', function (event) {
+      toggleTradeSort(event.target.closest('th[data-sort]'));
+    });
+    tradesHead.addEventListener('keydown', function (event) {
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      const th = event.target.closest('th[data-sort]');
+      if (!th) return;
+      event.preventDefault();
+      toggleTradeSort(th);
     });
     $('#tradesFooter').addEventListener('click', function (event) {
       const button = event.target.closest('button[data-page]');
@@ -4647,6 +4722,7 @@
     });
     $('#tradesTbody').addEventListener('keydown', function (event) {
       if (event.key !== 'Enter' && event.key !== ' ') return;
+      if (event.target.closest('button, a, input, select, textarea, [data-open-shot]')) return;
       const row = event.target.closest('tr[data-open-trade]');
       if (row) { event.preventDefault(); openTradeModal(row.dataset.openTrade); }
     });
@@ -4753,6 +4829,9 @@
     $('#profileName').addEventListener('input', function () {
       if (!state.profileAvatarDraft) renderProfileAvatar();
     });
+    $('#uploadAvatarBtn').addEventListener('click', function () {
+      $('#profileAvatarInput').click();
+    });
     $('#profileAvatarInput').addEventListener('change', function (event) {
       const file = event.target.files && event.target.files[0];
       compressAvatar(file);
@@ -4818,6 +4897,9 @@
       const current = Number($('#tradeDiscipline').value) || 0;
       setDiscipline(current === value ? 0 : value);
       syncTradeDirty();
+    });
+    $('#uploadShotBtn').addEventListener('click', function () {
+      $('#tradeShot').click();
     });
     $('#tradeShot').addEventListener('change', function (event) {
       const file = event.target.files && event.target.files[0];
@@ -4952,9 +5034,21 @@
     const key = event.key;
     const withModifier = event.ctrlKey || event.metaKey;
     const open = $$('.modal').filter(function (modal) { return !modal.hidden; });
-    const topModal = open.length ? open[open.length - 1].id : '';
+    const topEl = topOpenModal();
+    const topModal = topEl ? topEl.id : '';
     const lightbox = $('#shotLightbox');
     const lightboxOpen = !!(lightbox && !lightbox.hidden);
+
+    if (key === 'Tab' && !withModifier && !event.altKey) {
+      if (lightboxOpen) {
+        trapFocusInContainer(event, $('.shot-lightbox-panel', lightbox) || lightbox);
+        return;
+      }
+      if (topEl) {
+        trapFocusInContainer(event, $('.modal-panel', topEl) || topEl);
+        return;
+      }
+    }
 
     if (!lightboxOpen && topModal === 'tradeModal' && withModifier
       && (key === 'Enter' || key.toLowerCase() === 's')) {
@@ -5026,7 +5120,10 @@
     renderDiscipline: renderDiscipline,
     getFilteredTrades: getFilteredTrades,
     collectExitRows: collectExitRows,
-    calcUpdate: calcUpdate
+    calcUpdate: calcUpdate,
+    openModal: openModal,
+    closeModal: closeModal,
+    handleKeydown: handleKeydown
   };
 
   if (document.readyState === 'loading') {
