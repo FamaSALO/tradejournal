@@ -1204,9 +1204,11 @@
     const stop = U.parseNum(trade.stop);
     const target = U.parseNum(trade.target);
     if (entry === null || stop === null || target === null) return null;
-    const risk = Math.abs(entry - stop);
-    if (risk <= 0) return null;
-    return Math.abs(target - entry) / risk;
+    const dir = trade.side === 'short' ? -1 : 1;
+    const risk = (entry - stop) * dir;
+    const reward = (target - entry) * dir;
+    if (risk <= 0 || reward <= 0) return null;
+    return reward / risk;
   }
 
   function sortKey(trade) {

@@ -657,3 +657,11 @@ test('breakeven-sized trades contribute exact PnL to metrics.net, balanceAll and
   assert.ok(Math.abs(gbpusd.grossLoss - (-0.003)) < 1e-12);
   assert.equal(gbpusd.profitFactor, 0);
 });
+
+test('plannedRR checks trade direction for target and initial stop (FIN-04)', function () {
+  assert.equal(store.plannedRR({ side: 'long', entry: 100, stop: 95, target: 115 }), 3);
+  assert.equal(store.plannedRR({ side: 'short', entry: 100, stop: 105, target: 85 }), 3);
+  assert.equal(store.plannedRR({ side: 'long', entry: 100, stop: 95, target: 90 }), null);
+  assert.equal(store.plannedRR({ side: 'short', entry: 100, stop: 105, target: 110 }), null);
+  assert.equal(store.plannedRR({ side: 'long', entry: 100, stop: 105, target: 115 }), null);
+});

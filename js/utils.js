@@ -397,9 +397,10 @@
     if (num === null) return '—';
     const abs = Math.abs(num);
     let digits = 2;
-    if (abs > 0 && abs < 1) digits = 6;
-    else if (abs < 10) digits = 4;
-    else if (abs < 1000) digits = 2;
+    if (abs === 0) digits = 2;
+    else if (abs < 0.01) digits = 8;
+    else if (abs < 1) digits = 6;
+    else if (abs < 10) digits = 5;
     const rounded = Number(num.toFixed(digits));
     return new Intl.NumberFormat(locale(), { minimumFractionDigits: 2, maximumFractionDigits: digits }).format(rounded);
   }
@@ -407,7 +408,9 @@
   function qty(value) {
     const num = parseNum(value);
     if (num === null) return '—';
-    return new Intl.NumberFormat(locale(), { maximumFractionDigits: 4 }).format(num);
+    const abs = Math.abs(num);
+    const maxDigits = abs > 0 && abs < 1 ? 8 : 4;
+    return new Intl.NumberFormat(locale(), { maximumFractionDigits: maxDigits }).format(num);
   }
 
   function pad(n) { return n < 10 ? '0' + n : String(n); }
