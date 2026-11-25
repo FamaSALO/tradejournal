@@ -526,3 +526,24 @@ test('store caches dayPnlMap/balanceAll, fillTimezoneOptions caches HTML, and 10
   assert.equal(sorted.length, 10000);
   assert.ok(elapsedMs < 1500, '10k trade sort took too long: ' + elapsedMs + 'ms');
 });
+
+test('desktop-bridge syncs platform from data_info with UA fallback (UX-02)', async function () {
+  const doc = fakeDocument();
+  const { sandbox } = loadTradeJournal(['js/desktop-bridge.js'], {
+    globals: {
+      document: doc,
+      navigator: { userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
+      __TAURI__: {
+        core: {
+          invoke: async function (cmd) {
+            if (cmd === 'data_info') return { platform: 'macos', dataDir: '/tmp/tj', version: '2.5.2' };
+            return {};
+          }
+        }
+      }
+    }
+  });
+  assert.equal(sandbox.tradeJournalDesktop.platform, 'win32');
+  await sandbox.tradeJournalDesktop.getDataInfo();
+  assert.equal(sandbox.tradeJournalDesktop.platform, 'darwin');
+});

@@ -6,8 +6,14 @@
 
   const invoke = tauri.invoke;
   const userAgent = typeof navigator !== 'undefined' ? navigator.userAgent : '';
-  const platform = /Mac/i.test(userAgent) ? 'darwin' : /Win/i.test(userAgent) ? 'win32' : 'linux';
+  let platform = /Mac/i.test(userAgent) ? 'darwin' : /Win/i.test(userAgent) ? 'win32' : 'linux';
   let saveChain = Promise.resolve();
+
+  function syncPlatform(rawPlatform) {
+    if (rawPlatform === 'macos' || rawPlatform === 'darwin') platform = 'darwin';
+    else if (rawPlatform === 'windows' || rawPlatform === 'win32') platform = 'win32';
+    else if (rawPlatform === 'linux') platform = 'linux';
+  }
 
   function tr(text) {
     const i18n = window.TJ && window.TJ.i18n;
@@ -71,7 +77,7 @@
 
   window.tradeJournalDesktop = {
     isDesktop: true,
-    platform: platform,
+    get platform() { return platform; },
     translateMessage: translateDesktopMessage,
 
     hasData: function () {
@@ -139,7 +145,10 @@
     },
 
     getDataInfo: function () {
-      return call('data_info');
+      return call('data_info').then(function (info) {
+        if (info && info.platform) syncPlatform(info.platform);
+        return info;
+      });
     },
 
     storageHealth: function () {

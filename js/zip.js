@@ -174,7 +174,10 @@
   function findEocd(view, length) {
     var min = Math.max(0, length - 22 - 0xFFFF);
     for (var i = length - 22; i >= min; i--) {
-      if (view.getUint32(i, true) === 0x06054b50) return i;
+      if (view.getUint32(i, true) === 0x06054b50) {
+        var commentLen = view.getUint16(i + 20, true);
+        if (i + 22 + commentLen === length) return i;
+      }
     }
     return -1;
   }
@@ -401,11 +404,19 @@
       }
     }
     if (!journal) {
+      for (var j = 0; j < entries.length; j++) {
+        if (/^[^/]+\/journal\.json$/i.test(entries[j].name)) {
+          journal = entries[j];
+          break;
+        }
+      }
+    }
+    if (!journal) {
       throw new Error(tr('В архиве не найден journal.json.'));
     }
     var text;
     try {
-      text = new TextDecoder('utf-8').decode(journal.data);
+      text = new TextDecoder('utf-8').decode(journal.data).replace(/^\uFEFF/, '');
     } catch (err) {
       throw new Error(tr('Не удалось прочитать journal.json из архива.'), { cause: err });
     }

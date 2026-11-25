@@ -2789,9 +2789,17 @@
         const ctx = canvas.getContext('2d');
         const sx = Math.max(0, (image.width - side) / 2);
         const sy = Math.max(0, (image.height - side) / 2);
+        const keepAlpha = /^image\/(png|webp|gif|svg\+xml)$/i.test(file.type);
+        const mime = keepAlpha ? (supportsWebpEncoding() ? 'image/webp' : 'image/png') : 'image/jpeg';
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+        if (!keepAlpha) {
+          ctx.fillStyle = cssVar('--panel', '#101822');
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+        }
         ctx.drawImage(image, sx, sy, side, side, 0, 0, canvas.width, canvas.height);
         try {
-          state.profileAvatarDraft = canvas.toDataURL('image/jpeg', 0.84);
+          state.profileAvatarDraft = mime === 'image/png' ? canvas.toDataURL(mime) : canvas.toDataURL(mime, 0.84);
           renderProfileAvatar();
           toast('Аватар обновлён — нажмите «Сохранить профиль»');
         } catch (err) {
@@ -3329,7 +3337,7 @@
     reader.onload = function () {
       let data;
       try {
-        data = JSON.parse(String(reader.result || ''));
+        data = JSON.parse(String(reader.result || '').replace(/^\uFEFF/, ''));
       } catch (err) {
         toast('Не удалось прочитать файл: это не корректный JSON.', 'error');
         return;
@@ -4099,11 +4107,16 @@
     }
   }
 
-  async function applyScreenshot(dataUrl) {
-    if (state.screenshotBusy) return;
-    state.screenshotBusy = true;
+  function setScreenshotBusy(busy) {
+    state.screenshotBusy = !!busy;
     const saveButton = $('#saveTradeBtn');
-    if (saveButton) saveButton.disabled = true;
+    if (saveButton && !state.tradeSaving) saveButton.disabled = state.screenshotBusy;
+  }
+
+  async function applyScreenshot(dataUrl, options) {
+    const busyHeld = !!(options && options.busyHeld);
+    if (!busyHeld && state.screenshotBusy) return;
+    setScreenshotBusy(true);
     try {
       state.screenshot = await store.saveScreenshot(dataUrl);
       renderShotPreview();
@@ -4112,8 +4125,7 @@
     } catch (err) {
       toast(err && err.message ? err.message : 'Не удалось сохранить скриншот.', 'error');
     } finally {
-      state.screenshotBusy = false;
-      if (saveButton && !state.tradeSaving) saveButton.disabled = false;
+      setScreenshotBusy(false);
     }
   }
 
@@ -4158,6 +4170,7 @@
       toast('Можно прикрепить только изображение.', 'error');
       return;
     }
+    setScreenshotBusy(true);
     const reader = new FileReader();
     reader.onload = function () {
       const image = new Image();
@@ -4171,16 +4184,26 @@
         ctx.imageSmoothingEnabled = true;
         ctx.imageSmoothingQuality = 'high';
         ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+        let dataUrl;
         try {
-          applyScreenshot(encodeScreenshot(canvas));
+          dataUrl = encodeScreenshot(canvas);
         } catch (err) {
+          setScreenshotBusy(false);
           toast('Не удалось обработать изображение.', 'error');
+          return;
         }
+        applyScreenshot(dataUrl, { busyHeld: true });
       };
-      image.onerror = function () { toast('Не удалось открыть изображение.', 'error'); };
+      image.onerror = function () {
+        setScreenshotBusy(false);
+        toast('Не удалось открыть изображение.', 'error');
+      };
       image.src = String(reader.result);
     };
-    reader.onerror = function () { toast('Не удалось прочитать файл.', 'error'); };
+    reader.onerror = function () {
+      setScreenshotBusy(false);
+      toast('Не удалось прочитать файл.', 'error');
+    };
     reader.readAsDataURL(file);
   }
 

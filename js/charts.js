@@ -70,14 +70,33 @@
   function bindHover(canvas) {
     if (canvas._tjBound) return;
     canvas._tjBound = true;
-    canvas.addEventListener('mousemove', function (event) {
+    const move = function (clientX, clientY) {
       if (!canvas._tjMove) return;
       const rect = canvas.getBoundingClientRect();
-      canvas._tjMove(event.clientX - rect.left, event.clientY - rect.top);
-    });
-    canvas.addEventListener('mouseleave', function () {
+      canvas._tjMove(clientX - rect.left, clientY - rect.top);
+    };
+    const leave = function () {
       if (canvas._tjLeave) canvas._tjLeave();
-    });
+    };
+    if (typeof window !== 'undefined' && 'PointerEvent' in window) {
+      canvas.addEventListener('pointerdown', function (event) { move(event.clientX, event.clientY); }, { passive: true });
+      canvas.addEventListener('pointermove', function (event) { move(event.clientX, event.clientY); }, { passive: true });
+      canvas.addEventListener('pointerleave', leave);
+      canvas.addEventListener('pointercancel', leave);
+    } else {
+      canvas.addEventListener('mousemove', function (event) { move(event.clientX, event.clientY); });
+      canvas.addEventListener('mouseleave', leave);
+      canvas.addEventListener('touchstart', function (event) {
+        const touch = event.touches && event.touches[0];
+        if (touch) move(touch.clientX, touch.clientY);
+      }, { passive: true });
+      canvas.addEventListener('touchmove', function (event) {
+        const touch = event.touches && event.touches[0];
+        if (touch) move(touch.clientX, touch.clientY);
+      }, { passive: true });
+      canvas.addEventListener('touchend', leave);
+      canvas.addEventListener('touchcancel', leave);
+    }
   }
 
   function tooltipFor(canvas) {
@@ -365,8 +384,8 @@
     let min = Math.min.apply(null, values.concat([0]));
     let max = Math.max.apply(null, values.concat([0]));
     if (min === max) {
-      drawEmpty(canvas, opts.emptyText || 'Нет данных');
-      return;
+      min = -10;
+      max = 10;
     }
     const step = niceStep((max - min) / 5);
     min = Math.floor(min / step) * step;
@@ -414,14 +433,17 @@
       points.forEach(function (point, index) {
         const value = point.value;
         const x = pad.l + slot * index + (slot - barWidth) / 2;
+        if (Math.abs(value) < 0.0001) {
+          ctx.fillStyle = MUTED;
+          ctx.fillRect(x, zeroY - 1.5, barWidth, 3);
+          return;
+        }
         const barH = Math.max(2, Math.abs(value) / (max - min) * plotH);
         const positive = value >= 0;
         const y = positive ? zeroY - barH : zeroY;
 
         let fill;
-        if (Math.abs(value) < 0.0001) {
-          fill = AXIS;
-        } else if (positive) {
+        if (positive) {
           const gradient = ctx.createLinearGradient(0, y, 0, zeroY);
           gradient.addColorStop(0, hoverIndex === index ? POS : hexToRgba(POS, 0.78));
           gradient.addColorStop(1, hexToRgba(POS, 0.35));
@@ -479,6 +501,46 @@
   };
 
   /* ============================ Donut ============================ */
+  function computeDonutArcs(segments) {
+    const active = (segments || []).filter(function (s) { return s && s.value > 0; });
+    if (!active.length) return [];
+    if (active.length === 1) {
+      return [{ start: -Math.PI / 2, end: -Math.PI / 2 + Math.PI * 2, color: active[0].color, full: true }];
+    }
+    const fullCircle = Math.PI * 2;
+    const total = active.reduce(function (acc, s) { return acc + s.value; }, 0);
+    const minSweep = Math.min(0.055, fullCircle / (active.length * 4));
+    const gap = Math.min(0.04, minSweep * 0.45);
+    const sweeps = active.map(function (s) { return (s.value / total) * fullCircle; });
+    let deficit = 0;
+    let excess = 0;
+    sweeps.forEach(function (sw, i) {
+      if (sw < minSweep) {
+        deficit += minSweep - sw;
+        sweeps[i] = minSweep;
+      } else {
+        excess += sw - minSweep;
+      }
+    });
+    if (deficit > 0 && excess > 0) {
+      sweeps.forEach(function (sw, i) {
+        if (sw > minSweep) sweeps[i] = sw - ((sw - minSweep) / excess) * deficit;
+      });
+    }
+    let angle = -Math.PI / 2;
+    return active.map(function (segment, i) {
+      const sweep = sweeps[i];
+      const arc = {
+        start: angle + gap / 2,
+        end: angle + sweep - gap / 2,
+        color: segment.color,
+        full: false
+      };
+      angle += sweep;
+      return arc;
+    });
+  }
+
   charts.donut = function (canvas, segments) {
     if (!canvas) return;
     const env = prepare(canvas);
@@ -490,32 +552,24 @@
     const cy = h / 2;
     const radius = Math.max(10, Math.min(w, h) / 2 - 13);
     const lineWidth = Math.max(10, Math.min(20, radius * 0.3));
-    const total = segments.reduce(function (acc, s) { return acc + Math.max(0, s.value); }, 0);
 
     const drawRing = function (start, end, color) {
       ctx.beginPath();
       ctx.arc(cx, cy, radius, start, end);
       ctx.strokeStyle = color;
       ctx.lineWidth = lineWidth;
-      ctx.lineCap = 'round';
+      ctx.lineCap = 'butt';
       ctx.stroke();
     };
 
     drawRing(0, Math.PI * 2, GRID);
 
-    if (!total) return;
-
-    let angle = -Math.PI / 2;
-    const gap = Math.min(0.05, (Math.PI * 2) / (total * 6));
-    segments.forEach(function (segment) {
-      if (!segment.value || segment.value <= 0) return;
-      const sweep = (segment.value / total) * Math.PI * 2;
-      const start = angle + gap / 2;
-      const end = angle + sweep - gap / 2;
-      if (end > start) drawRing(start, end, segment.color);
-      angle += sweep;
+    computeDonutArcs(segments).forEach(function (arc) {
+      if (arc.end > arc.start) drawRing(arc.start, arc.end, arc.color);
     });
   };
+
+  charts._computeDonutArcs = computeDonutArcs;
 
   NS.charts = charts;
 })();

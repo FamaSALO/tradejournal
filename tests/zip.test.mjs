@@ -272,3 +272,18 @@ test('rejects a truncated archive', async function () {
   const truncated = archive.slice(0, archive.length - 10);
   await assert.rejects(function () { return zip.read(archiveBuffer(truncated)); }, /повреждён или обрезан/);
 });
+
+test('reads journal.json with UTF-8 BOM and 1-level subfolder fallback, and ignores fake EOCD signature in comment (UX-02)', async function () {
+  const bomPayload = new TextEncoder().encode('\uFEFF{"version":4,"accounts":[{"id":"a1","name":"Main","trades":[],"notes":[]}]}');
+  const subArchive = buildZip([
+    { name: 'TradeJournal-backup/journal.json', data: bomPayload },
+    { name: 'TradeJournal-backup/README.txt', data: 'info' }
+  ]);
+  const parsed = await zip.readJournal(archiveBuffer(subArchive));
+  assert.equal(parsed.version, 4);
+  assert.equal(parsed.accounts[0].id, 'a1');
+
+  const withTrailingGarbage = new Uint8Array(subArchive.length + 4);
+  withTrailingGarbage.set(subArchive, 0);
+  await assert.rejects(function () { return zip.read(archiveBuffer(withTrailingGarbage)); }, /повреждён или обрезан/);
+});

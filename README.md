@@ -28,8 +28,8 @@ The app uses no UI frameworks or interface bundler: the same interface is writte
 - **Security** — Content Security Policy, Tauri permissions in `src-tauri/capabilities/default.json`, no remote content loading, and atomic file writes.
 - **Charts** — custom Canvas 2D rendering without third-party libraries.
 - **Storage** — JSON files in `%APPDATA%\TradeJournal`: atomic writes, `journal.previous.json`, automatic and manual backups, and a separate `screenshots/` folder for images. In the web version, the journal is stored in `localStorage` and screenshots in IndexedDB. Data schema v4; v1, v2, and v3 journals are migrated automatically without losing trades, notes, or screenshots.
-- **Build** — Tauri CLI 2.12, stable Rust, and an NSIS installer for Windows x64. CI builds run on `windows-latest` in GitHub Actions.
-- **Publishing** — GitHub Pages for the web version and GitHub Releases for Windows builds.
+- **Build** — Tauri CLI 2.12, stable Rust, an NSIS installer for Windows x64 (`windows-latest`), and a universal macOS DMG (`macos-15`).
+- **Publishing** — GitHub Pages for the web version; GitHub Releases for Windows builds, and GitHub Actions artifacts (`TradeJournal-macos-<sha>`) for macOS DMG builds (optionally attached to releases).
 
 ```text
 index.html + css/ + js/          interface
@@ -55,7 +55,7 @@ src-tauri/src/lib.rs             Rust: window, files, backups, dialogs
 - **ZIP import** — the **Import JSON / ZIP** button accepts both JSON and a TradeJournal ZIP export: the app extracts `journal.json` from the archive itself and shows the same preview. Compressed Deflate entries are unpacked with the built-in `DecompressionStream`; files are read from memory and are not written to disk under names from the archive.
 - **Calendar** — a profit heatmap by day with detailed statistics for the selected day.
 - **Analytics** — R distribution, breakdown by instrument, setup, day of week, emotion, and trading session; a setup performance table; and automatic insights.
-- **Time zone and trading sessions** — trade time is stored in UTC and displayed in the journal in the selected IANA time zone. The boundaries and names of the four sessions are configured in **Settings → Risk management**; sessions are calculated in the same time zone.
+- **Time zone and trading sessions** — trade time is stored in UTC and displayed in the journal in the selected IANA time zone. Session boundaries and names are configurable in **Settings → Risk management**; sessions are calculated in the same time zone.
 - **Journal** — notes with mood, tags, and consistency statistics.
 - **Calculator** — position size, risk per trade, stop loss, and take profit.
 - **Settings** — trader profile with an avatar, multiple named accounts with their own trades, notes, and risk settings; starting balance, risk, daily limits, currency, time zone, trading session boundaries, CSV/JSON export, a ZIP archive with screenshots, CSV/JSON import, demo data, and cleanup.
@@ -287,7 +287,7 @@ The path and the **Open data folder**, **Create backup**, and **Restore** button
 
 ### Updates
 
-Automatic updates are available in the Windows version only. On macOS, a new version is installed manually: download the new DMG from the releases page, replace the app in **Applications**, and confirm the launch in **Privacy & Security** again if needed. The journal and settings are preserved.
+Automatic updates are available in the Windows version only. On macOS, a new version is installed manually: download the new `TradeJournal_2.5.2_universal.dmg` from the **Build macOS app** CI artifact (`TradeJournal-macos-<sha>`, or from the releases page when attached), replace the app in **Applications**, and confirm the launch in **Privacy & Security** again if needed. The journal and settings are preserved.
 
 ### Building the universal DMG
 
