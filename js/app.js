@@ -760,11 +760,15 @@
     const settings = store.state.settings;
     const today = todayInAccount();
     const todayTrades = store.state.trades.filter(function (trade) { return trade.date === today; });
-    const todayInfo = store.dayPnlMap(store.state.trades).get(today);
+    const dayMap = store.dayPnlMap(store.state.trades);
+    const todayInfo = dayMap.get(today);
     const dayPnl = todayInfo ? todayInfo.pnl : 0;
 
-    const balance = store.balanceAll();
-    const startOfDayBalance = Math.max(0, balance - dayPnl);
+    let netBeforeToday = 0;
+    dayMap.forEach(function (info, day) {
+      if (day < today) netBeforeToday += info.pnl;
+    });
+    const startOfDayBalance = Math.max(0, (U.parseNum(settings.startBalance) || 0) + netBeforeToday);
     const lossLimit = Math.max(0, (U.parseNum(settings.dailyLossLimit) || 0) / 100 * startOfDayBalance);
     const maxTrades = U.parseNum(settings.maxTradesPerDay) || 0;
     return {
@@ -811,14 +815,14 @@
 
     let statusTone = 'ok';
     let statusText = 'В рамках плана. Сохраняйте темп.';
-    if (!todayTrades.length) {
-      statusText = 'Сделок сегодня ещё нет — можно работать по плану.';
-    } else if (lossLimit > 0 && dayPnl <= -lossLimit) {
+    if (lossLimit > 0 && dayPnl <= -lossLimit) {
       statusTone = 'bad';
       statusText = 'Дневной лимит убытка достигнут. Остановитесь на сегодня.';
     } else if (maxTrades > 0 && todayTrades.length >= maxTrades) {
       statusTone = 'warn';
       statusText = 'Лимит сделок на день исчерпан. Больше не входите.';
+    } else if (!todayTrades.length) {
+      statusText = 'Сделок сегодня ещё нет — можно работать по плану.';
     }
 
     const lossBarClass = lossPct >= 100 ? 'bad' : (lossPct > 55 ? 'warn' : '');
@@ -4984,7 +4988,9 @@
   }
 
   NS.app = {
-    buildInsights: buildInsights
+    buildInsights: buildInsights,
+    disciplineSnapshot: disciplineSnapshot,
+    renderDiscipline: renderDiscipline
   };
 
   if (document.readyState === 'loading') {
