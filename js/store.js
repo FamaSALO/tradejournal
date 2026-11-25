@@ -39,6 +39,7 @@
   let root = blankRoot();
   let loadError = null;
   let pendingMigration = false;
+  let idbJournalActive = false;
   let cacheRevision = 0;
   let dayPnlCache = null;
   let pnlEventsCache = null;
@@ -146,6 +147,19 @@
     };
   }
 
+  function getJournalStore() {
+    if (desktop || !NS.blobStore || typeof NS.blobStore.getJournalStore !== 'function') return null;
+    return NS.blobStore.getJournalStore();
+  }
+
+  function readLocalJournalRaw() {
+    try { return localStorage.getItem(KEY); } catch (err) { return null; }
+  }
+
+  function removeLocalJournalRaw() {
+    try { localStorage.removeItem(KEY); } catch (err) { /* ignore */ }
+  }
+
   function hasStored() {
     if (desktop) {
       return Promise.resolve().then(function () {
@@ -157,7 +171,17 @@
         return true;
       });
     }
-    try { return Promise.resolve(localStorage.getItem(KEY) !== null); } catch (err) { return Promise.resolve(false); }
+    if (readLocalJournalRaw() !== null) return Promise.resolve(true);
+    const journalStore = getJournalStore();
+    if (!journalStore || typeof journalStore.get !== 'function') return Promise.resolve(false);
+    return Promise.resolve().then(function () {
+      return journalStore.get(KEY);
+    }).then(function (raw) {
+      return raw !== null && raw !== undefined && raw !== '';
+    }).catch(function (err) {
+      console.warn('TradeJournal: не удалось проверить IndexedDB журнала', err);
+      return false;
+    });
   }
 
   function parseTags(value) {
@@ -596,68 +620,146 @@
     };
   }
 
-  function load() {
-    const read = desktop
-      ? Promise.resolve().then(function () { return desktop.load(); })
-      : Promise.resolve().then(function () { return localStorage.getItem(KEY); });
+  async function load() {
+    if (desktop) {
+      try {
+        const raw = await desktop.load();
+        if (raw === null || raw === undefined) return false;
+        const parsed = JSON.parse(raw);
+        if (!isJournalData(parsed)) throw new Error('Неожиданная структура журнала');
+        root = normalizeData(parsed);
+        invalidateCache();
+        pendingMigration = !(parsed.version === SCHEMA_VERSION && Array.isArray(parsed.accounts));
+        loadError = null;
+        return true;
+      } catch (err) {
+        loadError = err;
+        console.warn('TradeJournal: не удалось прочитать данные', err);
+        return false;
+      }
+    }
 
-    return read.then(function (raw) {
-      if (raw === null || raw === undefined) return false;
+    const journalStore = getJournalStore();
+    let raw = null;
+    let fromLocal = false;
+    if (journalStore && typeof journalStore.get === 'function') {
+      try {
+        const idbRaw = await journalStore.get(KEY);
+        if (idbRaw !== null && idbRaw !== undefined && idbRaw !== '') {
+          raw = idbRaw;
+          idbJournalActive = true;
+        }
+      } catch (err) {
+        console.warn('TradeJournal: не удалось прочитать журнал из IndexedDB', err);
+      }
+    }
+    if (raw === null || raw === undefined) {
+      raw = readLocalJournalRaw();
+      fromLocal = raw !== null && raw !== undefined;
+      idbJournalActive = false;
+    }
+    if (raw === null || raw === undefined) return false;
+
+    try {
       const parsed = JSON.parse(raw);
       if (!isJournalData(parsed)) throw new Error('Неожиданная структура журнала');
       root = normalizeData(parsed);
       invalidateCache();
       pendingMigration = !(parsed.version === SCHEMA_VERSION && Array.isArray(parsed.accounts));
       loadError = null;
+
+      if (fromLocal && journalStore && typeof journalStore.put === 'function') {
+        try {
+          await journalStore.put(KEY, raw);
+          const verified = await journalStore.get(KEY);
+          if (verified === raw) {
+            removeLocalJournalRaw();
+            idbJournalActive = true;
+            requestPersistentStorageOnce();
+          }
+        } catch (err) {
+          console.warn('TradeJournal: не удалось перенести журнал в IndexedDB', err);
+        }
+      }
       return true;
-    }).catch(function (err) {
+    } catch (err) {
       loadError = err;
       console.warn('TradeJournal: не удалось прочитать данные', err);
       return false;
-    });
-  }
-
-  function getRaw() {
-    if (desktop) {
-      return Promise.resolve().then(function () { return desktop.load(); }).catch(function () { return null; });
     }
-    try { return Promise.resolve(localStorage.getItem(KEY)); } catch (err) { return Promise.resolve(null); }
   }
 
-  function clearRaw() {
+  async function getRaw() {
     if (desktop) {
-      return Promise.resolve().then(function () { return desktop.clear(); }).then(function () {
+      try { return await desktop.load(); } catch (err) { return null; }
+    }
+    const journalStore = getJournalStore();
+    if (journalStore && typeof journalStore.get === 'function') {
+      try {
+        const raw = await journalStore.get(KEY);
+        if (raw !== null && raw !== undefined && raw !== '') return raw;
+      } catch (err) { /* ignore */ }
+    }
+    return readLocalJournalRaw();
+  }
+
+  async function clearRaw() {
+    if (desktop) {
+      try {
+        await desktop.clear();
         return true;
-      }).catch(function () {
+      } catch (err) {
         return false;
-      });
+      }
     }
-    try { localStorage.removeItem(KEY); return Promise.resolve(true); } catch (err) { return Promise.resolve(false); }
+    let cleared = true;
+    const journalStore = getJournalStore();
+    if (journalStore && typeof journalStore.remove === 'function') {
+      try { await journalStore.remove(KEY); } catch (err) { cleared = false; }
+    }
+    try { localStorage.removeItem(KEY); } catch (err) { cleared = false; }
+    idbJournalActive = false;
+    return cleared;
   }
 
-  function save() {
+  async function save() {
     invalidateCache();
     const raw = JSON.stringify(root);
     if (desktop) {
-      return Promise.resolve().then(function () { return desktop.save(raw); }).then(function () {
+      try {
+        await desktop.save(raw);
         pendingMigration = false;
         return true;
-      }).catch(function (err) {
+      } catch (err) {
         console.warn('TradeJournal: не удалось сохранить данные', err);
         return false;
-      });
+      }
+    }
+    const journalStore = getJournalStore();
+    if (journalStore && typeof journalStore.put === 'function' && typeof journalStore.get === 'function') {
+      try {
+        await journalStore.put(KEY, raw);
+        const verified = await journalStore.get(KEY);
+        if (verified !== raw) throw new Error('Round-trip check failed');
+        removeLocalJournalRaw();
+        idbJournalActive = true;
+        pendingMigration = false;
+        requestPersistentStorageOnce();
+        try { await gcScreenshots(); } catch (err) { /* ignore */ }
+        return true;
+      } catch (err) {
+        console.warn('TradeJournal: не удалось сохранить журнал в IndexedDB, пробуем localStorage', err);
+      }
     }
     try {
       localStorage.setItem(KEY, raw);
+      idbJournalActive = false;
       pendingMigration = false;
-      return gcScreenshots().then(function () {
-        return true;
-      }, function () {
-        return true;
-      });
+      try { await gcScreenshots(); } catch (err) { /* ignore */ }
+      return true;
     } catch (err) {
       console.warn('TradeJournal: не удалось сохранить данные', err);
-      return Promise.resolve(false);
+      return false;
     }
   }
 
@@ -1390,6 +1492,7 @@
     get state() { return state; },
     get loadError() { return loadError; },
     get needsMigration() { return pendingMigration; },
+    get usesIdbJournal() { return idbJournalActive; },
     hasStored: hasStored,
     isJournalData: isJournalData,
     analyzeImport: analyzeImport,

@@ -2130,7 +2130,7 @@
     $('#settingsSavedAt').textContent = '';
     setVersionLabel(APP_VERSION);
 
-    renderStorageMeter(store.storageSize(), desktop ? 100 * 1024 * 1024 : 5 * 1024 * 1024);
+    renderStorageMeter(store.storageSize(), (desktop || store.usesIdbJournal) ? 100 * 1024 * 1024 : 5 * 1024 * 1024);
     if (!desktop) renderWebStorageEstimate();
     renderBackupMeta();
 
@@ -2222,19 +2222,26 @@
     const note = $('#storageEstimate');
     if (!note) return;
     note.hidden = false;
-    note.textContent = T('Скриншоты хранятся в IndexedDB. Считаем размер хранилища…');
+    const idbJournal = store.usesIdbJournal;
+    note.textContent = T(idbJournal
+      ? 'Журнал и скриншоты хранятся в IndexedDB. Считаем размер хранилища…'
+      : 'Скриншоты хранятся в IndexedDB. Считаем размер хранилища…');
     Promise.all([store.storageEstimate(), store.isStoragePersisted()]).then(function (results) {
       if (!note.isConnected) return;
       const data = results[0];
       const persisted = results[1] === true;
       if (!data) {
-        note.textContent = T('Скриншоты хранятся в IndexedDB. Браузер не сообщает точный размер хранилища.') +
+        note.textContent = T(idbJournal
+          ? 'Журнал и скриншоты хранятся в IndexedDB. Браузер не сообщает точный размер хранилища.'
+          : 'Скриншоты хранятся в IndexedDB. Браузер не сообщает точный размер хранилища.') +
           (persisted ? ' ' + T('Постоянное хранилище включено.') : '');
         return;
       }
       renderStorageMeter(data.usage, data.quota);
       const pct = data.usage / data.quota * 100;
-      note.textContent = T('Оценка браузера: {used} из {quota} ({pct}). Скриншоты хранятся в IndexedDB.')
+      note.textContent = T(idbJournal
+        ? 'Оценка браузера: {used} из {quota} ({pct}). Журнал и скриншоты хранятся в IndexedDB.'
+        : 'Оценка браузера: {used} из {quota} ({pct}). Скриншоты хранятся в IndexedDB.')
         .replace('{used}', U.bytes(data.usage))
         .replace('{quota}', U.bytes(data.quota))
         .replace('{pct}', U.percent(pct, 1)) +

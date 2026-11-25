@@ -386,3 +386,91 @@ test('garbage collection keeps screenshots referenced by another account', async
   assert.equal(adapter.data.has(idA), false);
   assert.equal(adapter.data.has(idB), true);
 });
+
+test('journal migrates from localStorage to IndexedDB and removes legacy copy after verification', async function () {
+  const journalAdapter = memoryAdapter();
+  const loaded = loadTradeJournal();
+  loaded.TJ.blobStore.configure(journalAdapter);
+  loaded.TJ.blobStore.configureJournal(journalAdapter);
+  const store = loaded.TJ.store;
+  const legacyPayload = JSON.stringify({
+    version: 4,
+    activeAccountId: 'acc-1',
+    accounts: [{ id: 'acc-1', name: 'Основной', settings: {}, trades: [trade()], notes: [] }]
+  });
+  loaded.storage.setItem(store.KEY, legacyPayload);
+
+  assert.equal(await store.hasStored(), true);
+  assert.equal(await store.load(), true);
+  assert.equal(store.usesIdbJournal, true);
+  assert.equal(store.state.trades.length, 1);
+  assert.equal(loaded.storage.getItem(store.KEY), null);
+  assert.equal(journalAdapter.data.get(store.KEY), legacyPayload);
+  assert.equal(await store.getRaw(), legacyPayload);
+  assert.equal(journalAdapter.calls.persist > 0, true);
+
+  assert.equal(await store.clearRaw(), true);
+  assert.equal(await store.hasStored(), false);
+  assert.equal(store.usesIdbJournal, false);
+});
+
+test('journal saves large payloads > 5 MB to IndexedDB and keeps localStorage empty', async function () {
+  const journalAdapter = memoryAdapter();
+  const loaded = loadTradeJournal();
+  loaded.TJ.blobStore.configureJournal(journalAdapter);
+  const store = loaded.TJ.store;
+  const longComment = 'x'.repeat(2000);
+  const bigTrades = [];
+  for (let i = 0; i < 3000; i++) {
+    bigTrades.push({
+      id: 't-' + i,
+      date: '2026-01-05',
+      symbol: 'BTCUSDT',
+      side: 'long',
+      entry: 100,
+      qty: 1,
+      notes: longComment
+    });
+  }
+  await store.replaceData({
+    version: 4,
+    activeAccountId: 'acc-1',
+    accounts: [{ id: 'acc-1', name: 'Big', settings: {}, trades: bigTrades, notes: [] }]
+  }, { strictDate: true });
+
+  assert.equal(store.usesIdbJournal, true);
+  assert.equal(loaded.storage.getItem(store.KEY), null);
+  const storedRaw = journalAdapter.data.get(store.KEY);
+  assert.ok(storedRaw && storedRaw.length > 5 * 1024 * 1024);
+
+  const reloaded = loadTradeJournal();
+  reloaded.TJ.blobStore.configureJournal(journalAdapter);
+  assert.equal(await reloaded.TJ.store.load(), true);
+  assert.equal(reloaded.TJ.store.state.trades.length, 3000);
+});
+
+test('journal falls back to localStorage on IDB write failure and preserves corrupt localStorage', async function () {
+  const failingAdapter = {
+    put: function () { return Promise.reject(new Error('QuotaExceededError')); },
+    get: function () { return Promise.resolve(null); },
+    remove: function () { return Promise.resolve(); },
+    persist: function () { return Promise.resolve(false); },
+    persisted: function () { return Promise.resolve(false); },
+    estimate: function () { return Promise.resolve(null); }
+  };
+  const loaded = loadTradeJournal();
+  loaded.TJ.blobStore.configureJournal(failingAdapter);
+  const store = loaded.TJ.store;
+
+  const ok = await store.save();
+  assert.equal(ok, true);
+  assert.equal(store.usesIdbJournal, false);
+  assert.ok(loaded.storage.getItem(store.KEY));
+
+  const corruptLoaded = loadTradeJournal();
+  corruptLoaded.TJ.blobStore.configureJournal(memoryAdapter());
+  corruptLoaded.storage.setItem(store.KEY, '{broken json');
+  assert.equal(await corruptLoaded.TJ.store.load(), false);
+  assert.ok(corruptLoaded.TJ.store.loadError);
+  assert.equal(corruptLoaded.storage.getItem(store.KEY), '{broken json');
+});

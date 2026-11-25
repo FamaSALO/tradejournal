@@ -11,6 +11,7 @@
   const desktop = !!(typeof window !== 'undefined' && window.tradeJournalDesktop);
 
   let defaultStore;
+  let defaultJournalStore;
 
   function refFor(id) {
     return PREFIX + id;
@@ -331,6 +332,24 @@
     return defaultStore;
   }
 
+  function getJournalStore() {
+    if (defaultJournalStore !== undefined) return defaultJournalStore;
+    if (!available()) {
+      defaultJournalStore = null;
+      return defaultJournalStore;
+    }
+    defaultJournalStore = createIdbAdapter({
+      dbName: 'tradejournal.journal',
+      storeName: 'journal'
+    });
+    return defaultJournalStore;
+  }
+
+  function configureJournal(adapter) {
+    defaultJournalStore = adapter || null;
+    return defaultJournalStore;
+  }
+
   NS.blobStore = {
     PREFIX: PREFIX,
     refFor: refFor,
@@ -340,6 +359,8 @@
     createIdbAdapter: createIdbAdapter,
     available: available,
     getDefault: getDefault,
-    configure: configure
+    configure: configure,
+    getJournalStore: getJournalStore,
+    configureJournal: configureJournal
   };
 })();

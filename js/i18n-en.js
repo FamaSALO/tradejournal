@@ -1144,5 +1144,9 @@ window.TJ_I18N_EN = {
   "TradeJournal: скриншоты перенесены в отдельное хранилище:": "TradeJournal: screenshots have been moved to a separate storage:",
   "TradeJournal: service worker не зарегистрирован": "TradeJournal: service worker not registered",
   "ZIP-архив со скриншотами скачан": "ZIP archive with screenshots downloaded",
-  "zip.read ожидает ArrayBuffer.": "zip.read expects an ArrayBuffer."
+  "zip.read ожидает ArrayBuffer.": "zip.read expects an ArrayBuffer.",
+  "В веб-версии журнал и скриншоты хранятся в IndexedDB браузера (при наличии поддержки, иначе в localStorage); в Windows-приложении данные хранятся в локальных файлах, скриншоты — в папке": "In the web version, the journal and screenshots are stored in browser IndexedDB (or localStorage if unsupported); in the desktop app, data is stored in local files and screenshots in the folder",
+  "Журнал и скриншоты хранятся в IndexedDB. Считаем размер хранилища…": "Journal and screenshots are stored in IndexedDB. Estimating storage size…",
+  "Журнал и скриншоты хранятся в IndexedDB. Браузер не сообщает точный размер хранилища.": "Journal and screenshots are stored in IndexedDB. The browser does not report the exact storage size.",
+  "Оценка браузера: {used} из {quota} ({pct}). Журнал и скриншоты хранятся в IndexedDB.": "Browser estimate: {used} of {quota} ({pct}). Journal and screenshots are stored in IndexedDB."
 };
