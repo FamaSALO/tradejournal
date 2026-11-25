@@ -2359,18 +2359,24 @@
     $('#healthShotsMeta').textContent = (data.screenshotsCount || 0) + ' ' + U.plural(data.screenshotsCount || 0, ['файл', 'файла', 'файлов']);
     $('#healthBackupsMeta').textContent = (data.backupsCount || 0) + ' ' + U.plural(data.backupsCount || 0, ['копия', 'копии', 'копий']);
 
+    const warnings = Array.isArray(data.warnings) ? data.warnings.filter(Boolean) : [];
     const parts = [
       'Ссылок на скриншоты в журнале и копиях: ' + (data.referencedCount || 0) + '.'
     ];
+    if (warnings.length) {
+      parts.push(warnings.join(' '));
+    }
     if (data.missingCount) {
       parts.push('Не хватает файлов по ссылкам: ' + data.missingCount + ' — возможно, они были удалены вручную.');
     }
     if (data.unusedCount) {
       parts.push('Найдено неиспользуемых файлов: ' + data.unusedCount + ' на ' + U.bytes(data.unusedSize || 0) + '.');
+    } else if (warnings.length) {
+      parts.push('Очистка неиспользуемых файлов отключена, пока есть повреждённые файлы.');
     } else {
       parts.push('Неиспользуемых скриншотов не найдено.');
     }
-    setStorageHealthStatus(parts.join(' '), data.missingCount ? 'warn' : '');
+    setStorageHealthStatus(parts.join(' '), (warnings.length || data.missingCount) ? 'warn' : '');
     renderUnusedScreenshots(data);
   }
 

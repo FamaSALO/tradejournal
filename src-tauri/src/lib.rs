@@ -80,6 +80,7 @@ struct StorageHealth {
     unused_count: usize,
     unused_size: u64,
     unused: Vec<UnusedScreenshot>,
+    warnings: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -263,11 +264,15 @@ fn unique_backup_path(backup_dir: &Path, reason: &str) -> PathBuf {
 
 fn backup_info(path: &Path) -> Option<BackupInfo> {
     let metadata = fs::metadata(path).ok()?;
+    if !metadata.is_file() {
+        return None;
+    }
+    let file_name = path.file_name()?.to_string_lossy().to_string();
     Some(BackupInfo {
-        name: path.file_name()?.to_string_lossy().to_string(),
+        reason: backup_reason(&file_name),
+        name: file_name,
         size: metadata.len(),
         mtime: mtime_millis(&metadata),
-        reason: backup_reason(&path.file_name()?.to_string_lossy()),
     })
 }
 
@@ -292,6 +297,9 @@ fn prune_backups(backup_dir: &Path) {
                 return None;
             }
             let metadata = entry.metadata().ok()?;
+            if !metadata.is_file() {
+                return None;
+            }
             Some((path, mtime_millis(&metadata)))
         })
         .collect();
@@ -338,17 +346,19 @@ fn save_journal(state: &AppState, raw: String) -> Result<usize, String> {
         .map_err(|error| format!("Не удалось создать папку данных: {error}"))?;
 
     if let Ok(old_raw) = fs::read_to_string(&state.paths.journal) {
-        if let Err(error) = write_atomic(&state.paths.previous, old_raw.as_bytes()) {
-            eprintln!("TradeJournal: не удалось обновить предыдущую версию: {error}");
-        }
-        if let Err(error) = make_backup(
-            &state.paths,
-            "auto",
-            &old_raw,
-            false,
-            &state.last_auto_backup,
-        ) {
-            eprintln!("TradeJournal: не удалось создать автоматическую копию: {error}");
+        if validate_raw(&old_raw).is_ok() {
+            if let Err(error) = write_atomic(&state.paths.previous, old_raw.as_bytes()) {
+                eprintln!("TradeJournal: не удалось обновить предыдущую версию: {error}");
+            }
+            if let Err(error) = make_backup(
+                &state.paths,
+                "auto",
+                &old_raw,
+                false,
+                &state.last_auto_backup,
+            ) {
+                eprintln!("TradeJournal: не удалось создать автоматическую копию: {error}");
+            }
         }
     }
 
@@ -362,6 +372,7 @@ fn create_manual_backup(state: &AppState) -> Result<BackupInfo, String> {
     let _guard = lock_or_recover(&state.save_lock);
     let raw = read_journal(&state.paths.journal)?
         .ok_or_else(|| "Файл журнала ещё не создан.".to_string())?;
+    validate_raw(&raw)?;
     make_backup(&state.paths, "manual", &raw, true, &state.last_auto_backup)?
         .ok_or_else(|| "Не удалось создать резервную копию.".to_string())
 }
@@ -467,13 +478,27 @@ fn restore_previous(state: &AppState) -> Result<String, String> {
 
 fn clear_journal(state: &AppState) -> Result<(), String> {
     let _guard = lock_or_recover(&state.save_lock);
-    if !state.paths.journal.exists() {
-        return Ok(());
-    }
+    let raw = match fs::read_to_string(&state.paths.journal) {
+        Ok(raw) => Some(raw),
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(()),
+        Err(_) => None,
+    };
+    let is_valid = raw
+        .as_deref()
+        .is_some_and(|text| validate_raw(text).is_ok());
 
-    fs::create_dir_all(&state.paths.backups)
-        .map_err(|error| format!("Не удалось создать папку резервных копий: {error}"))?;
-    let target = unique_backup_path(&state.paths.backups, "removed");
+    let target = if is_valid {
+        fs::create_dir_all(&state.paths.backups)
+            .map_err(|error| format!("Не удалось создать папку резервных копий: {error}"))?;
+        unique_backup_path(&state.paths.backups, "removed")
+    } else {
+        // Keep unreadable or corrupt files out of backups/ so backup lists and
+        // storage health scans do not fail or offer broken files for restore.
+        let corrupt_dir = state.paths.data_dir.join("corrupt");
+        fs::create_dir_all(&corrupt_dir)
+            .map_err(|error| format!("Не удалось создать папку повреждённых файлов: {error}"))?;
+        unique_backup_path(&corrupt_dir, "corrupt")
+    };
 
     match fs::rename(&state.paths.journal, &target) {
         Ok(()) => {}
@@ -485,7 +510,9 @@ fn clear_journal(state: &AppState) -> Result<(), String> {
         }
     }
 
-    prune_backups(&state.paths.backups);
+    if is_valid {
+        prune_backups(&state.paths.backups);
+    }
     Ok(())
 }
 
@@ -575,21 +602,33 @@ fn display_file_name(path: &Path) -> String {
         .unwrap_or_else(|| path.to_string_lossy().to_string())
 }
 
-fn gather_referenced_screenshots(paths: &StorePaths) -> Result<HashSet<String>, String> {
+struct ReferencedScan {
+    refs: HashSet<String>,
+    warnings: Vec<String>,
+}
+
+fn scan_referenced_screenshots(paths: &StorePaths) -> ReferencedScan {
     let mut sources = vec![paths.journal.clone(), paths.previous.clone()];
+    let mut warnings = Vec::new();
     match fs::read_dir(&paths.backups) {
         Ok(entries) => {
             for entry in entries.filter_map(Result::ok) {
                 let name = entry.file_name().to_string_lossy().to_string();
-                if name.starts_with("journal-") && name.ends_with(".json") {
+                if name.starts_with("journal-")
+                    && name.ends_with(".json")
+                    && entry
+                        .metadata()
+                        .map(|metadata| metadata.is_file())
+                        .unwrap_or(false)
+                {
                     sources.push(entry.path());
                 }
             }
         }
         Err(error) if error.kind() == ErrorKind::NotFound => {}
         Err(error) => {
-            return Err(format!(
-                "Не удалось прочитать папку резервных копий: {error}. Очистка отменена."
+            warnings.push(format!(
+                "Не удалось прочитать папку резервных копий: {error}."
             ));
         }
     }
@@ -600,21 +639,30 @@ fn gather_referenced_screenshots(paths: &StorePaths) -> Result<HashSet<String>, 
             Ok(raw) => raw,
             Err(error) if error.kind() == ErrorKind::NotFound => continue,
             Err(error) => {
-                return Err(format!(
-                    "Не удалось прочитать {}: {error}. Очистка отменена, чтобы не удалить нужные скриншоты.",
+                warnings.push(format!(
+                    "Не удалось прочитать {}: {error}.",
                     display_file_name(&source)
                 ));
+                continue;
             }
         };
-        let parsed: serde_json::Value = serde_json::from_str(&raw).map_err(|_| {
-            format!(
-                "Файл {} повреждён. Очистка отменена, чтобы не удалить нужные скриншоты.",
-                display_file_name(&source)
-            )
-        })?;
+        let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&raw) else {
+            warnings.push(format!("Файл {} повреждён.", display_file_name(&source)));
+            continue;
+        };
         collect_screenshot_refs(&parsed, &mut refs);
     }
-    Ok(refs)
+    ReferencedScan { refs, warnings }
+}
+
+fn gather_referenced_screenshots(paths: &StorePaths) -> Result<HashSet<String>, String> {
+    let scan = scan_referenced_screenshots(paths);
+    if let Some(first_warning) = scan.warnings.first() {
+        return Err(format!(
+            "{first_warning} Очистка отменена, чтобы не удалить нужные скриншоты."
+        ));
+    }
+    Ok(scan.refs)
 }
 
 fn list_screenshot_files(dir: &Path) -> Result<Vec<ScreenshotFile>, String> {
@@ -677,7 +725,9 @@ fn backups_stats(dir: &Path) -> (u64, usize) {
 
 fn collect_storage_health(state: &AppState) -> Result<StorageHealth, String> {
     let _guard = lock_or_recover(&state.save_lock);
-    let referenced = gather_referenced_screenshots(&state.paths)?;
+    let scan = scan_referenced_screenshots(&state.paths);
+    let referenced = scan.refs;
+    let warnings = scan.warnings;
     let files = list_screenshot_files(&state.paths.screenshots)?;
 
     let now = now_millis();
@@ -689,7 +739,8 @@ fn collect_storage_health(state: &AppState) -> Result<StorageHealth, String> {
         screenshots_size += file.size;
         let key = file.name.to_ascii_lowercase();
         present.insert(key.clone());
-        if !referenced.contains(&key)
+        if warnings.is_empty()
+            && !referenced.contains(&key)
             && now.saturating_sub(file.mtime) >= UNUSED_SCREENSHOT_GRACE_MS
         {
             unused_size += file.size;
@@ -725,6 +776,7 @@ fn collect_storage_health(state: &AppState) -> Result<StorageHealth, String> {
         unused_count: unused.len(),
         unused_size,
         unused,
+        warnings,
     })
 }
 
@@ -1286,5 +1338,180 @@ mod tests {
         assert!(!valid_screenshot_file_name("file:screenshots/abc.png"));
         assert!(!valid_screenshot_file_name("abc.png.txt"));
         assert!(screenshot_reference_name("data:image/png;base64,AAAA").is_none());
+    }
+
+    struct TempStore {
+        dir: PathBuf,
+        state: AppState,
+    }
+
+    impl TempStore {
+        fn new(label: &str) -> Self {
+            let counter = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+            let dir = std::env::temp_dir().join(format!(
+                "tradejournal-{label}-{}-{}-{}",
+                std::process::id(),
+                now_millis(),
+                counter
+            ));
+            let paths = StorePaths {
+                journal: dir.join("journal.json"),
+                previous: dir.join("journal.previous.json"),
+                backups: dir.join("backups"),
+                screenshots: dir.join("screenshots"),
+                data_dir: dir.clone(),
+            };
+            fs::create_dir_all(&paths.backups).unwrap();
+            fs::create_dir_all(&paths.screenshots).unwrap();
+            let state = AppState {
+                paths,
+                save_lock: Arc::new(Mutex::new(())),
+                last_auto_backup: Arc::new(Mutex::new(None)),
+            };
+            Self { dir, state }
+        }
+    }
+
+    impl Drop for TempStore {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    fn sample_journal(tag: &str) -> String {
+        json!({
+            "version": 4,
+            "accounts": [{
+                "id": format!("acc-{tag}"),
+                "trades": [{ "id": format!("t-{tag}"), "screenshot": "file:screenshots/kept.png" }],
+                "notes": []
+            }]
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn clear_journal_moves_corrupt_file_outside_backups_and_preserves_health() {
+        let store = TempStore::new("clear-corrupt");
+        fs::write(&store.state.paths.journal, "{broken-json").unwrap();
+
+        clear_journal(&store.state).unwrap();
+
+        assert!(!store.state.paths.journal.exists());
+        assert!(list_backups(&store.state).unwrap().is_empty());
+
+        let corrupt_files: Vec<String> = fs::read_dir(store.dir.join("corrupt"))
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(corrupt_files.len(), 1);
+        assert!(corrupt_files[0].ends_with("-corrupt.json"));
+
+        let health = collect_storage_health(&store.state).unwrap();
+        assert_eq!(health.backups_count, 0);
+        assert!(health.warnings.is_empty());
+        let cleanup = cleanup_unused_screenshots(&store.state, vec![]).unwrap();
+        assert_eq!(cleanup.deleted_count, 0);
+    }
+
+    #[test]
+    fn clear_journal_moves_valid_file_into_backups_removed() {
+        let store = TempStore::new("clear-valid");
+        let valid = sample_journal("valid");
+        save_journal(&store.state, valid.clone()).unwrap();
+
+        clear_journal(&store.state).unwrap();
+
+        assert!(!store.state.paths.journal.exists());
+        let backups = list_backups(&store.state).unwrap();
+        assert_eq!(backups.len(), 1);
+        assert_eq!(backups[0].reason, "removed");
+        assert!(backups[0].name.ends_with("-removed.json"));
+        let health = collect_storage_health(&store.state).unwrap();
+        assert_eq!(health.backups_count, 1);
+        assert_eq!(health.referenced_count, 1);
+    }
+
+    #[test]
+    fn save_journal_skips_corrupt_previous_and_backs_up_valid_previous() {
+        let store = TempStore::new("save-journal");
+        fs::write(&store.state.paths.journal, "{not-valid").unwrap();
+
+        let first = sample_journal("first");
+        save_journal(&store.state, first.clone()).unwrap();
+
+        assert!(!store.state.paths.previous.exists());
+        assert!(list_backups(&store.state).unwrap().is_empty());
+
+        let second = sample_journal("second");
+        save_journal(&store.state, second.clone()).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(&store.state.paths.previous).unwrap(),
+            first
+        );
+        assert_eq!(
+            fs::read_to_string(&store.state.paths.journal).unwrap(),
+            second
+        );
+        let backups = list_backups(&store.state).unwrap();
+        assert_eq!(backups.len(), 1);
+        assert_eq!(backups[0].reason, "auto");
+    }
+
+    #[test]
+    fn restore_backup_skips_corrupt_current_and_preserves_valid_current() {
+        let store = TempStore::new("restore-backup");
+        let first = sample_journal("v1");
+        save_journal(&store.state, first.clone()).unwrap();
+        let manual = create_manual_backup(&store.state).unwrap();
+
+        let second = sample_journal("v2");
+        save_journal(&store.state, second.clone()).unwrap();
+
+        let restored = restore_backup(&store.state, &manual.name).unwrap();
+        assert_eq!(restored, first);
+        assert_eq!(
+            fs::read_to_string(&store.state.paths.previous).unwrap(),
+            second
+        );
+        assert!(list_backups(&store.state)
+            .unwrap()
+            .iter()
+            .any(|backup| backup.reason == "before-restore"));
+
+        fs::write(&store.state.paths.journal, "{corrupt-again").unwrap();
+        restore_backup(&store.state, &manual.name).unwrap();
+        assert_eq!(
+            fs::read_to_string(&store.state.paths.previous).unwrap(),
+            second
+        );
+    }
+
+    #[test]
+    fn corrupt_external_backup_reports_warning_and_blocks_cleanup() {
+        let store = TempStore::new("external-corrupt");
+        save_journal(&store.state, sample_journal("ok")).unwrap();
+        fs::write(
+            store
+                .state
+                .paths
+                .backups
+                .join("journal-external-broken.json"),
+            "{bad-json",
+        )
+        .unwrap();
+
+        let health = collect_storage_health(&store.state).unwrap();
+        assert_eq!(health.backups_count, 1);
+        assert!(health.backups_size > 0);
+        assert_eq!(health.unused_count, 0);
+        assert_eq!(health.warnings.len(), 1);
+        assert!(health.warnings[0].contains("journal-external-broken.json"));
+
+        let err = cleanup_unused_screenshots(&store.state, vec!["kept.png".to_string()])
+            .err()
+            .unwrap();
+        assert!(err.contains("journal-external-broken.json"));
     }
 }
