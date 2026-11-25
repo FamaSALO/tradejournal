@@ -1452,8 +1452,11 @@
     }
 
     const weekdayMap = new Map();
-    rows.forEach(function (trade) {
+    rows.forEach(function (row) {
+      const trade = row && row.trade ? row.trade : row;
+      if (!trade) return;
       store.tradePnlEvents(trade).forEach(function (event) {
+        if (!event.date || !U.validDateISO(event.date)) return;
         const key = String(U.weekdayIndex(event.date));
         let group = weekdayMap.get(key);
         if (!group) { group = { key: key, count: 0, pnl: 0, trades: new Set() }; weekdayMap.set(key, group); }
@@ -4979,6 +4982,10 @@
       toast('Не удалось запустить приложение: ' + (err && err.message ? err.message : err), 'error');
     });
   }
+
+  NS.app = {
+    buildInsights: buildInsights
+  };
 
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', start);
