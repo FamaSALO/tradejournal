@@ -337,3 +337,68 @@ test('desktop export cancellation does not show success toast or mark backup exp
   assert.equal(appendedToasts.length, 1);
   assert.ok(JSON.parse(storage.getItem(TJ.store.META_KEY)).lastExportAt);
 });
+
+test('Ctrl+N does not open trade modal and failed saveTrade rolls back store.state.trades', async function () {
+  const els = {
+    '#tradeDate': { value: '2026-01-05' },
+    '#tradeTime': { value: '10:00' },
+    '#tradeSymbol': { value: 'EURUSD' },
+    '#tradeEntry': { value: '100' },
+    '#tradeQty': { value: '1' },
+    '#tradeMultiplier': { value: '1' },
+    '#tradeStop': { value: '95' },
+    '#tradeCurrentStop': { value: '' },
+    '#tradeTarget': { value: '110' },
+    '#tradeFees': { value: '0' },
+    '#tradeSide': { value: 'long' },
+    '#tradeSetup': { value: '' },
+    '#tradeEmotion': { value: '' },
+    '#tradeDiscipline': { value: '0' },
+    '#tradeTags': { value: '' },
+    '#tradeNotes': { value: '' },
+    '#tradeError': { hidden: true, textContent: '' },
+    '#saveTradeBtn': { disabled: false, textContent: 'Сохранить сделку' },
+    '#tradeModalTitleText': { textContent: 'Новая сделка' },
+    '#deleteTradeBtn': { classList: { add: function () {}, remove: function () {}, contains: function () { return true; } } },
+    '#tradeModal': { hidden: false },
+    '#draftBadge': { hidden: true },
+    '#discardDraftBtn': { classList: { toggle: function () {} } },
+    '#toasts': { appendChild: function () {} }
+  };
+  const doc = fakeDocument();
+  doc.readyState = 'loading';
+  doc.querySelectorAll = function () { return []; };
+  doc.createElement = function () {
+    return { className: '', classList: { add: function () {} }, innerHTML: '', remove: function () {} };
+  };
+  const origQuery = doc.querySelector;
+  doc.querySelector = function (sel) {
+    if (Object.prototype.hasOwnProperty.call(els, sel)) return els[sel];
+    return origQuery.call(doc, sel);
+  };
+  const { TJ } = loadTradeJournal(['js/app.js'], {
+    globals: { document: doc, setTimeout: function () { return 0; } },
+    desktop: {
+      isDesktop: true,
+      save: function () { return Promise.reject(new Error('disk full')); }
+    }
+  });
+
+  let prevented = false;
+  TJ.app.handleKeydown({
+    key: 'n',
+    ctrlKey: true,
+    metaKey: false,
+    altKey: false,
+    target: { tagName: 'DIV', isContentEditable: false },
+    preventDefault: function () { prevented = true; }
+  });
+  assert.equal(prevented, false);
+
+  TJ.store.state.trades = [];
+  await TJ.app.saveTrade({ preventDefault: function () {} });
+  assert.equal(TJ.store.state.trades.length, 0);
+  assert.equal(TJ.app.state.tradeId, null);
+  assert.equal(els['#tradeError'].hidden, false);
+  assert.match(els['#tradeError'].textContent, /Не удалось сохранить сделку/);
+});

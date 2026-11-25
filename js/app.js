@@ -4202,6 +4202,7 @@
     state.tradeSaving = true;
     if (saveButton) saveButton.disabled = true;
 
+    let rollbackTrade = null;
     try {
       if (!existing) {
         const limitWarning = dailyLimitWarning(date);
@@ -4247,24 +4248,50 @@
       }, { timeZone: accountTimeZone() });
       if (!trade) throw new Error('Не удалось подготовить сделку к сохранению.');
 
+      const prevDemo = store.state.demo;
+      let existingIndex = -1;
+      let previousTrade = null;
+      let mutated = false;
+      rollbackTrade = function () {
+        if (!mutated) return;
+        mutated = false;
+        if (existing) {
+          if (existingIndex !== -1 && previousTrade) store.state.trades[existingIndex] = previousTrade;
+        } else {
+          const addedIndex = store.state.trades.lastIndexOf(trade);
+          if (addedIndex !== -1) store.state.trades.splice(addedIndex, 1);
+        }
+        store.state.demo = prevDemo;
+      };
+
       if (existing) {
-        const index = store.state.trades.findIndex(function (t) { return t.id === existing.id; });
-        if (index !== -1) store.state.trades[index] = trade;
+        existingIndex = store.state.trades.findIndex(function (t) { return t.id === existing.id; });
+        if (existingIndex !== -1) {
+          previousTrade = store.state.trades[existingIndex];
+          store.state.trades[existingIndex] = trade;
+          mutated = true;
+        }
       } else {
         store.state.trades.push(trade);
-        state.tradeId = trade.id;
-        $('#tradeModalTitleText').textContent = 'Редактировать сделку';
-        $('#deleteTradeBtn').classList.remove('hidden');
-        $('#saveTradeBtn').textContent = 'Сохранить изменения';
+        mutated = true;
       }
 
       store.state.demo = false;
       const ok = await persist();
       if (!ok) {
+        rollbackTrade();
         $('#tradeError').hidden = false;
-        $('#tradeError').textContent = 'Сделка добавлена в текущую сессию, но сохранить её не удалось. Проверьте свободное место и папку данных, затем попробуйте ещё раз.';
+        $('#tradeError').textContent = T('Не удалось сохранить сделку. Проверьте свободное место и папку данных, затем попробуйте ещё раз.');
         saveDraftNow();
         return;
+      }
+      mutated = false;
+
+      if (!existing) {
+        state.tradeId = trade.id;
+        $('#tradeModalTitleText').textContent = T('Редактировать сделку');
+        $('#deleteTradeBtn').classList.remove('hidden');
+        $('#saveTradeBtn').textContent = T('Сохранить изменения');
       }
 
       clearTradeDraft(draftTradeId, accountId);
@@ -4280,8 +4307,9 @@
       renderAll();
       toast(existing ? 'Сделка обновлена' : 'Сделка добавлена');
     } catch (err) {
+      if (rollbackTrade) rollbackTrade();
       $('#tradeError').hidden = false;
-      $('#tradeError').textContent = err && err.message ? err.message : 'Не удалось сохранить сделку.';
+      $('#tradeError').textContent = T(err && err.message ? err.message : 'Не удалось сохранить сделку.');
       saveDraftNow();
     } finally {
       state.tradeSaving = false;
@@ -5079,6 +5107,7 @@
     }
 
     if (isTyping(event.target) || open.length) return;
+    if (withModifier || event.altKey) return;
 
     if (key === 'n' || key === 'N' || key === 'т' || key === 'Т') {
       event.preventDefault();
@@ -5130,7 +5159,8 @@
     handleKeydown: handleKeydown,
     exportJSON: exportJSON,
     exportCSV: exportCSV,
-    exportZIP: exportZIP
+    exportZIP: exportZIP,
+    saveTrade: saveTrade
   };
 
   if (document.readyState === 'loading') {

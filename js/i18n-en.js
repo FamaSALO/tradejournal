@@ -375,6 +375,8 @@ window.TJ_I18N_EN = {
   "Не удалось создать резервную копию:": "Failed to create backup:",
   "Не удалось создать резервную копию.": "Failed to create backup.",
   "Не удалось сохранить демо-данные. Проверьте папку данных.": "Could not save demo data. Check the data folder.",
+  "Не удалось сохранить сделку.": "Failed to save trade.",
+  "Не удалось сохранить сделку. Проверьте свободное место и папку данных, затем попробуйте ещё раз.": "Failed to save the trade. Check free space and the data folder, then try again.",
   "Не удалось сохранить счёт. Проверьте папку данных.": "Failed to save account. Check your data folder.",
   "Не удалось сохранить файл журнала. Проверьте свободное место и папку данных.": "Could not save the journal file. Check free space and the data folder.",
   "Не удалось сохранить: хранилище браузера заполнено. Удалите скриншоты или экспортируйте журнал.": "Could not save: browser storage is full. Delete screenshots or export the journal.",
