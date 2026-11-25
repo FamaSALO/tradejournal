@@ -3213,7 +3213,6 @@
         toast('Импорт не сохранён: не удалось записать данные. Журнал оставлен прежним.', 'error');
         return;
       }
-      await store.migrateScreenshots();
       clearAllDrafts();
       applyCurrency();
       state.calCursor = monthStart(new Date());

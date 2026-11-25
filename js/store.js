@@ -644,8 +644,8 @@
     if (!isJournalData(raw)) return false;
     root = normalizeData(raw, options);
     // Move embedded screenshots out of the journal before the first save so a
-    // large import does not hit the localStorage quota.
-    if (!desktop) await migrateScreenshotData();
+    // large import does not exceed localStorage quota or desktop storage limits.
+    await migrateScreenshotData();
     return save();
   }
 
@@ -772,12 +772,15 @@
   async function migrateScreenshotData() {
     let changed = 0;
     if (desktop) {
+      if (typeof desktop.saveScreenshot !== 'function') return 0;
       for (const account of root.accounts) {
         for (const trade of account.trades) {
           if (!SAFE_SCREENSHOT_RE.test(trade.screenshot || '')) continue;
           try {
             const result = await desktop.saveScreenshot(U.uid(), trade.screenshot);
-            const reference = result && result.reference ? result.reference : '';
+            const reference = result && result.reference
+              ? result.reference
+              : (typeof result === 'string' ? result : '');
             if (reference) {
               trade.screenshot = reference;
               changed++;

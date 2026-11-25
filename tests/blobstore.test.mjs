@@ -278,6 +278,43 @@ test('imported data URLs are migrated before the journal is saved', async functi
   assert.equal(raw.includes(PNG), false);
 });
 
+test('desktop replaceData extracts embedded screenshots before saving journal.json', async function () {
+  const events = [];
+  let savedRaw = '';
+  const desktopMock = {
+    isDesktop: true,
+    saveScreenshot: function (id, dataUrl) {
+      events.push('saveScreenshot');
+      assert.equal(dataUrl, PNG);
+      return Promise.resolve({ reference: 'file:screenshots/' + id + '.png', size: dataUrl.length });
+    },
+    save: function (raw) {
+      events.push('save');
+      savedRaw = raw;
+      return Promise.resolve(true);
+    }
+  };
+  const loaded = loadTradeJournal(null, { desktop: desktopMock });
+  const store = loaded.TJ.store;
+
+  const ok = await store.replaceData({
+    version: 4,
+    activeAccountId: 'acc',
+    accounts: [{
+      id: 'acc',
+      name: 'Test',
+      trades: [trade()],
+      notes: []
+    }]
+  }, { strictDate: true });
+
+  assert.equal(ok, true);
+  assert.deepEqual(events, ['saveScreenshot', 'save']);
+  assert.match(store.state.trades[0].screenshot, /^file:screenshots\/[a-z0-9_-]+\.png$/i);
+  assert.equal(savedRaw.includes(PNG), false);
+  assert.equal(savedRaw.includes(store.state.trades[0].screenshot), true);
+});
+
 test('successful save collects orphaned screenshots but keeps refs from undo history', async function () {
   const adapter = memoryAdapter();
   const loaded = createStore(adapter);
