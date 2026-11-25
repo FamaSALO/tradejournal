@@ -597,7 +597,7 @@
     renderKpis(m, data.base);
 
     const points = buildEquityPoints(data.filtered, data.base);
-    NS.charts.equity($('#equityChart'), points, { emptyText: 'Нет закрытых сделок за период' });
+    NS.charts.equity($('#equityChart'), points, { emptyText: T('Нет закрытых сделок за период') });
 
     const roi = data.base > 0 ? (m.net / data.base) * 100 : 0;
     const chip = $('#equityChip');
@@ -623,7 +623,7 @@
     }).join('');
 
     const daily = dailySeries(data.filtered, 30);
-    NS.charts.bars($('#dailyChart'), daily, { emptyText: 'За этот период сделок не было' });
+    NS.charts.bars($('#dailyChart'), daily, { emptyText: T('За этот период сделок не было') });
     const dailyNet = daily.reduce(function (sum, point) { return sum + point.value; }, 0);
     const dailyChip = $('#dailyChip');
     dailyChip.textContent = daily.length ? U.money(dailyNet, { sign: true }) : '—';
@@ -650,37 +650,43 @@
         label: 'Чистый P&L',
         value: m.count ? U.money(m.net, { sign: true }) : '—',
         tone: toneClass(m.net),
-        sub: m.count ? 'ROI ' + (roi > 0 ? '+' : '') + U.percent(roi, 1) + ' · ' + m.count + ' ' + pluralTrades(m.count) : 'Нет закрытых сделок'
+        sub: m.count
+          ? 'ROI ' + (roi > 0 ? '+' : '') + U.percent(roi, 1) + ' · ' + m.count + ' ' + pluralTrades(m.count)
+          : T('Нет закрытых сделок')
       },
       {
         label: 'Винрейт',
         value: m.count ? U.percent(m.winRate, 0) : '—',
         tone: m.count ? (m.winRate >= 50 ? 'pos' : '') : '',
-        sub: m.count ? m.wins + 'W · ' + m.losses + 'L · ' + m.be + 'BE' : 'Нужны закрытые сделки'
+        sub: m.count ? m.wins + 'W · ' + m.losses + 'L · ' + m.be + 'BE' : T('Нужны закрытые сделки')
       },
       {
         label: 'Профит-фактор',
         value: m.count ? pf : '—',
         tone: m.count ? (m.profitFactor > 1 ? 'pos' : (m.profitFactor < 1 ? 'neg' : '')) : '',
-        sub: m.count ? 'Прибыль / убыток' : 'Отношение валовой прибыли к убытку'
+        sub: m.count ? T('Прибыль / убыток') : T('Отношение валовой прибыли к убытку')
       },
       {
         label: 'Средний R',
         value: hasR ? U.rfmt(m.avgR, { sign: true }) : '—',
         tone: hasR ? toneClass(m.avgR) : '',
-        sub: hasR ? 'Итого ' + U.rfmt(m.totalR, { sign: true }) + ' · ' + m.rCount + ' с R' : 'Добавьте стоп при входе к сделкам'
+        sub: hasR
+          ? T('Итого {total} · {count} с R').replace('{total}', U.rfmt(m.totalR, { sign: true })).replace('{count}', m.rCount)
+          : T('Добавьте стоп при входе к сделкам')
       },
       {
         label: 'Макс. просадка, $',
         value: m.count ? U.money(m.maxDD) : '—',
         tone: m.maxDD > 0.004 ? 'neg' : '',
-        sub: m.count ? 'Макс. просадка, %: ' + U.percent(m.maxDDPct, 1) + ' от пика счёта' : 'Пока без просадок'
+        sub: m.count
+          ? T('Макс. просадка, %: {pct} от пика счёта').replace('{pct}', U.percent(m.maxDDPct, 1))
+          : T('Пока без просадок')
       },
       {
         label: 'Серия',
         value: streak,
         tone: m.currentStreak ? (m.currentStreak.type === 'win' ? 'pos' : 'neg') : '',
-        sub: m.count ? 'Макс. ' + m.maxWinStreak + 'W / ' + m.maxLossStreak + 'L' : 'Текущая серия'
+        sub: m.count ? T('Макс. {w}W / {l}L').replace('{w}', m.maxWinStreak).replace('{l}', m.maxLossStreak) : T('Текущая серия')
       }
     ];
 
@@ -718,7 +724,7 @@
 
   function buildEquityPoints(closedAsc, base) {
     let balance = base;
-    const points = [{ label: 'Старт', value: balance, meta: 'Начало периода' }];
+    const points = [{ label: T('Старт'), value: balance, meta: T('Начало периода') }];
     orderedPnlEvents(closedAsc).forEach(function (event) {
       balance += event.pnl;
       points.push({
@@ -789,18 +795,28 @@
 
     if (snapshot.lossLimit > 0 && snapshot.dayPnl <= -snapshot.lossLimit) {
       title = 'Дневной лимит убытка достигнут';
-      messages.push('Убыток за сегодня: ' + U.money(-snapshot.dayPnl) + ' при лимите ' + U.money(snapshot.lossLimit) + '.');
+      messages.push(
+        T('Убыток за сегодня: {loss} при лимите {limit}.')
+          .replace('{loss}', U.money(-snapshot.dayPnl))
+          .replace('{limit}', U.money(snapshot.lossLimit))
+      );
     }
     if (snapshot.maxTrades > 0 && snapshot.todayTrades.length >= snapshot.maxTrades) {
       if (messages.length) title = 'Дневные лимиты превышены';
       else title = 'Лимит сделок на день достигнут';
-      messages.push('Сегодня уже ' + snapshot.todayTrades.length + ' ' + pluralTrades(snapshot.todayTrades.length) + ' при лимите ' + snapshot.maxTrades + '.');
+      messages.push(
+        T('Сегодня уже {count} {unit} при лимите {max}.')
+          .replace('{count}', snapshot.todayTrades.length)
+          .replace('{unit}', pluralTrades(snapshot.todayTrades.length))
+          .replace('{max}', snapshot.maxTrades)
+      );
     }
     if (!messages.length) return null;
 
     return {
       title: title,
-      text: messages.join(' ') + ' Добавить сделку вне плана?'
+      text: messages.join(' ') + ' ' + T('Добавить сделку вне плана?'),
+      textReady: true
     };
   }
 
@@ -862,7 +878,7 @@
         : (status === 'partial' ? U.money(pnl, { sign: true }) : 'Открыта');
       const statusLabel = status === 'closed'
         ? (r !== null ? U.rfmt(r, { sign: true }) : '—')
-        : (status === 'partial' ? 'частично · остаток ' + U.qty(store.remainingQty(trade)) : 'без выхода');
+        : (status === 'partial' ? T('частично · остаток {qty}').replace('{qty}', U.qty(store.remainingQty(trade))) : T('без выхода'));
       return '<div class="mini-row" role="button" data-open-trade="' + U.escapeHtml(trade.id) + '" tabindex="0">' +
         '<div class="mini-icon ' + trade.side + '" data-i18n-skip>' + U.escapeHtml(trade.symbol.slice(0, 2)) + '</div>' +
         '<div class="mini-main"><strong data-i18n-skip>' + U.escapeHtml(trade.symbol) + '</strong><span>' +
@@ -1005,7 +1021,7 @@
     const current = state.filters.setup;
     let html = '<option value="all">Все сетапы</option>';
     setups.forEach(function (setup) {
-      html += '<option value="' + U.escapeHtml(setup) + '">' + U.escapeHtml(setup) + '</option>';
+      html += '<option data-i18n-skip value="' + U.escapeHtml(setup) + '">' + U.escapeHtml(setup) + '</option>';
     });
     select.innerHTML = html;
     if (current !== 'all' && setups.indexOf(current) === -1) {
@@ -1027,22 +1043,22 @@
     const weighted = store.weightedExit(trade);
     const remaining = store.remainingQty(trade);
     const exitHtml = status === 'open'
-      ? '<span class="open-badge">Открыта</span>'
+      ? '<span class="open-badge">' + T('Открыта') + '</span>'
       : '<span class="exit-value">' + U.escapeHtml(U.price(weighted)) + '</span>' +
-        (status === 'partial' ? '<small class="exit-remain">ост. ' + U.escapeHtml(U.qty(remaining)) + '</small>' : '');
+        (status === 'partial' ? '<small class="exit-remain">' + U.escapeHtml(T('ост. {qty}').replace('{qty}', U.qty(remaining))) + '</small>' : '');
     const pnlHtml = pnl === null
       ? '<span class="muted">—</span>'
       : '<span class="' + toneClass(pnl) + '">' + U.escapeHtml(U.money(pnl, { sign: true })) + '</span>' +
-        (status === 'partial' ? '<small class="exit-remain">реализовано</small>' : '');
+        (status === 'partial' ? '<small class="exit-remain">' + T('реализовано') + '</small>' : '');
     const statusHtml = status === 'partial'
-      ? '<span class="partial-badge">частично</span>'
-      : (status === 'open' ? '<span class="open-badge">открыта</span>' : '');
+      ? '<span class="partial-badge">' + T('частично') + '</span>'
+      : (status === 'open' ? '<span class="open-badge">' + T('открыта') + '</span>' : '');
     return '<tr data-open-trade="' + U.escapeHtml(trade.id) + '" tabindex="0">' +
       '<td><div class="cell-date"><strong>' + U.escapeHtml(U.formatDate(trade.date, 'med')) + '</strong><span>' + U.escapeHtml(trade.time || '—') + '</span></div></td>' +
       '<td>' + (session ? '<span class="session-chip" data-i18n-skip>' + U.escapeHtml(session.label) + '</span>' : '<span class="muted">—</span>') + '</td>' +
       '<td><div class="symbol-cell"><div class="symbol-main">' +
       '<button type="button" class="symbol-thumb' + (trade.screenshot ? ' has-shot' : '') + '"' +
-      (trade.screenshot ? ' data-open-shot="' + U.escapeHtml(trade.id) + '" title="Открыть скриншот"' : ' tabindex="-1" aria-hidden="true"') + '>' +
+      (trade.screenshot ? ' data-open-shot="' + U.escapeHtml(trade.id) + '" title="' + U.escapeHtml(T('Открыть скриншот')) + '"' : ' tabindex="-1" aria-hidden="true"') + '>' +
       '<span class="thumb-empty"></span></button>' +
       '<div class="symbol-line"><strong data-i18n-skip>' + U.escapeHtml(trade.symbol) + '</strong></div></div>' +
       '<span class="side-badge ' + trade.side + '"><span class="arr">' + (trade.side === 'long' ? '↑' : '↓') + '</span>' + (trade.side === 'long' ? 'Long' : 'Short') + '</span>' +
@@ -1160,12 +1176,12 @@
 
     const from = startIndex + 1;
     const to = startIndex + pageTrades.length;
-    $('#tradesFooter').innerHTML = '<span>Показано <b>' + from + '–' + to + '</b> из <b>' + list.length + '</b></span>' +
-      '<span class="dot-sep">·</span><span>Итого по фильтру: <b class="' + toneClass(net) + '">' + U.escapeHtml(U.money(net, { sign: true })) + '</b></span>' +
-      (realizedCount !== list.length ? '<span class="dot-sep">·</span><span>с результатом: <b>' + realizedCount + '</b></span>' : '') +
-      (rCount ? '<span class="dot-sep">·</span><span>Средний R: <b class="' + toneClass(rSum / rCount) + '">' + U.escapeHtml(U.rfmt(rSum / rCount, { sign: true })) + '</b></span>' : '') +
+    $('#tradesFooter').innerHTML = '<span>' + U.escapeHtml(T('Показано {from}–{to} из {total}').replace('{from}', from).replace('{to}', to).replace('{total}', list.length)) + '</span>' +
+      '<span class="dot-sep">·</span><span>' + U.escapeHtml(T('Итого по фильтру:')) + ' <b class="' + toneClass(net) + '">' + U.escapeHtml(U.money(net, { sign: true })) + '</b></span>' +
+      (realizedCount !== list.length ? '<span class="dot-sep">·</span><span>' + U.escapeHtml(T('с результатом:')) + ' <b>' + realizedCount + '</b></span>' : '') +
+      (rCount ? '<span class="dot-sep">·</span><span>' + U.escapeHtml(T('Средний R')) + ': <b class="' + toneClass(rSum / rCount) + '">' + U.escapeHtml(U.rfmt(rSum / rCount, { sign: true })) + '</b></span>' : '') +
       pagerHtml(state.page, totalPages) +
-      '<span class="table-foot-hint">Клик по строке — редактирование</span>';
+      '<span class="table-foot-hint">' + U.escapeHtml(T('Клик по строке — редактирование')) + '</span>';
   }
 
   function resetFilters() {
@@ -1188,7 +1204,7 @@
     const prefix = year + '-' + pad2(month + 1);
 
     $('#calTitle').textContent = U.monthTitle(year, month);
-    $('#calWeekdays').innerHTML = NS.WEEKDAY_LABELS.map(function (label) { return '<span>' + label + '</span>'; }).join('');
+    $('#calWeekdays').innerHTML = U.weekdayLabels().map(function (label) { return '<span>' + label + '</span>'; }).join('');
 
     const dayMap = store.dayPnlMap(store.state.trades);
     const monthTrades = store.state.trades.filter(function (trade) {
@@ -1222,8 +1238,8 @@
     $('#calSummary').innerHTML =
       '<span class="chip ' + toneClass(monthPnl) + '">' + U.escapeHtml(U.money(monthPnl, { sign: true })) + '</span>' +
       '<span class="chip">' + closedMonth.length + ' ' + pluralTrades(closedMonth.length) + '</span>' +
-      '<span class="chip">Винрейт ' + (monthMetrics.count ? U.percent(monthMetrics.winRate, 0) : '—') + '</span>' +
-      (bestDay && bestDay.value > 0.004 ? '<span class="chip pos">Лучший день +' + U.escapeHtml(U.money(bestDay.value)) + '</span>' : '');
+      '<span class="chip">' + U.escapeHtml(T('Винрейт {wr}').replace('{wr}', monthMetrics.count ? U.percent(monthMetrics.winRate, 0) : '—')) + '</span>' +
+      (bestDay && bestDay.value > 0.004 ? '<span class="chip pos">' + U.escapeHtml(T('Лучший день +{val}').replace('{val}', U.money(bestDay.value))) + '</span>' : '');
 
     const first = new Date(year, month, 1);
     const offset = (first.getDay() + 6) % 7;
@@ -1255,7 +1271,7 @@
 
       const titleParts = [U.formatDate(iso, 'full')];
       if (count) titleParts.push(U.money(dayPnl, { sign: true }) + ' · ' + count + ' ' + pluralTrades(count));
-      if (hasNote) titleParts.push('есть запись в журнале');
+      if (hasNote) titleParts.push(T('есть запись в журнале'));
 
       html += '<button type="button" class="' + classes.join(' ') + '" data-date="' + iso + '"' +
         (style ? ' style="' + style + '"' : '') + ' title="' + U.escapeHtml(titleParts.join(' · ')) + '">' +
@@ -1263,7 +1279,7 @@
         (count ? '<span class="cal-pnl ' + toneClass(dayPnl) + '">' + U.escapeHtml(U.compactMoney(dayPnl, { sign: true })) + '</span>' : '') +
         (count || hasNote
           ? '<span class="cal-meta">' + (count ? count + ' ' + pluralTrades(count) : '') +
-            (hasNote ? '<span class="cal-note-dot" title="Есть запись"></span>' : '') + '</span>'
+            (hasNote ? '<span class="cal-note-dot" title="' + U.escapeHtml(T('Есть запись')) + '"></span>' : '') + '</span>'
           : '') +
         '</button>';
     }
@@ -1321,13 +1337,13 @@
       notesHtml = '<div class="day-sub">Запись в журнале</div>' +
         '<div class="day-note"><div class="day-note-head">' + mood.emoji + ' <span data-i18n-skip>' + U.escapeHtml(note.title || mood.label) + '</span></div>' +
         '<p data-i18n-skip>' + U.escapeHtml(U.truncate(note.text, 180)) + '</p>' +
-        '<div style="margin-top:6px"><button type="button" class="link-btn" data-edit-note="' + U.escapeHtml(note.id) + '">Открыть запись</button>' +
-        (dayNotes.length > 1 ? '<span class="muted small"> · ещё ' + (dayNotes.length - 1) + '</span>' : '') + '</div></div>';
+        '<div style="margin-top:6px"><button type="button" class="link-btn" data-edit-note="' + U.escapeHtml(note.id) + '">' + U.escapeHtml(T('Открыть запись')) + '</button>' +
+        (dayNotes.length > 1 ? '<span class="muted small"> · ' + U.escapeHtml(T('ещё {count}').replace('{count}', dayNotes.length - 1)) + '</span>' : '') + '</div></div>';
     }
 
     const closedInfo = closedTrades.length
       ? closedTrades.length + ' ' + pluralTrades(closedTrades.length) + ' · ' + wins + 'W / ' + losses + 'L'
-      : 'закрытых сделок нет';
+      : T('закрытых сделок нет');
 
     card.innerHTML =
       '<div class="day-head"><div><h2>' + U.escapeHtml(U.formatDate(day, 'long')) + '</h2>' +
@@ -1384,13 +1400,17 @@
         label: 'Средний R',
         value: hasR ? U.rfmt(m.avgR, { sign: true }) : '—',
         tone: hasR ? toneClass(m.avgR) : '',
-        sub: hasR ? 'Всего ' + U.rfmt(m.totalR, { sign: true }) + ' · ' + m.rCount + ' с R' : 'Нужны стопы при входе'
+        sub: hasR
+          ? T('Всего {total} · {count} с R').replace('{total}', U.rfmt(m.totalR, { sign: true })).replace('{count}', m.rCount)
+          : T('Нужны стопы при входе')
       },
       {
         label: 'Винрейт',
         value: m.count ? U.percent(m.winRate, 0) : '—',
         tone: m.count ? (m.winRate >= 50 ? 'pos' : '') : '',
-        sub: m.count ? m.wins + ' прибыльных · ' + m.losses + ' убыточных' : 'Нет данных'
+        sub: m.count
+          ? T('{wins} прибыльных · {losses} убыточных').replace('{wins}', m.wins).replace('{losses}', m.losses)
+          : T('Нет данных')
       },
       {
         label: 'Профит-фактор',
@@ -1460,11 +1480,11 @@
 
   function buildInsights(m) {
     if (!m.count) {
-      return [{ tone: '', icon: '💡', text: 'Пока нет закрытых сделок за выбранный период. Добавьте сделки — и здесь появятся закономерности вашей торговли.' }];
+      return [{ tone: '', icon: '💡', text: T('Пока нет закрытых сделок за выбранный период. Добавьте сделки — и здесь появятся закономерности вашей торговли.') }];
     }
     const out = [];
     const rows = m.rows;
-    const setups = store.groupRows(rows, function (t) { return t.setup || 'Без сетапа'; })
+    const setups = store.groupRows(rows, function (t) { return t.setup || T('Без сетапа'); })
       .filter(function (g) { return g.count >= 3; })
       .sort(function (a, b) { return b.pnl - a.pnl; });
 
@@ -1473,7 +1493,12 @@
       if (best.pnl > 0.004) {
         out.push({
           tone: 'pos', icon: '★',
-          text: 'Лучший сетап — <b>' + U.escapeHtml(best.key) + '</b>: <b class="pos">' + U.escapeHtml(U.money(best.pnl, { sign: true })) + '</b> за ' + best.count + ' ' + pluralTrades(best.count) + ', винрейт ' + U.percent(best.winRate, 0) + '.'
+          text: T('Лучший сетап — <b>{setup}</b>: <b class="pos">{pnl}</b> за {count} {unit}, винрейт {wr}.')
+            .replace('{setup}', U.escapeHtml(best.key))
+            .replace('{pnl}', U.escapeHtml(U.money(best.pnl, { sign: true })))
+            .replace('{count}', best.count)
+            .replace('{unit}', pluralTrades(best.count))
+            .replace('{wr}', U.percent(best.winRate, 0))
         });
       }
       if (setups.length > 1) {
@@ -1481,7 +1506,11 @@
         if (worst.pnl < -0.004) {
           out.push({
             tone: 'neg', icon: '!',
-            text: 'Проблемный сетап — <b>' + U.escapeHtml(worst.key) + '</b>: <b class="neg">' + U.escapeHtml(U.money(worst.pnl, { sign: true })) + '</b> за ' + worst.count + ' ' + pluralTrades(worst.count) + '. Стоит пересмотреть условия входа.'
+            text: T('Проблемный сетап — <b>{setup}</b>: <b class="neg">{pnl}</b> за {count} {unit}. Стоит пересмотреть условия входа.')
+              .replace('{setup}', U.escapeHtml(worst.key))
+              .replace('{pnl}', U.escapeHtml(U.money(worst.pnl, { sign: true })))
+              .replace('{count}', worst.count)
+              .replace('{unit}', pluralTrades(worst.count))
           });
         }
       }
@@ -1506,9 +1535,14 @@
     if (weekdayGroups.length > 1) {
       const worstDay = weekdayGroups[0];
       if (worstDay.pnl < -0.004) {
+        const weekdayLabels = U.weekdayLabels();
         out.push({
           tone: 'warn', icon: '◷',
-          text: 'Самый слабый день — <b>' + NS.WEEKDAY_LABELS[Number(worstDay.key)] + '</b>: <b class="neg">' + U.escapeHtml(U.money(worstDay.pnl, { sign: true })) + '</b> за ' + worstDay.count + ' ' + pluralTrades(worstDay.count) + '. Возможно, стоит торговать в этот день меньшим объёмом.'
+          text: T('Самый слабый день — <b>{day}</b>: <b class="neg">{pnl}</b> за {count} {unit}. Возможно, стоит торговать в этот день меньшим объёмом.')
+            .replace('{day}', weekdayLabels[Number(worstDay.key)])
+            .replace('{pnl}', U.escapeHtml(U.money(worstDay.pnl, { sign: true })))
+            .replace('{count}', worstDay.count)
+            .replace('{unit}', pluralTrades(worstDay.count))
         });
       }
     }
@@ -1522,7 +1556,11 @@
         const meta = U.emotionMeta(worstEmotion.key);
         out.push({
           tone: 'warn', icon: '🧠',
-          text: 'Эмоция <b>' + U.escapeHtml(meta.label) + '</b> стоит вам <b class="neg">' + U.escapeHtml(U.money(worstEmotion.pnl, { sign: true })) + '</b> за ' + worstEmotion.count + ' ' + pluralTrades(worstEmotion.count) + '. Замечайте её до входа.'
+          text: T('Эмоция <b>{emotion}</b> стоит вам <b class="neg">{pnl}</b> за {count} {unit}. Замечайте её до входа.')
+            .replace('{emotion}', U.escapeHtml(meta.label))
+            .replace('{pnl}', U.escapeHtml(U.money(worstEmotion.pnl, { sign: true })))
+            .replace('{count}', worstEmotion.count)
+            .replace('{unit}', pluralTrades(worstEmotion.count))
         });
       }
     }
@@ -1536,7 +1574,11 @@
       if (better.pnl > 0.004) {
         out.push({
           tone: '', icon: '↗',
-          text: 'Сильнее работает направление <b>' + label + '</b>: <b class="pos">' + U.escapeHtml(U.money(better.pnl, { sign: true })) + '</b> и винрейт ' + U.percent(better.winRate, 0) + ' против ' + U.percent((better === longGroup ? shortGroup : longGroup).winRate, 0) + ' у противоположного.'
+          text: T('Сильнее работает направление <b>{side}</b>: <b class="pos">{pnl}</b> и винрейт {wr} против {otherWr} у противоположного.')
+            .replace('{side}', label)
+            .replace('{pnl}', U.escapeHtml(U.money(better.pnl, { sign: true })))
+            .replace('{wr}', U.percent(better.winRate, 0))
+            .replace('{otherWr}', U.percent((better === longGroup ? shortGroup : longGroup).winRate, 0))
         });
       }
     }
@@ -1545,12 +1587,14 @@
       if (m.avgDiscipline < 3.5) {
         out.push({
           tone: 'warn', icon: '◎',
-          text: 'Средняя дисциплина <b>' + decimal(m.avgDiscipline, 1) + ' / 5</b>. Сделки вне плана заметно ухудшают результат — начните с чек-листа перед входом.'
+          text: T('Средняя дисциплина <b>{score} / 5</b>. Сделки вне плана заметно ухудшают результат — начните с чек-листа перед входом.')
+            .replace('{score}', decimal(m.avgDiscipline, 1))
         });
       } else if (m.avgDiscipline >= 4.2) {
         out.push({
           tone: 'pos', icon: '✓',
-          text: 'Средняя дисциплина <b>' + decimal(m.avgDiscipline, 1) + ' / 5</b>. Вы стабильно следуете плану — это важнее отдельной прибыльной сделки.'
+          text: T('Средняя дисциплина <b>{score} / 5</b>. Вы стабильно следуете плану — это важнее отдельной прибыльной сделки.')
+            .replace('{score}', decimal(m.avgDiscipline, 1))
         });
       }
     }
@@ -1558,7 +1602,9 @@
     if (!out.length && m.best) {
       out.push({
         tone: 'pos', icon: '★',
-        text: 'Лучшая сделка периода — <b>' + U.escapeHtml(m.best.trade.symbol) + '</b> на <b class="pos">' + U.escapeHtml(U.money(m.best.pnl, { sign: true })) + '</b>. Продолжайте собирать статистику: для выводов нужно больше сделок.'
+        text: T('Лучшая сделка периода — <b>{symbol}</b> на <b class="pos">{pnl}</b>. Продолжайте собирать статистику: для выводов нужно больше сделок.')
+          .replace('{symbol}', U.escapeHtml(m.best.trade.symbol))
+          .replace('{pnl}', U.escapeHtml(U.money(m.best.pnl, { sign: true })))
       });
     }
 
@@ -1616,7 +1662,7 @@
       const side = item[0], label = item[1], group = item[2];
       return '<div class="side-box ' + side + '"><div class="side-box-top"><span>' + label + '</span>' +
         '<strong class="' + toneClass(group.pnl) + '">' + U.escapeHtml(U.money(group.pnl, { sign: true })) + '</strong></div>' +
-        '<sub>' + group.count + ' ' + pluralTrades(group.count) + ' · винрейт ' + (group.count ? U.percent(group.winRate, 0) : '—') + '</sub>' +
+        '<sub>' + U.escapeHtml(T('{count} {unit} · винрейт {wr}').replace('{count}', group.count).replace('{unit}', pluralTrades(group.count)).replace('{wr}', group.count ? U.percent(group.winRate, 0) : '—')) + '</sub>' +
         '<div class="side-bar"><i style="width:' + (group.count ? Math.min(100, group.winRate) : 0) + '%"></i></div></div>';
     }).join('');
   }
@@ -1638,7 +1684,7 @@
     container.innerHTML = list.map(function (group) {
       const label = options.labelFn ? options.labelFn(group.key) : group.key;
       const width = group.pnl === 0 ? 0 : Math.max(3, Math.abs(group.pnl) / max * 100);
-      return '<div class="hb-row" title="' + U.escapeHtml(group.count + ' ' + pluralTrades(group.count) + ' · винрейт ' + U.percent(group.winRate, 0)) + '">' +
+      return '<div class="hb-row" title="' + U.escapeHtml(T('{count} {unit} · винрейт {wr}').replace('{count}', group.count).replace('{unit}', pluralTrades(group.count)).replace('{wr}', U.percent(group.winRate, 0))) + '">' +
         '<div class="hb-top"><span class="hb-label"' + (options.labelSkip ? ' data-i18n-skip' : '') + '>' + U.escapeHtml(label) +
         '<small>' + group.count + '</small></span>' +
         '<span class="hb-value ' + toneClass(group.pnl) + '">' + U.escapeHtml(U.money(group.pnl, { sign: true })) + '</span></div>' +
@@ -1652,7 +1698,7 @@
     const totalR = withR ? U.rfmt(m.totalR, { sign: true }) : '—';
     $('#qualityBlock').innerHTML =
       '<div class="quality-row"><span>Всего R</span><b class="' + (withR ? toneClass(m.totalR) : '') + '">' + U.escapeHtml(totalR) + '</b></div>' +
-      '<div class="quality-row"><span>Сделок с рассчитанным R</span><b>' + withR + ' из ' + m.count + '</b></div>' +
+      '<div class="quality-row"><span>Сделок с рассчитанным R</span><b>' + U.escapeHtml(T('{withR} из {total}').replace('{withR}', withR).replace('{total}', m.count)) + '</b></div>' +
       '<div class="quality-row"><span>Средняя дисциплина</span><b>' + discipline + '</b></div>' +
       '<div class="quality-row"><span>Комиссии и издержки</span><b class="neg">' + U.escapeHtml(U.money(-m.fees)) + '</b></div>' +
       '<div class="quality-row"><span>Средняя прибыль</span><b class="pos">' + U.escapeHtml(U.money(m.avgWin)) + '</b></div>' +
@@ -1724,7 +1770,7 @@
         '<h3 data-i18n-skip>' + U.escapeHtml(note.title || T('Без заголовка')) + '</h3>' +
         '<p class="note-text" data-i18n-skip>' + U.escapeHtml(note.text) + '</p>' +
         (note.tags.length ? '<div class="note-tags" data-i18n-skip>' + note.tags.map(function (tag) { return '<span class="tag">' + U.escapeHtml(tag) + '</span>'; }).join('') + '</div>' : '') +
-        '<div class="note-foot"><span>' + (day.count ? day.count + ' ' + pluralTrades(day.count) + ' в этот день' : 'без сделок') + '</span>' +
+        '<div class="note-foot"><span>' + U.escapeHtml(day.count ? T('{count} {unit} в этот день').replace('{count}', day.count).replace('{unit}', pluralTrades(day.count)) : T('без сделок')) + '</span>' +
         '<div class="note-actions">' +
         '<button type="button" class="icon-btn" data-edit-note="' + U.escapeHtml(note.id) + '" title="Редактировать" aria-label="Редактировать запись">' +
         '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg></button>' +
@@ -1822,14 +1868,17 @@
       visual.hidden = true;
     }
 
-    let hint = 'Заполните вход и стоп, чтобы увидеть размер позиции.';
+    let hint = T('Заполните вход и стоп, чтобы увидеть размер позиции.');
     if (error) {
       hint = '';
     } else if (quantity !== null) {
-      hint = 'При риске ' + U.percent(riskPct, 1) + ' (' + U.money(riskAmount) + ') и стопе ' + U.price(stop) +
-        ' размер позиции — ' + U.qty(quantity) + '. Убыток по стопу ограничен ' + U.money(riskAmount) + '.';
+      hint = T('При риске {pct} ({risk}) и стопе {stop} размер позиции — {qty}. Убыток по стопу ограничен {risk}.')
+        .replace('{pct}', U.percent(riskPct, 1))
+        .replace(/\{risk\}/g, U.money(riskAmount))
+        .replace('{stop}', U.price(stop))
+        .replace('{qty}', U.qty(quantity));
     } else if (balance === null || riskPct === null) {
-      hint = 'Укажите баланс и риск на сделку.';
+      hint = T('Укажите баланс и риск на сделку.');
     }
     $('#calcHint').textContent = hint;
     $('#calcHint').style.display = hint ? '' : 'none';
@@ -2116,21 +2165,23 @@
     const note = $('#storageEstimate');
     if (!note) return;
     note.hidden = false;
-    note.textContent = 'Скриншоты хранятся в IndexedDB. Считаем размер хранилища…';
+    note.textContent = T('Скриншоты хранятся в IndexedDB. Считаем размер хранилища…');
     Promise.all([store.storageEstimate(), store.isStoragePersisted()]).then(function (results) {
       if (!note.isConnected) return;
       const data = results[0];
       const persisted = results[1] === true;
       if (!data) {
-        note.textContent = 'Скриншоты хранятся в IndexedDB. Браузер не сообщает точный размер хранилища.' +
-          (persisted ? ' Постоянное хранилище включено.' : '');
+        note.textContent = T('Скриншоты хранятся в IndexedDB. Браузер не сообщает точный размер хранилища.') +
+          (persisted ? ' ' + T('Постоянное хранилище включено.') : '');
         return;
       }
       renderStorageMeter(data.usage, data.quota);
       const pct = data.usage / data.quota * 100;
-      note.textContent = 'Оценка браузера: ' + U.bytes(data.usage) + ' из ' + U.bytes(data.quota) +
-        ' (' + U.percent(pct, 1) + '). Скриншоты хранятся в IndexedDB.' +
-        (persisted ? ' Постоянное хранилище включено.' : '');
+      note.textContent = T('Оценка браузера: {used} из {quota} ({pct}). Скриншоты хранятся в IndexedDB.')
+        .replace('{used}', U.bytes(data.usage))
+        .replace('{quota}', U.bytes(data.quota))
+        .replace('{pct}', U.percent(pct, 1)) +
+        (persisted ? ' ' + T('Постоянное хранилище включено.') : '');
     });
   }
 
@@ -2209,22 +2260,22 @@
     if (!button) return;
     button.hidden = !visible;
     button.disabled = false;
-    button.textContent = 'Скачать и установить';
+    button.textContent = T('Скачать и установить');
   }
 
   async function checkDesktopUpdate(manual) {
     if (!desktop || typeof desktop.checkUpdate !== 'function' || desktopUpdate.checking || desktopUpdate.installing) return;
     if (desktop.platform === 'darwin') {
-      setDesktopUpdateStatus('Для macOS обновления устанавливаются вручную: скачайте новый DMG со страницы релизов.');
+      setDesktopUpdateStatus(T('Для macOS обновления устанавливаются вручную: скачайте новый DMG со страницы релизов.'));
       return;
     }
     desktopUpdate.checking = true;
     const button = $('#checkUpdateBtn');
     if (button) {
       button.disabled = true;
-      button.textContent = 'Проверяем…';
+      button.textContent = T('Проверяем…');
     }
-    if (manual) setDesktopUpdateStatus('Проверяем обновления…');
+    if (manual) setDesktopUpdateStatus(T('Проверяем обновления…'));
     try {
       const info = await desktop.checkUpdate();
       const current = info && info.currentVersion ? String(info.currentVersion) : APP_VERSION;
@@ -2232,25 +2283,25 @@
       desktopUpdate.available = !!(info && info.available);
       desktopUpdate.version = info && info.version ? String(info.version) : '';
       if (desktopUpdate.available) {
-        setDesktopUpdateStatus('Доступна версия ' + (desktopUpdate.version || '—') + '. Можно скачать и установить её здесь.', 'pos');
+        setDesktopUpdateStatus(T('Доступна версия {version}. Можно скачать и установить её здесь.').replace('{version}', desktopUpdate.version || '—'), 'pos');
         setDownloadUpdateButton(true);
         showUpdateBanner(
-          'Доступно обновление TradeJournal',
-          'Версия ' + (desktopUpdate.version || '') + ' готова к установке. Приложение скачает обновление и перезапустится.',
-          'Установить'
+          T('Доступно обновление TradeJournal'),
+          T('Версия {version} готова к установке. Приложение скачает обновление и перезапустится.').replace('{version}', desktopUpdate.version || ''),
+          T('Установить')
         );
       } else {
-        setDesktopUpdateStatus('Установлена последняя версия (' + current + ').', 'pos');
+        setDesktopUpdateStatus(T('Установлена последняя версия ({version}).').replace('{version}', current), 'pos');
         setDownloadUpdateButton(false);
       }
     } catch (err) {
-      const message = err && err.message ? err.message : String(err || 'неизвестная ошибка');
-      setDesktopUpdateStatus('Не удалось проверить обновления: ' + message, 'neg');
+      const message = err && err.message ? err.message : T('неизвестная ошибка');
+      setDesktopUpdateStatus(T('Не удалось проверить обновления: {error}').replace('{error}', message), 'neg');
     } finally {
       desktopUpdate.checking = false;
       if (button) {
         button.disabled = false;
-        button.textContent = 'Проверить обновления';
+        button.textContent = T('Проверить обновления');
       }
     }
   }
@@ -2267,40 +2318,40 @@
     const checkButton = $('#checkUpdateBtn');
     if (bannerButton) {
       bannerButton.disabled = true;
-      bannerButton.textContent = 'Устанавливаем…';
+      bannerButton.textContent = T('Устанавливаем…');
     }
     if (downloadButton) {
       downloadButton.disabled = true;
-      downloadButton.textContent = 'Скачиваем…';
+      downloadButton.textContent = T('Скачиваем…');
     }
     if (checkButton) checkButton.disabled = true;
-    setDesktopUpdateStatus('Скачиваем и устанавливаем обновление…');
+    setDesktopUpdateStatus(T('Скачиваем и устанавливаем обновление…'));
     try {
       await desktop.installUpdate();
       desktopUpdate.available = false;
-      setDesktopUpdateStatus('Обновление установлено. Приложение перезапустится.', 'pos');
+      setDesktopUpdateStatus(T('Обновление установлено. Приложение перезапустится.'), 'pos');
       const banner = $('#updateBanner');
       if (banner) banner.hidden = true;
       setDownloadUpdateButton(false);
       toast('Обновление установлено. Приложение перезапустится.');
     } catch (err) {
-      const message = err && err.message ? err.message : String(err || 'неизвестная ошибка');
-      setDesktopUpdateStatus('Не удалось установить обновление: ' + message, 'neg');
-      toast('Не удалось установить обновление: ' + message, 'error');
+      const message = err && err.message ? err.message : T('неизвестная ошибка');
+      setDesktopUpdateStatus(T('Не удалось установить обновление: {error}').replace('{error}', message), 'neg');
+      toast(T('Не удалось установить обновление: {error}').replace('{error}', message), 'error', null, { skip: true });
       if (bannerButton) {
         bannerButton.disabled = false;
-        bannerButton.textContent = 'Установить';
+        bannerButton.textContent = T('Установить');
       }
       if (downloadButton) {
         downloadButton.disabled = false;
-        downloadButton.textContent = 'Скачать и установить';
+        downloadButton.textContent = T('Скачать и установить');
       }
     } finally {
       desktopUpdate.installing = false;
       if (checkButton) checkButton.disabled = false;
       if (bannerButton && desktopUpdate.available) {
         bannerButton.disabled = false;
-        bannerButton.textContent = 'Установить';
+        bannerButton.textContent = T('Установить');
       }
     }
   }
@@ -2345,10 +2396,10 @@
           '<button type="button" class="btn btn-ghost btn-sm" data-backup="' + U.escapeHtml(backup.name) + '">Восстановить</button>' +
         '</div>';
       }).join('') + (backups.length > visible.length
-        ? '<p class="muted small">Показаны последние ' + visible.length + ' из ' + backups.length + ' копий. Остальные лежат в папке backups.</p>'
+        ? '<p class="muted small">' + U.escapeHtml(T('Показаны последние {visible} из {total} копий. Остальные лежат в папке backups.').replace('{visible}', visible.length).replace('{total}', backups.length)) + '</p>'
         : '');
     } catch (err) {
-      list.innerHTML = '<p class="muted small">Не удалось прочитать список резервных копий. Откройте папку данных вручную.</p>';
+      list.innerHTML = '<p class="muted small">' + U.escapeHtml(T('Не удалось прочитать список резервных копий. Откройте папку данных вручную.')) + '</p>';
     }
   }
 
@@ -2383,14 +2434,18 @@
     }).join('');
     if (unused.length > visible.length) {
       note.hidden = false;
-      note.textContent = 'Показаны первые ' + visible.length + ' из ' + unused.length + '. Кнопка удалит все найденные неиспользуемые файлы.';
+      note.textContent = T('Показаны первые {visible} из {total}. Кнопка удалит все найденные неиспользуемые файлы.')
+        .replace('{visible}', visible.length)
+        .replace('{total}', unused.length);
     } else {
       note.hidden = true;
       note.textContent = '';
     }
     $('#unusedSummary').textContent = U.bytes(data.unusedSize || 0);
     button.disabled = false;
-    button.textContent = 'Удалить неиспользуемые (' + unused.length + ' · ' + U.bytes(data.unusedSize || 0) + ')';
+    button.textContent = T('Удалить неиспользуемые ({count} · {size})')
+      .replace('{count}', unused.length)
+      .replace('{size}', U.bytes(data.unusedSize || 0));
   }
 
   function renderStorageHealth(data) {
@@ -2404,22 +2459,29 @@
     $('#healthShotsMeta').textContent = (data.screenshotsCount || 0) + ' ' + U.plural(data.screenshotsCount || 0, ['файл', 'файла', 'файлов']);
     $('#healthBackupsMeta').textContent = (data.backupsCount || 0) + ' ' + U.plural(data.backupsCount || 0, ['копия', 'копии', 'копий']);
 
-    const warnings = Array.isArray(data.warnings) ? data.warnings.filter(Boolean) : [];
+    const translateMsg = desktop && typeof desktop.translateMessage === 'function'
+      ? desktop.translateMessage
+      : T;
+    const warnings = Array.isArray(data.warnings) ? data.warnings.filter(Boolean).map(translateMsg) : [];
     const parts = [
-      'Ссылок на скриншоты в журнале и копиях: ' + (data.referencedCount || 0) + '.'
+      T('Ссылок на скриншоты в журнале и копиях: {count}.').replace('{count}', data.referencedCount || 0)
     ];
     if (warnings.length) {
       parts.push(warnings.join(' '));
     }
     if (data.missingCount) {
-      parts.push('Не хватает файлов по ссылкам: ' + data.missingCount + ' — возможно, они были удалены вручную.');
+      parts.push(T('Не хватает файлов по ссылкам: {count} — возможно, они были удалены вручную.').replace('{count}', data.missingCount));
     }
     if (data.unusedCount) {
-      parts.push('Найдено неиспользуемых файлов: ' + data.unusedCount + ' на ' + U.bytes(data.unusedSize || 0) + '.');
+      parts.push(
+        T('Найдено неиспользуемых файлов: {count} на {size}.')
+          .replace('{count}', data.unusedCount)
+          .replace('{size}', U.bytes(data.unusedSize || 0))
+      );
     } else if (warnings.length) {
-      parts.push('Очистка неиспользуемых файлов отключена, пока есть повреждённые файлы.');
+      parts.push(T('Очистка неиспользуемых файлов отключена, пока есть повреждённые файлы.'));
     } else {
-      parts.push('Неиспользуемых скриншотов не найдено.');
+      parts.push(T('Неиспользуемых скриншотов не найдено.'));
     }
     setStorageHealthStatus(parts.join(' '), (warnings.length || data.missingCount) ? 'warn' : '');
     renderUnusedScreenshots(data);
@@ -2431,22 +2493,22 @@
     const button = $('#scanStorageBtn');
     if (button) {
       button.disabled = true;
-      button.textContent = 'Проверяем…';
+      button.textContent = T('Проверяем…');
     }
-    if (manual) setStorageHealthStatus('Проверяем журнал, скриншоты и резервные копии…');
+    if (manual) setStorageHealthStatus(T('Проверяем журнал, скриншоты и резервные копии…'));
     try {
       const data = await desktop.storageHealth();
       renderStorageHealth(data || {});
       if (manual) toast('Хранилище проверено');
     } catch (err) {
-      const message = err && err.message ? err.message : String(err || 'неизвестная ошибка');
-      setStorageHealthStatus('Не удалось проверить хранилище: ' + message, 'error');
-      if (manual) toast('Не удалось проверить хранилище: ' + message, 'error');
+      const message = err && err.message ? err.message : T('неизвестная ошибка');
+      setStorageHealthStatus(T('Не удалось проверить хранилище: {error}').replace('{error}', message), 'error');
+      if (manual) toast(T('Не удалось проверить хранилище: {error}').replace('{error}', message), 'error', null, { skip: true });
     } finally {
       state.storageHealthScanning = false;
       if (button) {
         button.disabled = false;
-        button.textContent = 'Проверить';
+        button.textContent = T('Проверить');
       }
     }
   }
@@ -2459,7 +2521,11 @@
 
     askConfirm({
       title: 'Удалить неиспользуемые скриншоты?',
-      text: 'Будет удалено ' + unused.length + ' ' + pluralScreenshots(unused.length) + ' на ' + U.bytes(data.unusedSize || 0) + '. Файлы, на которые ссылаются журнал, предыдущая версия или резервные копии, не затрагиваются. Действие нельзя отменить.',
+      text: T('Будет удалено {count} {unit} на {size}. Файлы, на которые ссылаются журнал, предыдущая версия или резервные копии, не затрагиваются. Действие нельзя отменить.')
+        .replace('{count}', unused.length)
+        .replace('{unit}', pluralScreenshots(unused.length))
+        .replace('{size}', U.bytes(data.unusedSize || 0)),
+      textReady: true,
       okLabel: 'Удалить'
     }).then(async function (confirmed) {
       if (!confirmed) return;
@@ -2467,7 +2533,7 @@
       const button = $('#cleanupScreenshotsBtn');
       if (button) {
         button.disabled = true;
-        button.textContent = 'Удаляем…';
+        button.textContent = T('Удаляем…');
       }
       try {
         const result = await desktop.cleanupUnusedScreenshots(unused.map(function (file) { return file.name; }));
@@ -2475,31 +2541,36 @@
         const skippedRecent = result && result.skippedRecent ? result.skippedRecent : 0;
         const message = [];
         if (deleted) {
-          message.push('Удалено ' + deleted + ' ' + pluralScreenshots(deleted) + ' (' + U.bytes(result.deletedSize || 0) + ').');
+          message.push(
+            T('Удалено {count} {unit} ({size}).')
+              .replace('{count}', deleted)
+              .replace('{unit}', pluralScreenshots(deleted))
+              .replace('{size}', U.bytes(result.deletedSize || 0))
+          );
         } else if (skippedRecent) {
-          message.push('Недавно созданные файлы пока не удаляются — повторите проверку позже.');
+          message.push(T('Недавно созданные файлы пока не удаляются — повторите проверку позже.'));
         } else {
-          message.push('Нечего удалять: файлы уже отсутствуют или используются.');
+          message.push(T('Нечего удалять: файлы уже отсутствуют или используются.'));
         }
         if (deleted && skippedRecent) {
-          message.push('Пропущено недавно созданных файлов: ' + skippedRecent + '.');
+          message.push(T('Пропущено недавно созданных файлов: {count}.').replace('{count}', skippedRecent));
         }
-        toast(message.join(' '), deleted ? 'success' : 'warn');
+        toast(message.join(' '), deleted ? 'success' : 'warn', null, { skip: true });
         if (result && Array.isArray(result.failed) && result.failed.length) {
-          toast('Не удалось удалить файлов: ' + result.failed.length + '. Проверьте папку данных.', 'error');
+          toast(T('Не удалось удалить файлов: {count}. Проверьте папку данных.').replace('{count}', result.failed.length), 'error', null, { skip: true });
         }
         await scanStorageHealth(false);
       } catch (err) {
-        const message = err && err.message ? err.message : String(err || 'неизвестная ошибка');
-        setStorageHealthStatus('Не удалось удалить скриншоты: ' + message, 'error');
-        toast('Не удалось удалить скриншоты: ' + message, 'error');
+        const message = err && err.message ? err.message : T('неизвестная ошибка');
+        setStorageHealthStatus(T('Не удалось удалить скриншоты: {error}').replace('{error}', message), 'error');
+        toast(T('Не удалось удалить скриншоты: {error}').replace('{error}', message), 'error', null, { skip: true });
       } finally {
         state.storageHealthCleaning = false;
         if (state.storageHealthData) {
           renderUnusedScreenshots(state.storageHealthData);
         } else if (button) {
           button.disabled = false;
-          button.textContent = 'Удалить неиспользуемые';
+          button.textContent = T('Удалить неиспользуемые');
         }
       }
     });
@@ -2516,7 +2587,7 @@
       refreshDesktopBackups();
       toast('Резервная копия создана');
     } catch (err) {
-      toast('Не удалось создать резервную копию: ' + (err && err.message ? err.message : err), 'error');
+      toast(T('Не удалось создать резервную копию: {error}').replace('{error}', err && err.message ? err.message : err), 'error', null, { skip: true });
     }
   }
 
@@ -2528,7 +2599,7 @@
         toast(result && result.error ? result.error : 'Не удалось открыть папку данных.', 'error');
       }
     } catch (err) {
-      toast('Не удалось открыть папку данных: ' + (err && err.message ? err.message : err), 'error');
+      toast(T('Не удалось открыть папку данных: {error}').replace('{error}', err && err.message ? err.message : err), 'error', null, { skip: true });
     }
   }
 
@@ -2560,7 +2631,7 @@
         refreshDesktopBackups();
         toast('Резервная копия восстановлена');
       } catch (err) {
-        toast('Не удалось восстановить копию: ' + (err && err.message ? err.message : err), 'error');
+        toast(T('Не удалось восстановить копию: {error}').replace('{error}', err && err.message ? err.message : err), 'error', null, { skip: true });
       }
     });
   }
@@ -2594,7 +2665,7 @@
       if (!name) return toast('У каждой торговой сессии должно быть название.', 'error');
       if (seenNames.has(name.toLowerCase())) return toast('Названия торговых сессий должны быть разными.', 'error');
       const start = U.validTimeHM(session.start);
-      if (!start) return toast('Укажите время начала для сессии «' + name + '».', 'error');
+      if (!start) return toast(T('Укажите время начала для сессии «{name}».').replace('{name}', name), 'error', null, { skip: true });
       if (seenStarts.has(start)) return toast('Время начала торговых сессий должно быть разным.', 'error');
       let key = String(session.key || '').trim();
       if (!/^[A-Za-z0-9_-]{1,40}$/.test(key) || seenKeys.has(key)) key = U.newSessionKey();
@@ -2764,7 +2835,7 @@
     }
     askConfirm({
       title: 'Удалить счёт?',
-      text: T('Счёт') + ' «' + account.name + '» ' + T('и все его сделки и записи будут удалены. Сразу после удаления действие можно будет отменить.'),
+      text: T('Счёт «{name}» и все его сделки и записи будут удалены. Сразу после удаления действие можно будет отменить.').replace('{name}', account.name),
       textReady: true,
       okLabel: 'Удалить'
     }).then(async function (confirmed) {
@@ -2855,10 +2926,10 @@
     const meta = readBackupMeta();
     const parts = [];
     const last = formatBackupTime(meta.lastExportAt);
-    parts.push(last ? 'Последняя резервная копия: ' + last + '.' : 'Резервная копия ещё не создавалась.');
+    parts.push(last ? T('Последняя резервная копия: {date}.').replace('{date}', last) : T('Резервная копия ещё не создавалась.'));
     const remindLater = Date.parse(meta.remindLaterUntil);
     if (Number.isFinite(remindLater) && remindLater > Date.now()) {
-      parts.push('Напоминание отложено до ' + formatBackupTime(meta.remindLaterUntil) + '.');
+      parts.push(T('Напоминание отложено до {date}.').replace('{date}', formatBackupTime(meta.remindLaterUntil)));
     }
     el.textContent = parts.join(' ');
   }
@@ -2902,7 +2973,7 @@
       markBackupExported();
       toast('Резервная копия скачана');
     } catch (err) {
-      toast('Не удалось подготовить экспорт: ' + (err && err.message ? err.message : err), 'error');
+      toast(T('Не удалось подготовить экспорт: {error}').replace('{error}', err && err.message ? err.message : err), 'error', null, { skip: true });
     }
   }
 
@@ -2936,13 +3007,22 @@
 
   async function exportCSV() {
     const trades = store.sortTrades(store.state.trades, 'desc');
-    const headers = [
-      'Дата', 'Время', 'Инструмент', 'Направление', 'Вход', 'Выход', 'Стоп при входе',
-      'Текущий стоп', 'Тейк', 'Количество', 'Множитель', 'Комиссия', 'Выходы',
-      'Остаток', 'Статус', 'P&L', 'R', 'Сетап', 'Эмоция', 'Дисциплина', 'Теги', 'Заметка'
-    ];
+    const english = NS.i18n && typeof NS.i18n.lang === 'function' && NS.i18n.lang() === 'en';
+    const headers = english
+      ? [
+        'Date', 'Time', 'Symbol', 'Side', 'Entry', 'Exit', 'Initial Stop',
+        'Current Stop', 'Target', 'Qty', 'Multiplier', 'Fees', 'Exits',
+        'Remaining', 'Status', 'P&L', 'R', 'Setup', 'Emotion', 'Discipline', 'Tags', 'Notes'
+      ]
+      : [
+        'Дата', 'Время', 'Инструмент', 'Направление', 'Вход', 'Выход', 'Стоп при входе',
+        'Текущий стоп', 'Тейк', 'Количество', 'Множитель', 'Комиссия', 'Выходы',
+        'Остаток', 'Статус', 'P&L', 'R', 'Сетап', 'Эмоция', 'Дисциплина', 'Теги', 'Заметка'
+      ];
     const lines = [headers.map(csvCell).join(';')];
-    const statusLabels = { closed: 'Закрыта', partial: 'Частично закрыта', open: 'Открыта' };
+    const statusLabels = english
+      ? { closed: 'Closed', partial: 'Partially closed', open: 'Open' }
+      : { closed: 'Закрыта', partial: 'Частично закрыта', open: 'Открыта' };
     trades.forEach(function (trade) {
       const emotion = U.emotionMeta(trade.emotion);
       const pnl = store.hasRealized(trade) ? store.tradePnl(trade) : null;
@@ -2995,21 +3075,25 @@
         return sum + (account.trades || []).filter(function (trade) { return !!trade.screenshot; }).length;
       }, 0);
       const readme = [
-        'TradeJournal — резервная копия',
+        T('TradeJournal — резервная копия'),
         '',
-        'Версия приложения: ' + APP_VERSION,
-        'Дата экспорта: ' + exportedAt,
-        'Счетов: ' + accounts.length + ', сделок: ' + tradeCount + ', записей журнала: ' + noteCount + ', скриншотов: ' + shotCount + '.',
+        T('Версия приложения: {version}').replace('{version}', APP_VERSION),
+        T('Дата экспорта: {date}').replace('{date}', exportedAt),
+        T('Счетов: {accounts}, сделок: {trades}, записей журнала: {notes}, скриншотов: {shots}.')
+          .replace('{accounts}', accounts.length)
+          .replace('{trades}', tradeCount)
+          .replace('{notes}', noteCount)
+          .replace('{shots}', shotCount),
         '',
-        'Файл journal.json содержит все счета, сделки, записи и скриншоты.',
-        'Скриншоты встроены в JSON, поэтому архив можно перенести на другое устройство.',
+        T('Файл journal.json содержит все счета, сделки, записи и скриншоты.'),
+        T('Скриншоты встроены в JSON, поэтому архив можно перенести на другое устройство.'),
         '',
-        'Как восстановить:',
-        '1. Откройте TradeJournal.',
-        '2. Настройки → «Импорт JSON».',
-        '3. Выберите journal.json из этого архива.',
+        T('Как восстановить:'),
+        T('1. Откройте TradeJournal.'),
+        T('2. Настройки → «Импорт JSON / ZIP».'),
+        T('3. Выберите journal.json из этого архива.'),
         '',
-        'Импорт заменяет текущие данные журнала. Перед восстановлением сделайте резервную копию текущего состояния.',
+        T('Импорт заменяет текущие данные журнала. Перед восстановлением сделайте резервную копию текущего состояния.'),
         ''
       ].join('\r\n');
       const archive = NS.zip.create([
@@ -3021,7 +3105,7 @@
       markBackupExported();
       toast('ZIP-архив со скриншотами скачан');
     } catch (err) {
-      toast('Не удалось подготовить ZIP-архив: ' + (err && err.message ? err.message : err), 'error');
+      toast(T('Не удалось подготовить ZIP-архив: {error}').replace('{error}', err && err.message ? err.message : err), 'error', null, { skip: true });
     }
   }
 
@@ -3052,39 +3136,41 @@
     if (!data) return;
     const result = data.result;
     const stats = result.stats || {};
-    const delimiterLabels = { ';': 'точка с запятой', ',': 'запятая', '\t': 'табуляция' };
+    const delimiterLabels = { ';': T('точка с запятой'), ',': T('запятая'), '\t': T('табуляция') };
     summary.innerHTML = [
-      ['Файл', data.fileName],
-      ['Строк', stats.rows || 0],
-      ['К импорту', result.trades.length],
-      ['Дубликаты', result.duplicates || 0],
-      ['Выходы', stats.exits || 0],
-      ['Разделитель', delimiterLabels[result.delimiter] || result.delimiter]
+      [T('Файл'), data.fileName],
+      [T('Строк'), stats.rows || 0],
+      [T('К импорту'), result.trades.length],
+      [T('Дубликаты'), result.duplicates || 0],
+      [T('Выходы'), stats.exits || 0],
+      [T('Разделитель'), delimiterLabels[result.delimiter] || result.delimiter]
     ].map(function (item) {
-      return '<span class="chip"><b>' + U.escapeHtml(item[0]) + ':</b> ' + U.escapeHtml(item[1]) + '</span>';
+      return '<span class="chip"><b>' + U.escapeHtml(item[0]) + ':</b> <span data-i18n-skip>' + U.escapeHtml(item[1]) + '</span></span>';
     }).join('');
 
     const alertHtml = [];
     if (result.errors.length) {
-      alertHtml.push('<div class="csv-alert error"><b>Ошибки (' + result.errors.length + '):</b> ' +
+      alertHtml.push('<div class="csv-alert error"><b>' + U.escapeHtml(T('Ошибки ({count}):').replace('{count}', result.errors.length)) + '</b> <span data-i18n-skip>' +
         U.escapeHtml(result.errors.slice(0, 6).join(' ')) +
-        (result.errors.length > 6 ? ' …' : '') + '</div>');
+        (result.errors.length > 6 ? ' …' : '') + '</span></div>');
     }
     if (result.warnings.length) {
-      alertHtml.push('<div class="csv-alert warn"><b>Предупреждения (' + result.warnings.length + '):</b> ' +
+      alertHtml.push('<div class="csv-alert warn"><b>' + U.escapeHtml(T('Предупреждения ({count}):').replace('{count}', result.warnings.length)) + '</b> <span data-i18n-skip>' +
         U.escapeHtml(result.warnings.slice(0, 5).join(' ')) +
-        (result.warnings.length > 5 ? ' …' : '') + '</div>');
+        (result.warnings.length > 5 ? ' …' : '') + '</span></div>');
     }
     const account = store.activeAccount();
-    alertHtml.push('<div class="csv-alert info">Сделки будут добавлены в активный счёт «<span data-i18n-skip>' +
-      U.escapeHtml(account ? account.name : '—') + '</span>». Существующие сделки не изменятся.</div>');
+    alertHtml.push('<div class="csv-alert info">' +
+      T('Сделки будут добавлены в активный счёт «{name}». Существующие сделки не изменятся.')
+        .replace('{name}', '<span data-i18n-skip>' + U.escapeHtml(account ? account.name : '—') + '</span>') +
+      '</div>');
     if (!result.trades.length) {
-      alertHtml.push('<div class="csv-alert warn">Нет строк, готовых к импорту. Исправьте файл и попробуйте снова.</div>');
+      alertHtml.push('<div class="csv-alert warn">' + U.escapeHtml(T('Нет строк, готовых к импорту. Исправьте файл и попробуйте снова.')) + '</div>');
     }
     alerts.innerHTML = alertHtml.join('');
 
     if (!result.trades.length) {
-      body.innerHTML = '<tr><td colspan="8" class="csv-empty">Нет данных для предпросмотра</td></tr>';
+      body.innerHTML = '<tr><td colspan="8" class="csv-empty">' + U.escapeHtml(T('Нет данных для предпросмотра')) + '</td></tr>';
     } else {
       body.innerHTML = result.trades.slice(0, 200).map(function (raw) {
         const trade = store.normalizeTrade(raw, { timeZone: accountTimeZone() });
@@ -3103,11 +3189,11 @@
           '<td class="num ' + (pnl !== null ? toneClass(pnl) : '') + '">' + (pnl !== null ? U.escapeHtml(U.money(pnl, { sign: true })) : '—') + '</td>' +
           '<td data-i18n-skip>' + U.escapeHtml(trade.setup || '—') + '</td>' +
           '</tr>';
-      }).join('') + (result.trades.length > 200 ? '<tr><td colspan="8" class="csv-empty">Показаны первые 200 из ' + result.trades.length + ' строк</td></tr>' : '');
+      }).join('') + (result.trades.length > 200 ? '<tr><td colspan="8" class="csv-empty">' + U.escapeHtml(T('Показаны первые 200 из {count} строк').replace('{count}', result.trades.length)) + '</td></tr>' : '');
     }
     if (confirm) {
       confirm.disabled = !result.trades.length;
-      confirm.textContent = result.trades.length ? 'Импортировать ' + result.trades.length : 'Импортировать';
+      confirm.textContent = result.trades.length ? T('Импортировать {count}').replace('{count}', result.trades.length) : T('Импортировать');
     }
   }
 
@@ -3150,15 +3236,21 @@
     state.page = 1;
     applyCurrency();
     renderAll();
-    toast('Импортировано сделок: ' + added + (skipped ? '. Пропущено дубликатов: ' + skipped : ''), 'success', {
-      label: 'Отменить',
-      onClick: async function () {
-        const restored = await store.replaceData(before);
-        applyCurrency();
-        renderAll();
-        toast(restored ? 'Импорт CSV отменён' : 'Не удалось отменить импорт', restored ? 'success' : 'error');
-      }
-    });
+    toast(
+      T('Импортировано сделок: {added}').replace('{added}', added) +
+        (skipped ? '. ' + T('Пропущено дубликатов: {skipped}').replace('{skipped}', skipped) : ''),
+      'success',
+      {
+        label: 'Отменить',
+        onClick: async function () {
+          const restored = await store.replaceData(before);
+          applyCurrency();
+          renderAll();
+          toast(restored ? 'Импорт CSV отменён' : 'Не удалось отменить импорт', restored ? 'success' : 'error');
+        }
+      },
+      { skip: true }
+    );
   }
 
   function importJSONFile(file) {
@@ -3200,7 +3292,7 @@
     try {
       data = await NS.zip.readJournal(arrayBuffer);
     } catch (err) {
-      toast('Не удалось открыть ZIP-архив: ' + (err && err.message ? err.message : err), 'error');
+      toast(T('Не удалось открыть ZIP-архив: {error}').replace('{error}', err && err.message ? err.message : err), 'error', null, { skip: true });
       return;
     }
     importJSONData(data);
@@ -3215,40 +3307,61 @@
     const currentNotes = store.state.accounts.reduce(function (sum, account) { return sum + account.notes.length; }, 0);
     const stats = store.analyzeImport(data);
     const dropReasons = [];
-    if (stats.missingSymbols) dropReasons.push('без символа: ' + stats.missingSymbols);
-    if (stats.invalidDates) dropReasons.push('битая дата: ' + stats.invalidDates);
-    const replacementSummary = 'Будет заменено ' + currentTrades + ' ' + pluralTrades(currentTrades) +
-      ', ' + stats.tradesDropped + ' ' + pluralTrades(stats.tradesDropped) + ' отброшено' +
-      (dropReasons.length ? ' (' + dropReasons.join(', ') + ')' : '') + '.';
+    if (stats.missingSymbols) dropReasons.push(T('без символа: {count}').replace('{count}', stats.missingSymbols));
+    if (stats.invalidDates) dropReasons.push(T('битая дата: {count}').replace('{count}', stats.invalidDates));
+    const replacementSummary = T('Будет заменено {replaced} {replacedUnit}, {dropped} {droppedUnit} отброшено{reasons}.')
+      .replace('{replaced}', currentTrades)
+      .replace('{replacedUnit}', pluralTrades(currentTrades))
+      .replace('{dropped}', stats.tradesDropped)
+      .replace('{droppedUnit}', pluralTrades(stats.tradesDropped))
+      .replace('{reasons}', dropReasons.length ? ' (' + dropReasons.join(', ') + ')' : '');
     const details = [
-      'Все счета, сделки и записи будут заменены данными из файла. Рекомендуем сначала сделать экспорт текущего журнала.',
+      T('Все счета, сделки и записи будут заменены данными из файла. Рекомендуем сначала сделать экспорт текущего журнала.'),
       replacementSummary,
-      'Сейчас: счетов ' + store.state.accounts.length + ', сделок ' + currentTrades + ', записей ' + currentNotes + '.',
-      'В файле: счетов ' + stats.accounts + ', сделок ' + stats.trades + ', записей ' + stats.notes + ', скриншотов ' + stats.screenshots + '.',
-      'Будет импортировано: сделок ' + stats.tradesAccepted + ', записей ' + stats.notesAccepted + ', скриншотов ' + stats.screenshotsAccepted + '.'
+      T('Сейчас: счетов {accounts}, сделок {trades}, записей {notes}.')
+        .replace('{accounts}', store.state.accounts.length)
+        .replace('{trades}', currentTrades)
+        .replace('{notes}', currentNotes),
+      T('В файле: счетов {accounts}, сделок {trades}, записей {notes}, скриншотов {shots}.')
+        .replace('{accounts}', stats.accounts)
+        .replace('{trades}', stats.trades)
+        .replace('{notes}', stats.notes)
+        .replace('{shots}', stats.screenshots),
+      T('Будет импортировано: сделок {trades}, записей {notes}, скриншотов {shots}.')
+        .replace('{trades}', stats.tradesAccepted)
+        .replace('{notes}', stats.notesAccepted)
+        .replace('{shots}', stats.screenshotsAccepted)
     ];
     if (stats.tradesDropped) {
-      details.push('Отброшенные сделки не попадут в журнал: без символа импортировать нельзя, а битую дату не подменяем сегодняшней.');
+      details.push(T('Отброшенные сделки не попадут в журнал: без символа импортировать нельзя, а битую дату не подменяем сегодняшней.'));
     }
     if (stats.notesDropped) {
-      details.push('Не будет импортировано записей: ' + stats.notesDropped + '.');
+      details.push(T('Не будет импортировано записей: {count}.').replace('{count}', stats.notesDropped));
     }
     if (stats.screenshotsDropped) {
       const dropped = stats.screenshotsDropped;
       const singular = dropped % 10 === 1 && dropped % 100 !== 11;
       const reasons = [];
-      if (stats.screenshotsTooLarge) reasons.push('слишком большой размер: ' + stats.screenshotsTooLarge);
-      if (stats.screenshotsInvalid) reasons.push('неподдерживаемый формат: ' + stats.screenshotsInvalid);
-      details.push('Внимание: ' + dropped + ' ' + pluralScreenshots(dropped) + (singular ? ' не будет импортирован' : ' не будут импортированы') + (reasons.length ? ' (' + reasons.join(', ') + ')' : '') + '. Эти скриншоты будут потеряны.');
+      if (stats.screenshotsTooLarge) reasons.push(T('слишком большой размер: {count}').replace('{count}', stats.screenshotsTooLarge));
+      if (stats.screenshotsInvalid) reasons.push(T('неподдерживаемый формат: {count}').replace('{count}', stats.screenshotsInvalid));
+      details.push(
+        T(singular
+          ? 'Внимание: {count} {unit} не будет импортирован{reasons}. Эти скриншоты будут потеряны.'
+          : 'Внимание: {count} {unit} не будут импортированы{reasons}. Эти скриншоты будут потеряны.')
+          .replace('{count}', dropped)
+          .replace('{unit}', pluralScreenshots(dropped))
+          .replace('{reasons}', reasons.length ? ' (' + reasons.join(', ') + ')' : '')
+      );
     }
     if (stats.fileScreenshots) {
-      details.push('Скриншотов-ссылок на файлы: ' + stats.fileScreenshots + '. Они откроются только на ПК, где создан бэкап.');
+      details.push(T('Скриншотов-ссылок на файлы: {count}. Они откроются только на ПК, где создан бэкап.').replace('{count}', stats.fileScreenshots));
     }
-    details.push('Сразу после импорта действие можно будет отменить.');
+    details.push(T('Сразу после импорта действие можно будет отменить.'));
 
     askConfirm({
       title: 'Импортировать данные?',
       text: details.join(' '),
+      textReady: true,
       okLabel: 'Импортировать'
     }).then(async function (confirmed) {
       if (!confirmed) return;
@@ -3269,9 +3382,12 @@
       const importedAccounts = store.state.accounts.length;
       const importedTrades = store.state.accounts.reduce(function (sum, account) { return sum + account.trades.length; }, 0);
       const importedNotes = store.state.accounts.reduce(function (sum, account) { return sum + account.notes.length; }, 0);
-      let importedMessage = 'Импортировано: счетов ' + importedAccounts + ', сделок ' + importedTrades + ', записей ' + importedNotes;
+      let importedMessage = T('Импортировано: счетов {accounts}, сделок {trades}, записей {notes}')
+        .replace('{accounts}', importedAccounts)
+        .replace('{trades}', importedTrades)
+        .replace('{notes}', importedNotes);
       if (stats.screenshotsDropped) {
-        importedMessage += '. Не импортировано скриншотов: ' + stats.screenshotsDropped;
+        importedMessage += '. ' + T('Не импортировано скриншотов: {count}').replace('{count}', stats.screenshotsDropped);
       }
       toast(importedMessage, stats.screenshotsDropped ? 'warn' : 'success', {
         label: 'Отменить',
@@ -3284,7 +3400,7 @@
           renderAll();
           toast(restored ? 'Импорт отменён, прежние данные восстановлены' : 'Не удалось сохранить откат', restored ? 'success' : 'error');
         }
-      });
+      }, { skip: true });
     });
   }
 
@@ -3580,7 +3696,7 @@
 
   function addExitRow(qty, price) {
     if (state.tradeExits.length >= (store.MAX_EXITS || 50)) {
-      toast('Слишком много выходов: максимум ' + (store.MAX_EXITS || 50) + '.', 'warn');
+      toast(T('Слишком много выходов: максимум {max}.').replace('{max}', store.MAX_EXITS || 50), 'warn', null, { skip: true });
       return;
     }
     state.tradeExits.push({
@@ -4119,9 +4235,9 @@
     if (remainingEl) {
       const epsilon = store.QTY_EPSILON || 1e-9;
       if (qty === null || qty <= 0) remainingEl.textContent = '—';
-      else if (!exits.length) remainingEl.textContent = U.qty(qty) + ' открыто';
-      else if (remaining <= epsilon) remainingEl.textContent = 'Закрыта';
-      else remainingEl.textContent = U.qty(remaining) + ' остаток';
+      else if (!exits.length) remainingEl.textContent = U.qty(qty) + ' ' + T('открыто');
+      else if (remaining <= epsilon) remainingEl.textContent = T('Закрыта');
+      else remainingEl.textContent = U.qty(remaining) + ' ' + T('остаток');
       remainingEl.className = remaining !== null && remaining > epsilon && exits.length ? 'neutral' : '';
     }
     updateExitsSummary();
@@ -4136,8 +4252,12 @@
       if (!qtyRaw && !priceRaw) continue;
       const qty = U.parseNum(qtyRaw);
       const price = U.parseNum(priceRaw);
-      if (qty === null || qty <= 0) return { error: 'Выход ' + (i + 1) + ': количество должно быть больше нуля.' };
-      if (price === null) return { error: 'Выход ' + (i + 1) + ': укажите цену выхода.' };
+      if (qty === null || qty <= 0) {
+        return { error: T('Выход {index}: количество должно быть больше нуля.').replace('{index}', i + 1) };
+      }
+      if (price === null) {
+        return { error: T('Выход {index}: укажите цену выхода.').replace('{index}', i + 1) };
+      }
       exits.push({
         id: row.id,
         qty: qty,
@@ -4191,7 +4311,7 @@
 
     if (error) {
       $('#tradeError').hidden = false;
-      $('#tradeError').textContent = error;
+      $('#tradeError').textContent = T(error);
       return;
     }
 
@@ -4447,7 +4567,7 @@
     else if (!text) error = 'Запись не может быть пустой.';
     if (error) {
       $('#noteError').hidden = false;
-      $('#noteError').textContent = error;
+      $('#noteError').textContent = T(error);
       return;
     }
 
@@ -4470,14 +4590,14 @@
       state.noteId = note.id;
       $('#noteModalTitle').textContent = T(note ? 'Редактировать запись' : 'Новая запись');
       $('#deleteNoteBtn').classList.remove('hidden');
-      $('#saveNoteBtn').textContent = 'Сохранить изменения';
+      $('#saveNoteBtn').textContent = T('Сохранить изменения');
     }
 
     store.state.demo = false;
     const ok = await persist();
     if (!ok) {
       $('#noteError').hidden = false;
-      $('#noteError').textContent = 'Запись сохранена в текущей сессии, но сохранить её не удалось. Проверьте свободное место и папку данных.';
+      $('#noteError').textContent = T('Запись сохранена в текущей сессии, но сохранить её не удалось. Проверьте свободное место и папку данных.');
       return;
     }
     closeModal('noteModal');
@@ -5142,7 +5262,7 @@
   function start() {
     init().catch(function (err) {
       console.error('TradeJournal: не удалось запустить приложение', err);
-      toast('Не удалось запустить приложение: ' + (err && err.message ? err.message : err), 'error');
+      toast(T('Не удалось запустить приложение: {error}').replace('{error}', err && err.message ? err.message : err), 'error', null, { skip: true });
     });
   }
 

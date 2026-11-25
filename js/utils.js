@@ -94,6 +94,12 @@
     ? ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
     : ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
 
+  function weekdayLabels() {
+    return isEnglish()
+      ? ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+      : ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
+  }
+
   // Session boundaries are stored as start times in the account's timezone.
   // The last session wraps around midnight and lasts until the first one.
   const DEFAULT_SESSIONS = [
@@ -561,7 +567,7 @@
           path: result && result.path ? result.path : null
         };
       }, function (err) {
-        const message = err && err.message ? err.message : String(err || 'Не удалось сохранить файл.');
+        const message = err && err.message ? tr(err.message) : tr('Не удалось сохранить файл.');
         window.dispatchEvent(new CustomEvent('tj:download-error', { detail: message }));
         return { ok: false, canceled: false, error: message };
       });
@@ -589,7 +595,7 @@
       try {
         encoded = bytesToBase64(data);
       } catch (err) {
-        const message = 'Не удалось подготовить файл для сохранения.';
+        const message = tr('Не удалось подготовить файл для сохранения.');
         window.dispatchEvent(new CustomEvent('tj:download-error', { detail: message }));
         return Promise.resolve({ ok: false, canceled: false, error: message });
       }
@@ -602,7 +608,7 @@
           path: result && result.path ? result.path : null
         };
       }, function (err) {
-        const message = err && err.message ? err.message : String(err || 'Не удалось сохранить файл.');
+        const message = err && err.message ? tr(err.message) : tr('Не удалось сохранить файл.');
         window.dispatchEvent(new CustomEvent('tj:download-error', { detail: message }));
         return { ok: false, canceled: false, error: message };
       });
@@ -658,6 +664,7 @@
     addDaysISO: addDaysISO,
     formatDate: formatDate,
     weekdayIndex: weekdayIndex,
+    weekdayLabels: weekdayLabels,
     monthTitle: monthTitle,
     capitalize: capitalize,
     nowTime: nowTime,

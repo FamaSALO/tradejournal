@@ -9,10 +9,51 @@
   const platform = /Mac/i.test(userAgent) ? 'darwin' : /Win/i.test(userAgent) ? 'win32' : 'linux';
   let saveChain = Promise.resolve();
 
+  function tr(text) {
+    const i18n = window.TJ && window.TJ.i18n;
+    return i18n && typeof i18n.t === 'function' ? i18n.t(text) : text;
+  }
+
+  function translateDesktopMessage(message) {
+    const text = String(message || tr('Ошибка Tauri'));
+    const i18n = window.TJ && window.TJ.i18n;
+    if (!i18n || typeof i18n.lang !== 'function' || i18n.lang() !== 'en') return text;
+
+    const cleanupSuffix = ' Очистка отменена, чтобы не удалить нужные скриншоты.';
+    let suffix = '';
+    let core = text;
+    if (core.endsWith(cleanupSuffix)) {
+      suffix = ' ' + tr(cleanupSuffix.trim());
+      core = core.slice(0, -cleanupSuffix.length).trim();
+    }
+
+    const corruptFile = /^Файл (.+) повреждён\.$/.exec(core);
+    if (corruptFile) {
+      return tr('Файл {name} повреждён.').replace('{name}', corruptFile[1]) + suffix;
+    }
+
+    const readNamed = /^Не удалось прочитать ([^:]+): ([\s\S]+)$/.exec(core);
+    if (readNamed) {
+      const target = readNamed[1];
+      if (!/^(список копий|папку резервных копий|папку скриншотов|файл журнала)$/.test(target)) {
+        return tr('Не удалось прочитать {name}: {error}').replace('{name}', target).replace('{error}', readNamed[2]) + suffix;
+      }
+    }
+
+    const colonIndex = core.indexOf(': ');
+    if (colonIndex > 0) {
+      const prefix = core.slice(0, colonIndex + 1);
+      const rest = core.slice(colonIndex + 2);
+      const translatedPrefix = tr(prefix);
+      if (translatedPrefix !== prefix) return translatedPrefix + ' ' + rest + suffix;
+    }
+    return tr(core) + suffix;
+  }
+
   function call(command, args) {
     return invoke(command, args || {}).catch(function (err) {
-      const message = err && err.message ? err.message : String(err || 'Ошибка Tauri');
-      throw new Error(message);
+      const raw = err && err.message ? err.message : String(err || 'Ошибка Tauri');
+      throw new Error(translateDesktopMessage(raw));
     });
   }
 
@@ -31,6 +72,7 @@
   window.tradeJournalDesktop = {
     isDesktop: true,
     platform: platform,
+    translateMessage: translateDesktopMessage,
 
     hasData: function () {
       return waitForSaves().then(function () {

@@ -723,16 +723,20 @@
     return NS.blobStore.getDefault();
   }
 
+  function tr(value) {
+    return NS.i18n && typeof NS.i18n.t === 'function' ? NS.i18n.t(value) : value;
+  }
+
   function saveScreenshotData(dataUrl) {
     const value = String(dataUrl || '');
     if (!SAFE_SCREENSHOT_RE.test(value)) {
-      return Promise.reject(new Error('Некорректное изображение скриншота.'));
+      return Promise.reject(new Error(tr('Некорректное изображение скриншота.')));
     }
     if (desktop) {
       return desktop.saveScreenshot(U.uid(), value).then(function (result) {
         if (result && result.reference) return result.reference;
         if (typeof result === 'string') return result;
-        throw new Error('Не удалось сохранить скриншот.');
+        throw new Error(tr('Не удалось сохранить скриншот.'));
       });
     }
     const blobs = getBlobStore();
