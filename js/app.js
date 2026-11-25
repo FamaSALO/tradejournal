@@ -897,6 +897,18 @@
      Trades
      ============================================================ */
 
+  let collatorLocale = '';
+  let textCollator = null;
+
+  function getCollator() {
+    const loc = U.locale();
+    if (!textCollator || collatorLocale !== loc) {
+      collatorLocale = loc;
+      textCollator = new Intl.Collator(loc);
+    }
+    return textCollator;
+  }
+
   function getFilteredTrades() {
     const filters = state.filters;
     let list = store.state.trades.slice();
@@ -918,7 +930,6 @@
         const status = store.tradeStatus(trade);
         if (filters.result === 'open') return status === 'open';
         if (filters.result === 'partial') return status === 'partial';
-        if (!store.hasRealized(trade)) return false;
         const pnl = store.tradePnl(trade);
         if (pnl === null) return false;
         if (filters.result === 'win') return pnl > 0.004;
@@ -929,52 +940,67 @@
 
     const key = state.sort.key;
     const dir = state.sort.dir === 'asc' ? 1 : -1;
-    list.sort(function (a, b) {
-      let av, bv;
-      if (key === 'date') {
-        av = (a.date || '') + ' ' + (a.time || '00:00');
-        bv = (b.date || '') + ' ' + (b.time || '00:00');
-        return av.localeCompare(bv) * dir;
-      }
-      if (key === 'session') {
-        const sessions = store.state.settings.sessions;
-        const aSession = U.sessionInfo(a.time, sessions);
-        const bSession = U.sessionInfo(b.time, sessions);
-        if (!aSession && !bSession) return 0;
-        if (!aSession) return 1;
-        if (!bSession) return -1;
-        const aStart = timeToMinutes(aSession.start);
-        const bStart = timeToMinutes(bSession.start);
-        if (aStart !== bStart) return (aStart - bStart) * dir;
-        return ((a.date || '') + ' ' + (a.time || '')).localeCompare((b.date || '') + ' ' + (b.time || '')) * dir;
-      }
-      if (key === 'symbol' || key === 'setup') {
-        av = String(a[key] || '').toLowerCase();
-        bv = String(b[key] || '').toLowerCase();
-        return av.localeCompare(bv, 'ru') * dir;
-      }
-      if (key === 'pnl') {
-        av = store.hasRealized(a) ? store.tradePnl(a) : null;
-        bv = store.hasRealized(b) ? store.tradePnl(b) : null;
-      } else if (key === 'r') {
-        av = store.tradeR(a);
-        bv = store.tradeR(b);
-      } else {
-        av = U.parseNum(a[key]);
-        bv = U.parseNum(b[key]);
-      }
-      if (av === null && bv === null) return 0;
-      if (av === null) return 1;
-      if (bv === null) return -1;
-      return (av - bv) * dir;
+    if (key === 'date') {
+      const decorated = list.map(function (trade) {
+        return { trade: trade, val: (trade.date || '') + ' ' + (trade.time || '00:00') };
+      });
+      decorated.sort(function (a, b) {
+        return (a.val < b.val ? -1 : (a.val > b.val ? 1 : 0)) * dir;
+      });
+      return decorated.map(function (item) { return item.trade; });
+    }
+    if (key === 'session') {
+      const sessions = store.state.settings.sessions;
+      const decorated = list.map(function (trade) {
+        const info = U.sessionInfo(trade.time, sessions);
+        return {
+          trade: trade,
+          start: info ? timeToMinutes(info.start) : null,
+          dt: (trade.date || '') + ' ' + (trade.time || '')
+        };
+      });
+      decorated.sort(function (a, b) {
+        if (a.start === null && b.start === null) return 0;
+        if (a.start === null) return 1;
+        if (b.start === null) return -1;
+        if (a.start !== b.start) return (a.start - b.start) * dir;
+        return (a.dt < b.dt ? -1 : (a.dt > b.dt ? 1 : 0)) * dir;
+      });
+      return decorated.map(function (item) { return item.trade; });
+    }
+    if (key === 'symbol' || key === 'setup') {
+      const collator = getCollator();
+      const decorated = list.map(function (trade) {
+        return { trade: trade, val: String(trade[key] || '').toLowerCase() };
+      });
+      decorated.sort(function (a, b) {
+        return collator.compare(a.val, b.val) * dir;
+      });
+      return decorated.map(function (item) { return item.trade; });
+    }
+
+    const decorated = list.map(function (trade) {
+      let val;
+      if (key === 'pnl') val = store.tradePnl(trade);
+      else if (key === 'r') val = store.tradeR(trade);
+      else if (key === 'exit') val = store.weightedExit(trade);
+      else val = U.parseNum(trade[key]);
+      return { trade: trade, val: val };
     });
-    return list;
+    decorated.sort(function (a, b) {
+      if (a.val === null && b.val === null) return 0;
+      if (a.val === null) return 1;
+      if (b.val === null) return -1;
+      return (a.val - b.val) * dir;
+    });
+    return decorated.map(function (item) { return item.trade; });
   }
 
   function populateSetupFilter() {
     const select = $('#filterSetup');
+    const collator = getCollator();
     const setups = Array.from(new Set(store.state.trades.map(function (t) { return t.setup; }).filter(function (s) { return !!s; })))
-      .sort(function (a, b) { return a.localeCompare(b, 'ru'); });
+      .sort(function (a, b) { return collator.compare(a, b); });
     const current = state.filters.setup;
     let html = '<option value="all">Все сетапы</option>';
     setups.forEach(function (setup) {
@@ -4988,9 +5014,11 @@
   }
 
   NS.app = {
+    state: state,
     buildInsights: buildInsights,
     disciplineSnapshot: disciplineSnapshot,
-    renderDiscipline: renderDiscipline
+    renderDiscipline: renderDiscipline,
+    getFilteredTrades: getFilteredTrades
   };
 
   if (document.readyState === 'loading') {

@@ -97,3 +97,36 @@ test('renderDiscipline flags daily loss limit even when todayTrades is empty, an
   assert.match(disciplineBody.innerHTML, /class="rule-status bad"/);
   assert.match(disciplineBody.innerHTML, /Дневной лимит убытка достигнут/);
 });
+
+test('getFilteredTrades sorts partial trades by weighted exit price and keeps open trades last', function () {
+  const { TJ } = loadApp();
+  const store = TJ.store;
+  const open = store.normalizeTrade({
+    id: 'open', date: '2026-01-05', symbol: 'EURUSD', side: 'long', entry: 100, qty: 10, exits: []
+  });
+  const closedLow = store.normalizeTrade({
+    id: 'closed-low', date: '2026-01-05', symbol: 'EURUSD', side: 'long', entry: 100, qty: 10,
+    exits: [{ qty: 10, price: 105 }]
+  });
+  const partialMid = store.normalizeTrade({
+    id: 'partial-mid', date: '2026-01-05', symbol: 'EURUSD', side: 'long', entry: 100, qty: 10,
+    exits: [{ qty: 2, price: 110 }, { qty: 2, price: 120 }]
+  }); // weighted = 115
+  const closedHigh = store.normalizeTrade({
+    id: 'closed-high', date: '2026-01-05', symbol: 'EURUSD', side: 'long', entry: 100, qty: 10,
+    exits: [{ qty: 10, price: 130 }]
+  });
+
+  store.state.trades = [open, closedHigh, closedLow, partialMid];
+  TJ.app.state.sort = { key: 'exit', dir: 'asc' };
+  assert.deepEqual(
+    TJ.app.getFilteredTrades().map(function (t) { return t.id; }),
+    ['closed-low', 'partial-mid', 'closed-high', 'open']
+  );
+
+  TJ.app.state.sort = { key: 'exit', dir: 'desc' };
+  assert.deepEqual(
+    TJ.app.getFilteredTrades().map(function (t) { return t.id; }),
+    ['closed-high', 'partial-mid', 'closed-low', 'open']
+  );
+});
