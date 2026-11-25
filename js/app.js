@@ -4118,7 +4118,7 @@
       const row = state.tradeExits[i];
       const qtyRaw = String(row.qty === undefined || row.qty === null ? '' : row.qty).trim();
       const priceRaw = String(row.price === undefined || row.price === null ? '' : row.price).trim();
-      if (!qtyRaw && !priceRaw && !row.date) continue;
+      if (!qtyRaw && !priceRaw) continue;
       const qty = U.parseNum(qtyRaw);
       const price = U.parseNum(priceRaw);
       if (qty === null || qty <= 0) return { error: 'Выход ' + (i + 1) + ': количество должно быть больше нуля.' };
@@ -5018,7 +5018,8 @@
     buildInsights: buildInsights,
     disciplineSnapshot: disciplineSnapshot,
     renderDiscipline: renderDiscipline,
-    getFilteredTrades: getFilteredTrades
+    getFilteredTrades: getFilteredTrades,
+    collectExitRows: collectExitRows
   };
 
   if (document.readyState === 'loading') {

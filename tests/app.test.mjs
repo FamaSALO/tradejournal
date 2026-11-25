@@ -130,3 +130,23 @@ test('getFilteredTrades sorts partial trades by weighted exit price and keeps op
     ['closed-high', 'partial-mid', 'closed-low', 'open']
   );
 });
+
+test('collectExitRows skips empty exit rows even when date is prefilled and validates half-filled rows', function () {
+  const { TJ } = loadApp();
+  TJ.app.state.tradeExits = [
+    { id: 'empty', qty: '', price: '', date: '2026-01-05' },
+    { id: 'valid', qty: '5', price: '110', date: '2026-01-06' }
+  ];
+  const ok = TJ.app.collectExitRows('2026-01-05');
+  assert.equal(ok.error, undefined);
+  assert.equal(ok.exits.length, 1);
+  assert.equal(ok.exits[0].qty, 5);
+
+  TJ.app.state.tradeExits = [{ id: 'only-qty', qty: '5', price: '', date: '2026-01-05' }];
+  const missingPrice = TJ.app.collectExitRows('2026-01-05');
+  assert.match(missingPrice.error, /цену выхода/);
+
+  TJ.app.state.tradeExits = [{ id: 'only-price', qty: '', price: '110', date: '2026-01-05' }];
+  const missingQty = TJ.app.collectExitRows('2026-01-05');
+  assert.match(missingQty.error, /количество/);
+});
