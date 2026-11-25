@@ -1173,15 +1173,18 @@
     });
 
     let wins = 0, losses = 0, be = 0;
-    let grossProfit = 0, grossLoss = 0, fees = 0;
+    let net = 0, grossProfit = 0, grossLoss = 0, fees = 0;
     let rSum = 0, rCount = 0;
     let discSum = 0, discCount = 0;
     let best = null, worst = null;
 
     rows.forEach(function (row) {
       const pnl = row.pnl;
-      if (pnl > 0.004) { wins++; grossProfit += pnl; }
-      else if (pnl < -0.004) { losses++; grossLoss += pnl; }
+      net += pnl;
+      if (pnl > 0) grossProfit += pnl;
+      else if (pnl < 0) grossLoss += pnl;
+      if (pnl > 0.004) wins++;
+      else if (pnl < -0.004) losses++;
       else be++;
       fees += tradeFees(row.trade);
       if (row.r !== null) { rSum += row.r; rCount++; }
@@ -1192,7 +1195,6 @@
     });
 
     const count = rows.length;
-    const net = grossProfit + grossLoss;
     const base = U.parseNum(startBalance) || 0;
 
     let equity = 0, peak = 0, maxDD = 0, maxDDPct = 0;
@@ -1262,8 +1264,10 @@
       }
       group.count++;
       group.pnl += row.pnl;
-      if (row.pnl > 0.004) { group.wins++; group.grossProfit += row.pnl; }
-      else if (row.pnl < -0.004) { group.losses++; group.grossLoss += row.pnl; }
+      if (row.pnl > 0) group.grossProfit += row.pnl;
+      else if (row.pnl < 0) group.grossLoss += row.pnl;
+      if (row.pnl > 0.004) group.wins++;
+      else if (row.pnl < -0.004) group.losses++;
       else group.be++;
       if (row.r !== null) { group.rSum += row.r; group.rCount++; }
     });

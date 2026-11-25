@@ -601,3 +601,59 @@ test('v3 trade without a timezone keeps its wall-clock date and time after migra
   assert.equal(migrated.time, '10:30');
   assert.equal(migrated.timeUtc, fresh.utils.zonedToUtc('2026-01-15', '10:30', systemZone));
 });
+
+test('breakeven-sized trades contribute exact PnL to metrics.net, balanceAll and groupRows', function () {
+  const { TJ: fresh } = loadTradeJournal();
+  const s = fresh.store;
+  const plus = s.normalizeTrade({
+    id: 'be-plus',
+    date: '2026-01-05',
+    symbol: 'EURUSD',
+    side: 'long',
+    entry: 0,
+    stop: 1,
+    qty: 1,
+    exits: [{ qty: 1, price: 0.003, date: '2026-01-05' }]
+  });
+  const minus = s.normalizeTrade({
+    id: 'be-minus',
+    date: '2026-01-06',
+    symbol: 'GBPUSD',
+    side: 'long',
+    entry: 0,
+    stop: 1,
+    qty: 1,
+    exits: [{ qty: 1, price: -0.003, date: '2026-01-06' }]
+  });
+  const secondPlus = s.normalizeTrade({
+    id: 'be-plus-2',
+    date: '2026-01-07',
+    symbol: 'EURUSD',
+    side: 'long',
+    entry: 0,
+    stop: 1,
+    qty: 1,
+    exits: [{ qty: 1, price: 0.003, date: '2026-01-07' }]
+  });
+
+  s.state.trades = [plus, minus, secondPlus];
+  const m = s.metrics(s.state.trades, s.state.settings.startBalance);
+  assert.equal(m.be, 3);
+  assert.equal(m.wins, 0);
+  assert.equal(m.losses, 0);
+  assert.ok(Math.abs(m.net - 0.003) < 1e-12);
+  assert.ok(Math.abs(m.grossProfit - 0.006) < 1e-12);
+  assert.ok(Math.abs(m.grossLoss - (-0.003)) < 1e-12);
+  assert.ok(Math.abs(m.profitFactor - 2) < 1e-12);
+  assert.equal(m.endBalance, s.balanceAll());
+
+  const grouped = s.groupRows(m.rows, function (item) { return item.symbol; });
+  const eurusd = grouped.find(function (g) { return g.key === 'EURUSD'; });
+  const gbpusd = grouped.find(function (g) { return g.key === 'GBPUSD'; });
+  assert.ok(Math.abs(eurusd.pnl - 0.006) < 1e-12);
+  assert.ok(Math.abs(eurusd.grossProfit - 0.006) < 1e-12);
+  assert.equal(eurusd.profitFactor, Infinity);
+  assert.ok(Math.abs(gbpusd.pnl - (-0.003)) < 1e-12);
+  assert.ok(Math.abs(gbpusd.grossLoss - (-0.003)) < 1e-12);
+  assert.equal(gbpusd.profitFactor, 0);
+});
