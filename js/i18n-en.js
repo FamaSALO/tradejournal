@@ -168,6 +168,7 @@ window.TJ_I18N_EN = {
   "Голубой": "Sky",
   "готова к установке. Приложение скачает обновление и перезапустится.": "ready for installation. The application will download the update and restart.",
   "Готовые шаблоны": "Ready-made templates",
+  "Готовые шаблоны интерфейса": "Ready-made interface templates",
   "Границы торговых сессий": "Trading session boundaries",
   "Графит": "Graphite",
   "Давно не делали резервную копию журнала. Экспорт JSON — в настройках.": "You haven't backed up your journal in a while. JSON export is in Settings.",

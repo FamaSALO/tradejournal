@@ -1481,7 +1481,9 @@
       empty: 'Нет сделок за период'
     });
 
-    renderBreakdown($('#setupBreakdown'), store.groupRows(rows, function (t) { return t.setup || 'Без сетапа'; }), {
+    renderBreakdown($('#setupBreakdown'), store.groupRows(rows, function (t) { return t.setup || '__EMPTY__'; }), {
+      labelSkip: function (key) { return key !== '__EMPTY__'; },
+      labelFn: function (key) { return key === '__EMPTY__' ? T('Без сетапа') : key; },
       empty: 'Сетапы не указаны'
     });
 
@@ -1719,9 +1721,10 @@
     const max = Math.max.apply(null, list.map(function (group) { return Math.abs(group.pnl); }).concat([1]));
     container.innerHTML = list.map(function (group) {
       const label = options.labelFn ? options.labelFn(group.key) : group.key;
+      const skip = typeof options.labelSkip === 'function' ? options.labelSkip(group.key) : !!options.labelSkip;
       const width = group.pnl === 0 ? 0 : Math.max(3, Math.abs(group.pnl) / max * 100);
       return '<div class="hb-row" title="' + U.escapeHtml(T('{count} {unit} · винрейт {wr}').replace('{count}', group.count).replace('{unit}', pluralTrades(group.count)).replace('{wr}', U.percent(group.winRate, 0))) + '">' +
-        '<div class="hb-top"><span class="hb-label"' + (options.labelSkip ? ' data-i18n-skip' : '') + '>' + U.escapeHtml(label) +
+        '<div class="hb-top"><span class="hb-label"' + (skip ? ' data-i18n-skip' : '') + '>' + U.escapeHtml(label) +
         '<small>' + group.count + '</small></span>' +
         '<span class="hb-value ' + toneClass(group.pnl) + '">' + U.escapeHtml(U.money(group.pnl, { sign: true })) + '</span></div>' +
         '<div class="hb-track"><div class="hb-fill ' + (group.pnl < 0 ? 'neg' : '') + '" style="width:' + width + '%"></div></div></div>';
@@ -1744,7 +1747,7 @@
   }
 
   function renderSetupTable(rows) {
-    const groups = store.groupRows(rows, function (t) { return t.setup || 'Без сетапа'; })
+    const groups = store.groupRows(rows, function (t) { return t.setup || '__EMPTY__'; })
       .sort(function (a, b) { return b.pnl - a.pnl; });
     const tbody = $('#setupTableBody');
     if (!groups.length) {
@@ -1754,7 +1757,8 @@
     tbody.innerHTML = groups.map(function (group) {
       const pf = group.profitFactor === Infinity ? '∞' : decimal(group.profitFactor, 2);
       const hasR = group.rCount > 0;
-      return '<tr><td>' + U.escapeHtml(group.key) + '</td>' +
+      const empty = group.key === '__EMPTY__';
+      return '<tr><td' + (empty ? '' : ' data-i18n-skip') + '>' + U.escapeHtml(empty ? T('Без сетапа') : group.key) + '</td>' +
         '<td class="num">' + group.count + '</td>' +
         '<td class="num">' + U.percent(group.winRate, 0) + '</td>' +
         '<td class="num ' + (hasR ? toneClass(group.avgR) : '') + '">' + (hasR ? U.escapeHtml(U.rfmt(group.avgR, { sign: true })) : '—') + '</td>' +

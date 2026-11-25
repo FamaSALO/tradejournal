@@ -107,6 +107,7 @@ test('English mode does not translate unknown text or partial words', function (
 });
 
 test('every Russian interface string in index.html has an English translation', function () {
+  const { TJ } = loadI18n('en');
   const html = readFileSync(path.join(ROOT, 'index.html'), 'utf8')
     .replace(/<script[\s\S]*?<\/script>/gi, ' ')
     .replace(/<style[\s\S]*?<\/style>/gi, ' ');
@@ -147,6 +148,13 @@ test('every Russian interface string in index.html has an English translation', 
     return CYRILLIC.test(text) && !covered(text);
   });
   assert.deepEqual(missing, [], 'untranslated interface strings: ' + JSON.stringify(missing));
+
+  const untranslatedAttrs = [];
+  for (const attrMatch of html.matchAll(/\b(?:aria-label|title|placeholder)="([^"]*?[А-Яа-яЁё][^"]*?)"/g)) {
+    const out = TJ.i18n.t(attrMatch[1]);
+    if (CYRILLIC.test(out)) untranslatedAttrs.push(attrMatch[1] + ' -> ' + out);
+  }
+  assert.deepEqual(untranslatedAttrs, [], 'untranslated attributes: ' + JSON.stringify(untranslatedAttrs));
 });
 
 test('switching language persists the preference', function () {
