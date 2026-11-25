@@ -356,6 +356,16 @@
     }).format(num);
   }
 
+  function cssVar(name, fallback) {
+    try {
+      if (typeof getComputedStyle === 'function') {
+        const val = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+        if (val) return val;
+      }
+    } catch (err) { /* ignore */ }
+    return fallback;
+  }
+
   function navigate(view, options) {
     options = options || {};
     if (!VIEW_META[view]) view = 'dashboard';
@@ -609,17 +619,20 @@
     chip.textContent = m.count ? (roi > 0 ? '+' : '') + U.percent(roi, 1) : 'нет сделок';
     chip.className = 'chip ' + toneClass(m.net);
 
+    const winColor = cssVar('--green', '#31e3aa');
+    const lossColor = cssVar('--red', '#ff6b81');
+    const beColor = cssVar('--muted-2', '#7c8fa6');
     NS.charts.donut($('#donutChart'), [
-      { value: m.wins, color: '#31e3aa' },
-      { value: m.losses, color: '#ff6b81' },
-      { value: m.be, color: '#5f7187' }
+      { value: m.wins, color: winColor },
+      { value: m.losses, color: lossColor },
+      { value: m.be, color: beColor }
     ]);
     $('#donutRate').textContent = m.count ? U.percent(m.winRate, 0) : '—';
 
     const legend = [
-      { label: 'Прибыльные', count: m.wins, color: '#31e3aa' },
-      { label: 'Убыточные', count: m.losses, color: '#ff6b81' },
-      { label: 'Безубыток', count: m.be, color: '#5f7187' }
+      { label: 'Прибыльные', count: m.wins, color: 'var(--green)' },
+      { label: 'Убыточные', count: m.losses, color: 'var(--red)' },
+      { label: 'Безубыток', count: m.be, color: 'var(--muted-2)' }
     ];
     $('#donutLegend').innerHTML = legend.map(function (item) {
       const pct = m.count ? U.percent((item.count / m.count) * 100, 0) : '—';

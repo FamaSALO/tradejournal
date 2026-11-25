@@ -10,7 +10,8 @@ export function fakeDocument() {
     setAttribute: function () {},
     style: {
       setProperty: function (name, value) { properties[name] = String(value); },
-      getPropertyValue: function (name) { return properties[name] || ''; }
+      getPropertyValue: function (name) { return properties[name] || ''; },
+      removeProperty: function (name) { delete properties[name]; }
     }
   };
   return {

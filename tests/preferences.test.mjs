@@ -218,3 +218,29 @@ test('an unknown stored preset id is ignored', function () {
   storage.setItem(prefs.KEY, JSON.stringify({ theme: 'dark', preset: 'neon-disco' }));
   assert.equal(prefs.get().preset, '');
 });
+
+test('custom light background in dark mode updates semantic and muted contrast cleanly (UX-01)', function () {
+  const { prefs, doc } = loadPreferences();
+  function lum(hex) { return prefs.luminance(hex); }
+  function ratio(a, b) {
+    const la = lum(a);
+    const lb = lum(b);
+    return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
+  }
+
+  prefs.save({ theme: 'dark', bg: '#909aa5', panel: '#a0a8b0' });
+  assert.equal(doc.properties['--text'], '#1a2633');
+  assert.equal(doc.properties['--panel-text'], '#1a2633');
+  assert.equal(doc.properties['--green'], '#067a57');
+  assert.equal(doc.properties['--red'], '#c22a41');
+
+  prefs.save({ theme: 'dark', bg: '#f4f7fb', panel: '#ffffff' });
+  assert.ok(ratio(doc.properties['--muted'], '#ffffff') >= 4.5, 'light muted contrast');
+  assert.ok(ratio(doc.properties['--muted-2'], '#ffffff') >= 4.5, 'light muted-2 contrast');
+  assert.ok(ratio(doc.properties['--green'], '#ffffff') >= 4.5, 'light green contrast');
+  assert.ok(ratio(doc.properties['--red'], '#ffffff') >= 4.5, 'light red contrast');
+
+  prefs.save({ theme: 'dark', accent: '#4d9fff', bg: '', panel: '' });
+  assert.equal(doc.properties['--green'], undefined);
+  assert.ok(ratio(doc.properties['--muted-2'], '#101822') >= 4.5, 'dark muted-2 contrast');
+});

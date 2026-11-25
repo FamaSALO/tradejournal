@@ -155,6 +155,15 @@
     }
   }
 
+  function setOrClear(style, name, value) {
+    if (!style) return;
+    if (value === null || value === undefined || value === '') {
+      if (typeof style.removeProperty === 'function') style.removeProperty(name);
+      return;
+    }
+    style.setProperty(name, value);
+  }
+
   function apply(prefs) {
     const state = normalize(prefs);
     const base = defaultsFor(state.theme);
@@ -162,13 +171,14 @@
     const accent = state.accent || base.accent;
     const bg = state.bg || base.bg;
     const panel = state.panel || base.panel;
-    const lightBg = luminance(bg) > 0.5;
-    const lightPanel = luminance(panel) > 0.5;
+    const lightBg = luminance(bg) > 0.22;
+    const lightPanel = luminance(panel) > 0.22;
+    const lightSurface = lightBg || lightPanel;
     const text = lightBg ? '#1a2633' : '#e9eff7';
-    const muted = lightBg ? '#5d6d80' : '#8b9bb0';
-    const muted2 = lightBg ? '#7b8a9c' : '#617185';
+    const muted = lightBg ? '#4c5c6f' : '#8fa1b8';
+    const muted2 = lightBg ? '#526275' : '#7c8fa6';
     const panelText = lightPanel ? '#1a2633' : '#e9eff7';
-    const panelMuted = lightPanel ? '#5d6d80' : '#8b9bb0';
+    const panelMuted = lightPanel ? '#4c5c6f' : '#8fa1b8';
 
     root.dataset.theme = state.theme;
     root.dataset.accent = state.accent ? 'custom' : 'default';
@@ -209,6 +219,34 @@
     root.style.setProperty('--input-bg', shade(panel, lightPanel ? -0.02 : -0.055));
     root.style.setProperty('--hover-bg', rgba(lightBg ? '#1a2633' : '#ffffff', lightBg ? 0.055 : 0.035));
     root.style.setProperty('--hover-bg-strong', rgba(lightBg ? '#1a2633' : '#ffffff', lightBg ? 0.09 : 0.06));
+    if (lightSurface) {
+      root.style.setProperty('--green', '#067a57');
+      root.style.setProperty('--green-2', '#087a59');
+      root.style.setProperty('--green-soft', 'rgba(6, 122, 87, 0.1)');
+      root.style.setProperty('--red', '#c22a41');
+      root.style.setProperty('--red-soft', 'rgba(194, 42, 65, 0.09)');
+      root.style.setProperty('--pos-rgb', '6, 122, 87');
+      root.style.setProperty('--neg-rgb', '194, 42, 65');
+      root.style.setProperty('--amber', '#8a5a04');
+      root.style.setProperty('--amber-soft', 'rgba(138, 90, 4, 0.12)');
+      root.style.setProperty('--violet', '#6d48e5');
+      root.style.setProperty('--violet-soft', 'rgba(109, 72, 229, 0.1)');
+    } else if (state.theme === 'light') {
+      root.style.setProperty('--green', '#31e3aa');
+      root.style.setProperty('--green-2', '#14b888');
+      root.style.setProperty('--green-soft', 'rgba(49, 227, 170, 0.11)');
+      root.style.setProperty('--red', '#ff6b81');
+      root.style.setProperty('--red-soft', 'rgba(255, 107, 129, 0.11)');
+      root.style.setProperty('--pos-rgb', '49, 227, 170');
+      root.style.setProperty('--neg-rgb', '255, 107, 129');
+      root.style.setProperty('--amber', '#f5b544');
+      root.style.setProperty('--amber-soft', 'rgba(245, 181, 68, 0.12)');
+      root.style.setProperty('--violet', '#9d7bff');
+      root.style.setProperty('--violet-soft', 'rgba(157, 123, 255, 0.12)');
+    } else {
+      ['--green', '--green-2', '--green-soft', '--red', '--red-soft', '--pos-rgb', '--neg-rgb', '--amber', '--amber-soft', '--violet', '--violet-soft']
+        .forEach(function (name) { setOrClear(root.style, name, null); });
+    }
 
     const scheme = document.querySelector('meta[name="color-scheme"]');
     if (scheme) scheme.setAttribute('content', state.theme === 'light' ? 'light' : 'dark');
