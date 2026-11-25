@@ -402,3 +402,70 @@ test('Ctrl+N does not open trade modal and failed saveTrade rolls back store.sta
   assert.equal(els['#tradeError'].hidden, false);
   assert.match(els['#tradeError'].textContent, /Не удалось сохранить сделку/);
 });
+
+test('renderCalendar hides $0 on open-only days, scores month winrate by realized month PnL, and renderDayPanel shows BE and carried-over status (FIN-02)', function () {
+  const els = {
+    '#calTitle': { textContent: '' },
+    '#calWeekdays': { innerHTML: '' },
+    '#calSummary': { innerHTML: '' },
+    '#calGrid': { innerHTML: '' },
+    '#dayCard': { innerHTML: '' }
+  };
+  const doc = fakeDocument();
+  doc.readyState = 'loading';
+  doc.querySelectorAll = function () { return []; };
+  const origQuery = doc.querySelector;
+  doc.querySelector = function (sel) {
+    if (Object.prototype.hasOwnProperty.call(els, sel)) return els[sel];
+    return origQuery.call(doc, sel);
+  };
+  const { TJ } = loadTradeJournal(['js/app.js'], { globals: { document: doc } });
+  TJ.store.state.trades = [
+    TJ.store.normalizeTrade({
+      id: 't-cross',
+      date: '2026-01-10',
+      time: '10:00',
+      symbol: 'BTCUSD',
+      side: 'long',
+      entry: 100,
+      qty: 2,
+      exits: [
+        { id: 'e1', qty: 1, price: 200, date: '2026-01-12' },
+        { id: 'e2', qty: 1, price: 80, date: '2026-02-05' }
+      ]
+    }),
+    TJ.store.normalizeTrade({
+      id: 't-be',
+      date: '2026-02-06',
+      time: '11:00',
+      symbol: 'ETHUSD',
+      side: 'long',
+      entry: 100,
+      qty: 1,
+      exits: [{ id: 'e3', qty: 1, price: 100, date: '2026-02-06' }]
+    }),
+    TJ.store.normalizeTrade({
+      id: 't-open',
+      date: '2026-02-07',
+      time: '12:00',
+      symbol: 'SOLUSD',
+      side: 'long',
+      entry: 50,
+      qty: 1,
+      exits: []
+    })
+  ];
+
+  TJ.app.state.calCursor = new Date(2026, 1, 1);
+  TJ.app.state.selectedDay = '2026-02-06';
+  TJ.app.renderCalendar();
+
+  assert.match(els['#calSummary'].innerHTML, /Винрейт 0%/);
+  assert.doesNotMatch(els['#calGrid'].innerHTML, /data-date="2026-02-07"[^>]*>[^]*?<span class="cal-pnl/);
+  assert.match(els['#dayCard'].innerHTML, /0W \/ 0L \/ 1BE/);
+
+  TJ.app.state.calCursor = new Date(2026, 0, 1);
+  TJ.app.state.selectedDay = '2026-01-10';
+  TJ.app.renderCalendar();
+  assert.match(els['#dayCard'].innerHTML, /выход в другой день/);
+});

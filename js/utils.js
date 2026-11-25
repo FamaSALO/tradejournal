@@ -432,10 +432,11 @@
   }
 
   function addDaysISO(iso, days) {
-    const d = parseISO(iso);
-    if (!d) return iso;
-    d.setDate(d.getDate() + days);
-    return isoOf(d);
+    if (!iso || typeof iso !== 'string') return iso;
+    const parts = iso.slice(0, 10).split('-').map(Number);
+    if (parts.length !== 3 || parts.some(isNaN)) return iso;
+    const utc = new Date(Date.UTC(parts[0], parts[1] - 1, parts[2] + (Number(days) || 0)));
+    return utc.getUTCFullYear() + '-' + pad(utc.getUTCMonth() + 1) + '-' + pad(utc.getUTCDate());
   }
 
   function formatDate(iso, mode) {

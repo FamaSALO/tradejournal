@@ -132,3 +132,10 @@ test('Moscow and Almaty do not observe DST', function () {
   assert.equal(almatyWinter.back.time, '12:00');
   assert.equal(almatySummer.back.time, '12:00');
 });
+
+test('addDaysISO crosses DST transitions without shifting calendar days (FIN-02)', function () {
+  assert.equal(U.addDaysISO('2026-03-07', 2), '2026-03-09');
+  assert.equal(U.addDaysISO('2026-10-31', 3), '2026-11-03');
+  assert.equal(U.addDaysISO('2026-03-01', -1), '2026-02-28');
+  assert.equal(U.addDaysISO('2024-03-01', -1), '2024-02-29');
+});

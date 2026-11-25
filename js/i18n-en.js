@@ -157,6 +157,7 @@ window.TJ_I18N_EN = {
   "выход {index}: некорректное количество": "exit {index}: invalid quantity",
   "выход {index}: ожидается формат «количество@цена»": "exit {index}: expected “qty@price” format",
   "Выход {index}: укажите цену выхода.": "Exit {index}: specify the exit price.",
+  "выход в другой день": "exited another day",
   "выходит за пределы архива.": "goes beyond the archive.",
   "Выходов нет — позиция открыта. Добавьте один или несколько частичных выходов; комиссия распределится по объёму выходов.": "No exits yet — the position is open. Add one or more partial exits; the fee will be split by exit size.",
   "Выходов пока нет": "No exits yet",

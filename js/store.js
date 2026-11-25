@@ -1034,18 +1034,24 @@
     (trades || []).forEach(function (trade) {
       if (!trade) return;
       const days = new Set();
+      const realizedDays = new Set();
       if (trade.date) days.add(trade.date);
       tradePnlEvents(trade).forEach(function (event) {
         if (!event.date) return;
         days.add(event.date);
+        realizedDays.add(event.date);
         let item = map.get(event.date);
-        if (!item) { item = { pnl: 0, count: 0 }; map.set(event.date, item); }
+        if (!item) { item = { pnl: 0, count: 0, realizedCount: 0 }; map.set(event.date, item); }
         item.pnl += event.pnl;
       });
       days.forEach(function (day) {
         let item = map.get(day);
-        if (!item) { item = { pnl: 0, count: 0 }; map.set(day, item); }
+        if (!item) { item = { pnl: 0, count: 0, realizedCount: 0 }; map.set(day, item); }
         item.count++;
+      });
+      realizedDays.forEach(function (day) {
+        const item = map.get(day);
+        if (item) item.realizedCount++;
       });
     });
     return map;

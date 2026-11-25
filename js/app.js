@@ -140,6 +140,7 @@
     }
     applyCurrency();
     setVersionLabel(APP_VERSION);
+    state.calCursor = accountMonthStart();
     state.selectedDay = todayInAccount();
     buildMoodPicker();
     buildEmotionSelect();
@@ -340,6 +341,10 @@
     return new Date(date.getFullYear(), date.getMonth(), 1);
   }
 
+  function accountMonthStart() {
+    return monthStart(U.parseISO(todayInAccount()) || new Date());
+  }
+
   function pad2(n) { return String(n).padStart(2, '0'); }
 
   function decimal(value, digits) {
@@ -378,7 +383,7 @@
 
     if (view === 'calculator') ensureCalcDefaults();
     if (view === 'calendar') {
-      state.calCursor = monthStart(state.calCursor || new Date());
+      state.calCursor = state.calCursor ? monthStart(state.calCursor) : accountMonthStart();
       if (!state.selectedDay) state.selectedDay = todayInAccount();
     }
 
@@ -1207,14 +1212,24 @@
     $('#calWeekdays').innerHTML = U.weekdayLabels().map(function (label) { return '<span>' + label + '</span>'; }).join('');
 
     const dayMap = store.dayPnlMap(store.state.trades);
-    const monthTrades = store.state.trades.filter(function (trade) {
-      return store.tradePnlEvents(trade).some(function (event) {
-        return (event.date || '').slice(0, 7) === prefix;
+    const monthTradePnl = new Map();
+    store.state.trades.forEach(function (trade) {
+      let tradeMonthPnl = 0;
+      let hasMonthEvent = false;
+      store.tradePnlEvents(trade).forEach(function (event) {
+        if ((event.date || '').slice(0, 7) !== prefix) return;
+        tradeMonthPnl += event.pnl;
+        hasMonthEvent = true;
       });
+      if (hasMonthEvent) monthTradePnl.set(trade.id, tradeMonthPnl);
     });
-    const closedMonth = monthTrades.filter(store.hasRealized);
+    const monthTradeValues = Array.from(monthTradePnl.values());
+    const monthTradeCount = monthTradeValues.length;
+    const monthWins = monthTradeValues.filter(function (value) { return value > 0.004; }).length;
+    const monthWinRate = monthTradeCount ? (monthWins / monthTradeCount) * 100 : 0;
+
     const monthKeys = Array.from(dayMap.keys()).filter(function (key) {
-      return key.slice(0, 7) === prefix;
+      return key.slice(0, 7) === prefix && dayMap.get(key).realizedCount > 0;
     });
     const monthPnl = monthKeys.reduce(function (sum, key) {
       return sum + dayMap.get(key).pnl;
@@ -1231,14 +1246,12 @@
       notesByDate[note.date].push(note);
     });
 
-    const settings = store.state.settings;
-    const monthMetrics = store.metrics(closedMonth, U.parseNum(settings.startBalance) || 0);
     const dayValues = monthKeys.map(function (key) { return dayMap.get(key).pnl; });
 
     $('#calSummary').innerHTML =
       '<span class="chip ' + toneClass(monthPnl) + '">' + U.escapeHtml(U.money(monthPnl, { sign: true })) + '</span>' +
-      '<span class="chip">' + closedMonth.length + ' ' + pluralTrades(closedMonth.length) + '</span>' +
-      '<span class="chip">' + U.escapeHtml(T('Винрейт {wr}').replace('{wr}', monthMetrics.count ? U.percent(monthMetrics.winRate, 0) : '—')) + '</span>' +
+      '<span class="chip">' + monthTradeCount + ' ' + pluralTrades(monthTradeCount) + '</span>' +
+      '<span class="chip">' + U.escapeHtml(T('Винрейт {wr}').replace('{wr}', monthTradeCount ? U.percent(monthWinRate, 0) : '—')) + '</span>' +
       (bestDay && bestDay.value > 0.004 ? '<span class="chip pos">' + U.escapeHtml(T('Лучший день +{val}').replace('{val}', U.money(bestDay.value))) + '</span>' : '');
 
     const first = new Date(year, month, 1);
@@ -1255,6 +1268,7 @@
       const dayInfo = dayMap.get(iso);
       const dayPnl = dayInfo ? dayInfo.pnl : 0;
       const count = dayInfo ? dayInfo.count : 0;
+      const realizedCount = dayInfo ? (dayInfo.realizedCount || 0) : 0;
       const hasNote = notesByDate[iso] && notesByDate[iso].length > 0;
       const ratio = maxAbs > 0 ? Math.abs(dayPnl) / maxAbs : 0;
 
@@ -1264,19 +1278,20 @@
       if (iso === state.selectedDay) classes.push('selected');
 
       let style = '';
-      if (dayPnl > 0.004 || dayPnl < -0.004) {
+      if (realizedCount > 0 && (dayPnl > 0.004 || dayPnl < -0.004)) {
         classes.push(dayPnl > 0 ? 'pos' : 'neg');
         style = '--heat:' + ratio.toFixed(3);
       }
 
       const titleParts = [U.formatDate(iso, 'full')];
-      if (count) titleParts.push(U.money(dayPnl, { sign: true }) + ' · ' + count + ' ' + pluralTrades(count));
+      if (realizedCount > 0) titleParts.push(U.money(dayPnl, { sign: true }) + ' · ' + count + ' ' + pluralTrades(count));
+      else if (count) titleParts.push(count + ' ' + pluralTrades(count) + ' (' + T('открыта') + ')');
       if (hasNote) titleParts.push(T('есть запись в журнале'));
 
       html += '<button type="button" class="' + classes.join(' ') + '" data-date="' + iso + '"' +
         (style ? ' style="' + style + '"' : '') + ' title="' + U.escapeHtml(titleParts.join(' · ')) + '">' +
         '<span class="cal-num">' + date.getDate() + '</span>' +
-        (count ? '<span class="cal-pnl ' + toneClass(dayPnl) + '">' + U.escapeHtml(U.compactMoney(dayPnl, { sign: true })) + '</span>' : '') +
+        (realizedCount > 0 ? '<span class="cal-pnl ' + toneClass(dayPnl) + '">' + U.escapeHtml(U.compactMoney(dayPnl, { sign: true })) + '</span>' : '') +
         (count || hasNote
           ? '<span class="cal-meta">' + (count ? count + ' ' + pluralTrades(count) : '') +
             (hasNote ? '<span class="cal-note-dot" title="' + U.escapeHtml(T('Есть запись')) + '"></span>' : '') + '</span>'
@@ -1296,7 +1311,7 @@
       return;
     }
 
-    const dayInfo = store.dayPnlMap(store.state.trades).get(day) || { pnl: 0, count: 0 };
+    const dayInfo = store.dayPnlMap(store.state.trades).get(day) || { pnl: 0, count: 0, realizedCount: 0 };
     const dayPnl = dayInfo.pnl;
     const dayEventPnl = store.dayEventPnlMap(store.state.trades, day);
     const dayTrades = store.state.trades
@@ -1312,6 +1327,7 @@
 
     const wins = closedTrades.filter(function (trade) { return dayEventPnl.get(trade.id) > 0.004; }).length;
     const losses = closedTrades.filter(function (trade) { return dayEventPnl.get(trade.id) < -0.004; }).length;
+    const be = closedTrades.length - wins - losses;
 
     let tradesHtml;
     if (!dayTrades.length) {
@@ -1326,7 +1342,7 @@
           ' <span class="day-trade-side">' + (trade.side === 'long' ? 'long' : 'short') + '</span>' +
           (status === 'partial' ? ' <span class="partial-badge">' + T('частично') + '</span>' : '') + '</span>' +
           '<span class="day-trade-pnl ' + (hasEvent ? toneClass(pnl) : 'neutral') + '">' +
-          (status === 'open' ? T('открыта') : (hasEvent ? U.escapeHtml(U.money(pnl, { sign: true })) : '—')) + '</span></div>';
+          (hasEvent ? U.escapeHtml(U.money(pnl, { sign: true })) : (status === 'open' ? T('открыта') : T('выход в другой день'))) + '</span></div>';
       }).join('');
     }
 
@@ -1342,7 +1358,7 @@
     }
 
     const closedInfo = closedTrades.length
-      ? closedTrades.length + ' ' + pluralTrades(closedTrades.length) + ' · ' + wins + 'W / ' + losses + 'L'
+      ? closedTrades.length + ' ' + pluralTrades(closedTrades.length) + ' · ' + wins + 'W / ' + losses + 'L' + (be ? ' / ' + be + 'BE' : '')
       : T('закрытых сделок нет');
 
     card.innerHTML =
@@ -1359,15 +1375,16 @@
   }
 
   function changeMonth(delta) {
-    if (!state.calCursor) state.calCursor = monthStart(new Date());
+    if (!state.calCursor) state.calCursor = accountMonthStart();
     state.calCursor = new Date(state.calCursor.getFullYear(), state.calCursor.getMonth() + delta, 1);
     state.selectedDay = defaultDayForMonth(state.calCursor);
     renderCalendar();
   }
 
   function defaultDayForMonth(cursor) {
-    const now = new Date();
-    if (cursor.getFullYear() === now.getFullYear() && cursor.getMonth() === now.getMonth()) return todayInAccount();
+    const today = todayInAccount();
+    const todayDate = U.parseISO(today);
+    if (todayDate && cursor.getFullYear() === todayDate.getFullYear() && cursor.getMonth() === todayDate.getMonth()) return today;
     const prefix = cursor.getFullYear() + '-' + pad2(cursor.getMonth() + 1);
     const days = Array.from(store.dayPnlMap(store.state.trades).keys())
       .filter(function (day) { return day.slice(0, 7) === prefix; })
@@ -1766,7 +1783,7 @@
         '<div class="note-head"><span class="note-date">' + U.escapeHtml(U.formatDate(note.date, 'long')) +
         '<span>' + U.escapeHtml(U.formatDate(note.date, 'weekday')) + '</span></span>' +
         '<span class="mood-chip">' + mood.emoji + ' ' + U.escapeHtml(mood.label) + '</span></div>' +
-        (day.count ? '<span class="note-daypnl ' + toneClass(day.pnl) + '">' + U.escapeHtml(U.money(day.pnl, { sign: true })) + ' · ' + day.count + ' ' + pluralTrades(day.count) + '</span>' : '') +
+        (day.realizedCount ? '<span class="note-daypnl ' + toneClass(day.pnl) + '">' + U.escapeHtml(U.money(day.pnl, { sign: true })) + ' · ' + day.count + ' ' + pluralTrades(day.count) + '</span>' : '') +
         '<h3 data-i18n-skip>' + U.escapeHtml(note.title || T('Без заголовка')) + '</h3>' +
         '<p class="note-text" data-i18n-skip>' + U.escapeHtml(note.text) + '</p>' +
         (note.tags.length ? '<div class="note-tags" data-i18n-skip>' + note.tags.map(function (tag) { return '<span class="tag">' + U.escapeHtml(tag) + '</span>'; }).join('') + '</div>' : '') +
@@ -2625,7 +2642,7 @@
         if (store.needsMigration) await store.save();
         clearAllDrafts();
         applyCurrency();
-        state.calCursor = monthStart(new Date());
+        state.calCursor = accountMonthStart();
         state.selectedDay = todayInAccount();
         renderAll();
         refreshDesktopBackups();
@@ -2791,7 +2808,7 @@
     }
     closeModal('accountModal');
     applyCurrency();
-    state.calCursor = monthStart(new Date());
+    state.calCursor = accountMonthStart();
     state.selectedDay = todayInAccount();
     renderAll();
     toast(rename ? 'Счёт переименован' : 'Счёт создан');
@@ -2819,7 +2836,7 @@
       return;
     }
     applyCurrency();
-    state.calCursor = monthStart(new Date());
+    state.calCursor = accountMonthStart();
     state.selectedDay = todayInAccount();
     renderAll();
     const account = store.activeAccount();
@@ -2855,7 +2872,7 @@
       }
       clearAccountDrafts(id);
       applyCurrency();
-      state.calCursor = monthStart(new Date());
+      state.calCursor = accountMonthStart();
       state.selectedDay = todayInAccount();
       renderAll();
       toast('Счёт удалён', 'success', {
@@ -2863,7 +2880,7 @@
         onClick: async function () {
           const restored = await store.replaceData(before);
           applyCurrency();
-          state.calCursor = monthStart(new Date());
+          state.calCursor = accountMonthStart();
           state.selectedDay = todayInAccount();
           renderAll();
           toast(restored ? 'Счёт восстановлен' : 'Не удалось восстановить счёт', restored ? 'success' : 'error');
@@ -3376,7 +3393,7 @@
       }
       clearAllDrafts();
       applyCurrency();
-      state.calCursor = monthStart(new Date());
+      state.calCursor = accountMonthStart();
       state.selectedDay = todayInAccount();
       renderAll();
       const importedAccounts = store.state.accounts.length;
@@ -3395,7 +3412,7 @@
           const restored = await store.replaceData(before);
           clearAllDrafts();
           applyCurrency();
-          state.calCursor = monthStart(new Date());
+          state.calCursor = accountMonthStart();
           state.selectedDay = todayInAccount();
           renderAll();
           toast(restored ? 'Импорт отменён, прежние данные восстановлены' : 'Не удалось сохранить откат', restored ? 'success' : 'error');
@@ -3421,7 +3438,7 @@
       }
       clearAccountDrafts(store.state.activeAccountId);
       applyCurrency();
-      state.calCursor = monthStart(new Date());
+      state.calCursor = accountMonthStart();
       state.selectedDay = todayInAccount();
       renderAll();
       toast('Демо-данные загружены', 'success', {
@@ -3430,7 +3447,7 @@
           const restored = await store.replaceData(before);
           clearAccountDrafts(store.state.activeAccountId);
           applyCurrency();
-          state.calCursor = monthStart(new Date());
+          state.calCursor = accountMonthStart();
           state.selectedDay = todayInAccount();
           renderAll();
           toast(restored ? 'Демо-данные убраны, прежние восстановлены' : 'Не удалось сохранить откат', restored ? 'success' : 'error');
@@ -3456,7 +3473,7 @@
       }
       clearAccountDrafts(store.state.activeAccountId);
       applyCurrency();
-      state.calCursor = monthStart(new Date());
+      state.calCursor = accountMonthStart();
       state.selectedDay = todayInAccount();
       renderAll();
       toast('Журнал очищен. Начинаем с чистого листа.', 'success', {
@@ -3465,7 +3482,7 @@
           const restored = await store.replaceData(before);
           clearAccountDrafts(store.state.activeAccountId);
           applyCurrency();
-          state.calCursor = monthStart(new Date());
+          state.calCursor = accountMonthStart();
           state.selectedDay = todayInAccount();
           renderAll();
           toast(restored ? 'Очистка отменена, данные восстановлены' : 'Не удалось сохранить откат', restored ? 'success' : 'error');
@@ -4831,7 +4848,7 @@
           return;
         }
         clearAccountDrafts(store.state.activeAccountId);
-        state.calCursor = monthStart(new Date());
+        state.calCursor = accountMonthStart();
         state.selectedDay = todayInAccount();
         renderAll();
         toast('Демо-данные удалены. Добро пожаловать в собственный журнал!');
@@ -4909,7 +4926,7 @@
     $('#calPrev').addEventListener('click', function () { changeMonth(-1); });
     $('#calNext').addEventListener('click', function () { changeMonth(1); });
     $('#calToday').addEventListener('click', function () {
-      state.calCursor = monthStart(new Date());
+      state.calCursor = accountMonthStart();
       state.selectedDay = todayInAccount();
       renderCalendar();
     });
@@ -5280,7 +5297,10 @@
     exportJSON: exportJSON,
     exportCSV: exportCSV,
     exportZIP: exportZIP,
-    saveTrade: saveTrade
+    saveTrade: saveTrade,
+    renderCalendar: renderCalendar,
+    renderDayPanel: renderDayPanel,
+    changeMonth: changeMonth
   };
 
   if (document.readyState === 'loading') {
