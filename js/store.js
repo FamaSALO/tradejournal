@@ -39,6 +39,25 @@
   let root = blankRoot();
   let loadError = null;
   let pendingMigration = false;
+  let cacheRevision = 0;
+  let dayPnlCache = null;
+  let pnlEventsCache = null;
+  let balanceCache = null;
+
+  function invalidateCache() {
+    cacheRevision++;
+    dayPnlCache = null;
+    pnlEventsCache = null;
+    balanceCache = null;
+  }
+
+  function sameTradeList(entry, trades) {
+    if (!entry || entry.rev !== cacheRevision || entry.trades !== trades || !Array.isArray(trades)) return false;
+    const len = trades.length;
+    if (entry.len !== len) return false;
+    if (len > 0 && (entry.first !== trades[0] || entry.last !== trades[len - 1])) return false;
+    return true;
+  }
 
   const state = {};
   Object.defineProperties(state, {
@@ -587,6 +606,7 @@
       const parsed = JSON.parse(raw);
       if (!isJournalData(parsed)) throw new Error('Неожиданная структура журнала');
       root = normalizeData(parsed);
+      invalidateCache();
       pendingMigration = !(parsed.version === SCHEMA_VERSION && Array.isArray(parsed.accounts));
       loadError = null;
       return true;
@@ -616,6 +636,7 @@
   }
 
   function save() {
+    invalidateCache();
     const raw = JSON.stringify(root);
     if (desktop) {
       return Promise.resolve().then(function () { return desktop.save(raw); }).then(function () {
@@ -643,6 +664,7 @@
   async function replaceData(raw, options) {
     if (!isJournalData(raw)) return false;
     root = normalizeData(raw, options);
+    invalidateCache();
     // Move embedded screenshots out of the journal before the first save so a
     // large import does not exceed localStorage quota or desktop storage limits.
     await migrateScreenshotData();
@@ -665,6 +687,7 @@
       .filter(Boolean);
     account.notes = (Array.isArray(source.notes) ? source.notes : []).map(normalizeNote).filter(Boolean);
     account.demo = true;
+    invalidateCache();
     return save();
   }
 
@@ -675,6 +698,7 @@
     account.notes = [];
     account.demo = false;
     if (!keepSettings) account.settings = normalizeSettings(DEFAULT_SETTINGS);
+    invalidateCache();
     return save();
   }
 
@@ -682,6 +706,7 @@
     const next = String(id || '');
     if (!root.accounts.some(function (account) { return account.id === next; })) return false;
     root.activeAccountId = next;
+    invalidateCache();
     return true;
   }
 
@@ -695,6 +720,7 @@
     const account = createAccount(name, settings, root.accounts.length);
     root.accounts.push(account);
     root.activeAccountId = account.id;
+    invalidateCache();
     return account;
   }
 
@@ -715,6 +741,7 @@
       const next = root.accounts[Math.min(index, root.accounts.length - 1)];
       root.activeAccountId = next.id;
     }
+    invalidateCache();
     return true;
   }
 
@@ -1030,6 +1057,7 @@
 
   // Counts distinct trades that were opened or exited on each day.
   function dayPnlMap(trades) {
+    if (sameTradeList(dayPnlCache, trades)) return dayPnlCache.map;
     const map = new Map();
     (trades || []).forEach(function (trade) {
       if (!trade) return;
@@ -1054,6 +1082,16 @@
         if (item) item.realizedCount++;
       });
     });
+    if (Array.isArray(trades)) {
+      dayPnlCache = {
+        rev: cacheRevision,
+        trades: trades,
+        len: trades.length,
+        first: trades[0],
+        last: trades[trades.length - 1],
+        map: map
+      };
+    }
     return map;
   }
 
@@ -1077,6 +1115,7 @@
 
   // Stable exit-event order used by the equity curve and drawdown.
   function pnlEventRows(trades) {
+    if (sameTradeList(pnlEventsCache, trades)) return pnlEventsCache.rows;
     const rows = [];
     (trades || []).forEach(function (trade) {
       tradePnlEvents(trade).forEach(function (event, index) {
@@ -1086,7 +1125,8 @@
           tradeId: trade.id || '',
           exitId: event.exitId || '',
           index: index,
-          pnl: event.pnl
+          pnl: event.pnl,
+          trade: trade
         });
       });
     });
@@ -1097,6 +1137,16 @@
         (a.exitId || '').localeCompare(b.exitId || '') ||
         a.index - b.index;
     });
+    if (Array.isArray(trades)) {
+      pnlEventsCache = {
+        rev: cacheRevision,
+        trades: trades,
+        len: trades.length,
+        first: trades[0],
+        last: trades[trades.length - 1],
+        rows: rows
+      };
+    }
     return rows;
   }
 
@@ -1300,12 +1350,25 @@
   }
 
   function balanceAll() {
+    const base = U.parseNum(state.settings.startBalance) || 0;
+    const trades = state.trades;
+    if (sameTradeList(balanceCache, trades) && balanceCache.base === base) return balanceCache.value;
     let net = 0;
-    state.trades.forEach(function (trade) {
+    trades.forEach(function (trade) {
       const pnl = tradePnl(trade);
       if (pnl !== null) net += pnl;
     });
-    return (U.parseNum(state.settings.startBalance) || 0) + net;
+    const value = base + net;
+    balanceCache = {
+      rev: cacheRevision,
+      trades: trades,
+      len: trades.length,
+      first: trades[0],
+      last: trades[trades.length - 1],
+      base: base,
+      value: value
+    };
+    return value;
   }
 
   function storageSize() {
@@ -1363,6 +1426,8 @@
     tradePnlEvents: tradePnlEvents,
     dayPnlMap: dayPnlMap,
     dayEventPnlMap: dayEventPnlMap,
+    pnlEventRows: pnlEventRows,
+    invalidateCache: invalidateCache,
     tradeFees: tradeFees,
     tradeRisk: tradeRisk,
     openRisk: openRisk,

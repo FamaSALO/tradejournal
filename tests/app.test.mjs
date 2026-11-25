@@ -469,3 +469,60 @@ test('renderCalendar hides $0 on open-only days, scores month winrate by realize
   TJ.app.renderCalendar();
   assert.match(els['#dayCard'].innerHTML, /выход в другой день/);
 });
+
+test('store caches dayPnlMap/balanceAll, fillTimezoneOptions caches HTML, and 10k trade sort completes fast (PERF-01)', function () {
+  let innerSetCount = 0;
+  let tzHtml = '';
+  const tzSelect = {
+    value: 'UTC',
+    set innerHTML(v) { innerSetCount++; tzHtml = v; },
+    get innerHTML() { return tzHtml; }
+  };
+  const doc = fakeDocument();
+  doc.readyState = 'loading';
+  doc.querySelectorAll = function () { return []; };
+  const origQuery = doc.querySelector;
+  doc.querySelector = function (sel) {
+    if (sel === '#settingTimezone') return tzSelect;
+    return origQuery.call(doc, sel);
+  };
+  const { TJ } = loadTradeJournal(['js/app.js'], { globals: { document: doc } });
+
+  const manyTrades = [];
+  for (let i = 0; i < 10000; i++) {
+    manyTrades.push(TJ.store.normalizeTrade({
+      id: 't-' + i,
+      date: '2026-01-' + String((i % 28) + 1).padStart(2, '0'),
+      time: '10:00',
+      symbol: i % 2 ? 'BTCUSD' : 'ETHUSD',
+      side: i % 3 ? 'long' : 'short',
+      entry: 100 + (i % 50),
+      qty: 1,
+      exits: [{ id: 'e-' + i, qty: 1, price: 105 + (i % 40), date: '2026-01-' + String((i % 28) + 1).padStart(2, '0') }]
+    }));
+  }
+  TJ.store.state.trades = manyTrades;
+
+  const mapA = TJ.store.dayPnlMap(manyTrades);
+  const mapB = TJ.store.dayPnlMap(manyTrades);
+  assert.equal(mapA, mapB);
+  const balA = TJ.store.balanceAll();
+  const balB = TJ.store.balanceAll();
+  assert.equal(balA, balB);
+
+  TJ.store.invalidateCache();
+  const mapC = TJ.store.dayPnlMap(manyTrades);
+  assert.notEqual(mapA, mapC);
+
+  TJ.app.fillTimezoneOptions('UTC');
+  TJ.app.fillTimezoneOptions('Europe/Moscow');
+  assert.equal(innerSetCount, 1);
+  assert.equal(tzSelect.value, 'Europe/Moscow');
+
+  TJ.app.state.sort = { key: 'pnl', dir: 'desc' };
+  const startMs = Date.now();
+  const sorted = TJ.app.getFilteredTrades();
+  const elapsedMs = Date.now() - startMs;
+  assert.equal(sorted.length, 10000);
+  assert.ok(elapsedMs < 1500, '10k trade sort took too long: ' + elapsedMs + 'ms');
+});

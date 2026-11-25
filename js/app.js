@@ -604,6 +604,22 @@
      Dashboard
      ============================================================ */
 
+  let lastDashboardCharts = null;
+
+  function redrawDashboardCharts() {
+    if (!lastDashboardCharts) {
+      renderDashboard();
+      return;
+    }
+    NS.charts.equity($('#equityChart'), lastDashboardCharts.points, { emptyText: T('Нет закрытых сделок за период') });
+    NS.charts.donut($('#donutChart'), [
+      { value: lastDashboardCharts.wins, color: cssVar('--green', '#31e3aa') },
+      { value: lastDashboardCharts.losses, color: cssVar('--red', '#ff6b81') },
+      { value: lastDashboardCharts.be, color: cssVar('--muted-2', '#7c8fa6') }
+    ]);
+    NS.charts.bars($('#dailyChart'), lastDashboardCharts.daily, { emptyText: T('За этот период сделок не было') });
+  }
+
   function renderDashboard() {
     $('#welcomeBanner').hidden = !store.state.demo;
 
@@ -642,6 +658,13 @@
 
     const daily = dailySeries(data.filtered, 30);
     NS.charts.bars($('#dailyChart'), daily, { emptyText: T('За этот период сделок не было') });
+    lastDashboardCharts = {
+      points: points,
+      wins: m.wins,
+      losses: m.losses,
+      be: m.be,
+      daily: daily
+    };
     const dailyNet = daily.reduce(function (sum, point) { return sum + point.value; }, 0);
     const dailyChip = $('#dailyChip');
     dailyChip.textContent = daily.length ? U.money(dailyNet, { sign: true }) : '—';
@@ -715,40 +738,15 @@
     }).join('');
   }
 
-  function orderedPnlEvents(trades) {
-    const events = [];
-    (trades || []).forEach(function (trade) {
-      store.tradePnlEvents(trade).forEach(function (event, index) {
-        events.push({
-          date: event.date || trade.date || '',
-          time: trade.time || '00:00',
-          tradeId: trade.id || '',
-          exitId: event.exitId || '',
-          index: index,
-          pnl: event.pnl,
-          trade: trade
-        });
-      });
-    });
-    events.sort(function (a, b) {
-      return (a.date || '').localeCompare(b.date || '') ||
-        (a.time || '').localeCompare(b.time || '') ||
-        (a.tradeId || '').localeCompare(b.tradeId || '') ||
-        (a.exitId || '').localeCompare(b.exitId || '') ||
-        a.index - b.index;
-    });
-    return events;
-  }
-
   function buildEquityPoints(closedAsc, base) {
     let balance = base;
     const points = [{ label: T('Старт'), value: balance, meta: T('Начало периода') }];
-    orderedPnlEvents(closedAsc).forEach(function (event) {
+    store.pnlEventRows(closedAsc).forEach(function (event) {
       balance += event.pnl;
       points.push({
         label: event.date,
         value: balance,
-        meta: event.trade.symbol + ' · ' + U.money(event.pnl, { sign: true })
+        meta: (event.trade ? event.trade.symbol : '') + ' · ' + U.money(event.pnl, { sign: true })
       });
     });
 
@@ -1031,17 +1029,25 @@
     return decorated.map(function (item) { return item.trade; });
   }
 
+  let lastSetupsSelect = null;
+  let lastSetupsKey = '';
+
   function populateSetupFilter() {
     const select = $('#filterSetup');
     const collator = getCollator();
     const setups = Array.from(new Set(store.state.trades.map(function (t) { return t.setup; }).filter(function (s) { return !!s; })))
       .sort(function (a, b) { return collator.compare(a, b); });
+    const cacheKey = U.locale() + '\u0000' + setups.join('\u0000');
     const current = state.filters.setup;
-    let html = '<option value="all">Все сетапы</option>';
-    setups.forEach(function (setup) {
-      html += '<option data-i18n-skip value="' + U.escapeHtml(setup) + '">' + U.escapeHtml(setup) + '</option>';
-    });
-    select.innerHTML = html;
+    if (lastSetupsSelect !== select || lastSetupsKey !== cacheKey) {
+      let html = '<option value="all">Все сетапы</option>';
+      setups.forEach(function (setup) {
+        html += '<option data-i18n-skip value="' + U.escapeHtml(setup) + '">' + U.escapeHtml(setup) + '</option>';
+      });
+      select.innerHTML = html;
+      lastSetupsSelect = select;
+      lastSetupsKey = cacheKey;
+    }
     if (current !== 'all' && setups.indexOf(current) === -1) {
       state.filters.setup = 'all';
       select.value = 'all';
@@ -1918,37 +1924,54 @@
      Settings & data
      ============================================================ */
 
+  let tzOptionsCache = null;
+
   function fillTimezoneOptions(selected) {
     const select = $('#settingTimezone');
     if (!select) return;
-    let supported = [];
-    try {
-      if (typeof Intl.supportedValuesOf === 'function') supported = Intl.supportedValuesOf('timeZone');
-    } catch (err) { supported = []; }
-    const common = COMMON_TIMEZONES.filter(function (zone) { return U.validTimeZone(zone); });
-    const seen = new Set();
-    const all = [];
-    common.concat(supported).forEach(function (zone) {
-      if (!zone || seen.has(zone) || !U.validTimeZone(zone)) return;
-      seen.add(zone);
-      all.push(zone);
-    });
-    if (selected && U.validTimeZone(selected) && !seen.has(selected)) {
-      seen.add(selected);
-      all.push(selected);
+    const hourKey = U.locale() + '|' + Math.floor(Date.now() / 3600000);
+    if (!tzOptionsCache || tzOptionsCache.key !== hourKey) {
+      let supported = [];
+      try {
+        if (typeof Intl.supportedValuesOf === 'function') supported = Intl.supportedValuesOf('timeZone');
+      } catch (err) { supported = []; }
+      const common = COMMON_TIMEZONES.filter(function (zone) { return U.validTimeZone(zone); });
+      const seen = new Set();
+      const all = [];
+      common.concat(supported).forEach(function (zone) {
+        if (!zone || seen.has(zone) || !U.validTimeZone(zone)) return;
+        seen.add(zone);
+        all.push(zone);
+      });
+      const commonSet = new Set(common);
+      const rest = all.filter(function (zone) { return !commonSet.has(zone); });
+      const now = new Date();
+      const offsetLabel = function (zone) {
+        return U.escapeHtml(zone + ' · ' + U.timeZoneOffsetLabel(zone, now));
+      };
+      const option = function (zone) {
+        return '<option value="' + U.escapeHtml(zone) + '">' + offsetLabel(zone) + '</option>';
+      };
+      tzOptionsCache = {
+        key: hourKey,
+        zones: seen,
+        select: null,
+        html:
+          '<optgroup label="' + U.escapeHtml(T('Популярные')) + '">' + common.map(option).join('') + '</optgroup>' +
+          (rest.length ? '<optgroup label="' + U.escapeHtml(T('Все часовые пояса')) + '">' + rest.map(option).join('') + '</optgroup>' : '')
+      };
     }
-    const commonSet = new Set(common);
-    const rest = all.filter(function (zone) { return !commonSet.has(zone); });
-    const now = new Date();
-    const offsetLabel = function (zone) {
-      return U.escapeHtml(zone + ' · ' + U.timeZoneOffsetLabel(zone, now));
-    };
-    const option = function (zone) {
-      return '<option value="' + U.escapeHtml(zone) + '">' + offsetLabel(zone) + '</option>';
-    };
-    select.innerHTML =
-      '<optgroup label="' + U.escapeHtml(T('Популярные')) + '">' + common.map(option).join('') + '</optgroup>' +
-      (rest.length ? '<optgroup label="' + U.escapeHtml(T('Все часовые пояса')) + '">' + rest.map(option).join('') + '</optgroup>' : '');
+    const extraNeeded = !!(selected && U.validTimeZone(selected) && !tzOptionsCache.zones.has(selected));
+    if (tzOptionsCache.select !== select || extraNeeded || tzOptionsCache.extra !== (extraNeeded ? selected : '')) {
+      let html = tzOptionsCache.html;
+      if (extraNeeded) {
+        html += '<option value="' + U.escapeHtml(selected) + '">' +
+          U.escapeHtml(selected + ' · ' + U.timeZoneOffsetLabel(selected, new Date())) + '</option>';
+      }
+      select.innerHTML = html;
+      tzOptionsCache.select = select;
+      tzOptionsCache.extra = extraNeeded ? selected : '';
+    }
     if (selected && U.validTimeZone(selected)) select.value = selected;
   }
 
@@ -4814,7 +4837,7 @@
       if (VIEW_META[view] && view !== state.view) navigate(view, { push: false });
     });
     window.addEventListener('resize', U.debounce(function () {
-      if (state.view === 'dashboard') renderDashboard();
+      if (state.view === 'dashboard') redrawDashboardCharts();
     }, 220));
     window.addEventListener('tj:download-error', function (event) {
       toast(event.detail || 'Не удалось сохранить файл.', 'error');
@@ -5313,7 +5336,9 @@
     saveTrade: saveTrade,
     renderCalendar: renderCalendar,
     renderDayPanel: renderDayPanel,
-    changeMonth: changeMonth
+    changeMonth: changeMonth,
+    redrawDashboardCharts: redrawDashboardCharts,
+    fillTimezoneOptions: fillTimezoneOptions
   };
 
   if (document.readyState === 'loading') {
