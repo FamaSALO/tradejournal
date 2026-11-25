@@ -1543,4 +1543,82 @@ mod tests {
             .unwrap();
         assert!(err.contains("journal-external-broken.json"));
     }
+
+    #[test]
+    fn cleanup_unused_screenshots_respects_grace_period_references_and_invalid_names() {
+        let store = TempStore::new("cleanup-grace");
+        save_journal(&store.state, sample_journal("clean")).unwrap();
+
+        let kept_path = store.state.paths.screenshots.join("kept.png");
+        let fresh_path = store.state.paths.screenshots.join("fresh-orphan.png");
+        let old_path = store.state.paths.screenshots.join("old-orphan.png");
+
+        fs::write(&kept_path, b"kept").unwrap();
+        fs::write(&fresh_path, b"fresh").unwrap();
+        fs::write(&old_path, b"old-bytes").unwrap();
+
+        let past = std::time::SystemTime::now()
+            - std::time::Duration::from_millis(UNUSED_SCREENSHOT_GRACE_MS + 60_000);
+        let old_file = fs::OpenOptions::new().write(true).open(&old_path).unwrap();
+        old_file.set_modified(past).unwrap();
+        drop(old_file);
+
+        let result = cleanup_unused_screenshots(
+            &store.state,
+            vec![
+                "kept.png".to_string(),
+                "fresh-orphan.png".to_string(),
+                "old-orphan.png".to_string(),
+                "../escape.png".to_string(),
+            ],
+        )
+        .unwrap();
+
+        assert_eq!(result.skipped_referenced, 1);
+        assert_eq!(result.skipped_recent, 1);
+        assert_eq!(result.deleted_count, 1);
+        assert_eq!(result.deleted, vec!["old-orphan.png".to_string()]);
+        assert_eq!(result.deleted_size, 9);
+        assert_eq!(result.failed, vec!["../escape.png".to_string()]);
+        assert!(kept_path.exists());
+        assert!(fresh_path.exists());
+        assert!(!old_path.exists());
+    }
+
+    #[test]
+    fn decode_screenshot_data_url_validates_mime_payload_and_magic_bytes() {
+        let b64 = |bytes: &[u8]| base64::engine::general_purpose::STANDARD.encode(bytes);
+
+        let png = b"\x89PNG\r\n\x1a\nrest";
+        let (ext_png, decoded_png) =
+            decode_screenshot_data_url(&format!("data:image/png;base64,{}", b64(png))).unwrap();
+        assert_eq!(ext_png, "png");
+        assert_eq!(decoded_png, png);
+
+        let jpg = b"\xFF\xD8\xFF\xE0data";
+        let (ext_jpg, decoded_jpg) =
+            decode_screenshot_data_url(&format!("data:image/jpeg;base64,{}", b64(jpg))).unwrap();
+        assert_eq!(ext_jpg, "jpg");
+        assert_eq!(decoded_jpg, jpg);
+
+        let webp = b"RIFF\x00\x00\x00\x00WEBPvp8";
+        let (ext_webp, decoded_webp) =
+            decode_screenshot_data_url(&format!("data:image/webp;base64,{}", b64(webp))).unwrap();
+        assert_eq!(ext_webp, "webp");
+        assert_eq!(decoded_webp, webp);
+
+        assert!(decode_screenshot_data_url("not-a-data-url").is_err());
+        assert!(decode_screenshot_data_url("data:image/svg+xml;base64,AAAA").is_err());
+        assert!(decode_screenshot_data_url("data:image/png;base64,!!!").is_err());
+        assert!(decode_screenshot_data_url("data:image/png;base64,").is_err());
+        assert!(
+            decode_screenshot_data_url(&format!("data:image/png;base64,{}", b64(jpg))).is_err()
+        );
+
+        let too_large = vec![0x89u8; MAX_SCREENSHOT_BYTES + 1];
+        assert!(
+            decode_screenshot_data_url(&format!("data:image/png;base64,{}", b64(&too_large)))
+                .is_err()
+        );
+    }
 }

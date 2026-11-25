@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { loadTradeJournal } from './helpers/load-tj.mjs';
 import { fakeDocument } from './helpers/fake-dom.mjs';
 
@@ -546,4 +547,59 @@ test('desktop-bridge syncs platform from data_info with UA fallback (UX-02)', as
   assert.equal(sandbox.tradeJournalDesktop.platform, 'win32');
   await sandbox.tradeJournalDesktop.getDataInfo();
   assert.equal(sandbox.tradeJournalDesktop.platform, 'darwin');
+});
+
+test('getFilteredTrades supports search, side, result buckets and R/symbol/date sorting, and CSP narrows default-src (TEST-01)', function () {
+  const { TJ } = loadApp();
+  const s = TJ.store;
+  const trades = [
+    s.normalizeTrade({
+      id: 'w1', date: '2026-01-05', time: '09:30', symbol: 'AAPL', side: 'long',
+      entry: 100, stop: 95, qty: 10, setup: 'Breakout', tags: ['momentum'],
+      exits: [{ id: 'e1', qty: 10, price: 110, date: '2026-01-05' }]
+    }),
+    s.normalizeTrade({
+      id: 'l1', date: '2026-01-06', time: '14:00', symbol: 'BTCUSD', side: 'short',
+      entry: 200, stop: 210, qty: 2, setup: 'Fade', notes: 'rushed entry',
+      exits: [{ id: 'e2', qty: 2, price: 215, date: '2026-01-06' }]
+    }),
+    s.normalizeTrade({
+      id: 'b1', date: '2026-01-07', time: '10:00', symbol: 'EURUSD', side: 'long',
+      entry: 10, stop: 9, qty: 1, exits: [{ id: 'e3', qty: 1, price: 10, date: '2026-01-07' }]
+    }),
+    s.normalizeTrade({
+      id: 'p1', date: '2026-01-08', time: '11:00', symbol: 'ETHUSD', side: 'long',
+      entry: 100, stop: 90, qty: 2, exits: [{ id: 'e4', qty: 1, price: 130, date: '2026-01-08' }]
+    }),
+    s.normalizeTrade({
+      id: 'o1', date: '2026-01-09', time: '12:00', symbol: 'SOLUSD', side: 'long',
+      entry: 50, stop: 45, qty: 4, exits: []
+    })
+  ];
+  s.state.trades = trades;
+
+  TJ.app.state.filters = { search: 'rushed', side: 'all', result: 'all', setup: 'all' };
+  assert.deepEqual(TJ.app.getFilteredTrades().map(function (t) { return t.id; }), ['l1']);
+
+  TJ.app.state.filters = { search: '', side: 'long', result: 'all', setup: 'all' };
+  assert.equal(TJ.app.getFilteredTrades().length, 4);
+
+  const buckets = { win: ['w1', 'p1'], loss: ['l1'], be: ['b1'], open: ['o1'], partial: ['p1'] };
+  Object.keys(buckets).forEach(function (bucket) {
+    TJ.app.state.filters = { search: '', side: 'all', result: bucket, setup: 'all' };
+    const got = TJ.app.getFilteredTrades().map(function (t) { return t.id; }).sort();
+    assert.deepEqual(got, buckets[bucket].slice().sort(), 'bucket ' + bucket);
+  });
+
+  TJ.app.state.filters = { search: '', side: 'all', result: 'all', setup: 'all' };
+  TJ.app.state.sort = { key: 'r', dir: 'desc' };
+  const byR = TJ.app.getFilteredTrades().map(function (t) { return t.id; });
+  assert.equal(byR[0], 'p1');
+  assert.equal(byR[byR.length - 1], 'o1');
+
+  TJ.app.state.sort = { key: 'symbol', dir: 'asc' };
+  assert.equal(TJ.app.getFilteredTrades()[0].symbol, 'AAPL');
+
+  const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+  assert.match(html, /Content-Security-Policy" content="default-src 'self';/);
 });
