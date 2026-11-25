@@ -1765,47 +1765,53 @@
     const target = U.parseNum($('#calcTarget').value);
     const pointValue = U.parseNum($('#calcPointValue').value);
 
-    const riskAmount = balance !== null && riskPct !== null ? balance * riskPct / 100 : null;
     const distance = entry !== null && stop !== null ? Math.abs(entry - stop) : null;
+
+    let error = '';
+    if (balance !== null && balance <= 0) error = 'Укажите баланс счёта больше нуля.';
+    else if (riskPct !== null && (riskPct < 0 || riskPct > 100)) error = 'Риск на сделку должен быть от 0 до 100%.';
+    else if (pointValue !== null && pointValue <= 0) error = 'Стоимость пункта должна быть больше нуля.';
+    else if (entry !== null && entry <= 0) error = 'Цена входа должна быть больше нуля.';
+    else if (stop !== null && stop < 0) error = 'Стоп-лосс не может быть отрицательным.';
+    else if (target !== null && target < 0) error = 'Тейк-профит не может быть отрицательным.';
+    else if (entry !== null && stop !== null && Math.abs(entry - stop) < 1e-12) error = 'Стоп-лосс не может совпадать с ценой входа.';
+    else if (entry !== null && stop !== null && target !== null && distance > 0 && (target - entry) * (stop - entry) > 0) {
+      error = 'Стоп и тейк должны находиться по разные стороны от входа.';
+    }
+
+    const riskAmount = !error && balance !== null && riskPct !== null ? balance * riskPct / 100 : null;
     let quantity = null;
     let notional = null;
 
-    if (riskAmount !== null && distance !== null && distance > 0 && pointValue !== null && pointValue > 0) {
+    if (!error && riskAmount !== null && distance !== null && distance > 0 && pointValue !== null && pointValue > 0) {
       quantity = riskAmount / (distance * pointValue);
-      if (entry !== null) notional = quantity * entry;
+      if (entry !== null) notional = quantity * entry * pointValue;
     }
 
     let rr = null;
-    if (entry !== null && stop !== null && target !== null && distance > 0) {
+    if (!error && entry !== null && stop !== null && target !== null && distance > 0) {
       rr = Math.abs(target - entry) / distance;
     }
     const potentialProfit = rr !== null && riskAmount !== null ? riskAmount * rr : null;
 
-    $('#calcQtyValue').textContent = quantity !== null ? U.qty(quantity) : '—';
-    $('#calcNotional').textContent = 'Номинал: ' + (notional !== null ? U.money(notional) : '—');
-    $('#calcRiskAmount').textContent = riskAmount !== null ? U.money(riskAmount) : '—';
-    $('#calcLoss').textContent = riskAmount !== null ? U.money(-riskAmount) : '—';
-    $('#calcProfit').textContent = potentialProfit !== null ? U.money(potentialProfit, { sign: true }) : '—';
-    $('#calcRR').textContent = rr !== null ? '1 : ' + decimal(rr, 2) : '—';
-
-    let error = '';
-    if (entry !== null && stop !== null && Math.abs(entry - stop) < 1e-12) error = 'Стоп-лосс не может совпадать с ценой входа.';
-    else if (entry !== null && stop !== null && target !== null && distance > 0 && (target - entry) * (stop - entry) > 0) {
-      error = 'Стоп и тейк должны находиться по разные стороны от входа.';
-    } else if (pointValue !== null && pointValue <= 0) error = 'Стоимость пункта должна быть больше нуля.';
-    else if (balance !== null && balance <= 0) error = 'Укажите баланс счёта больше нуля.';
+    $('#calcQtyValue').textContent = !error && quantity !== null ? U.qty(quantity) : '—';
+    $('#calcNotional').textContent = T('Номинал') + ': ' + (!error && notional !== null ? U.money(notional) : '—');
+    $('#calcRiskAmount').textContent = !error && riskAmount !== null ? U.money(riskAmount) : '—';
+    $('#calcLoss').textContent = !error && riskAmount !== null ? U.money(-riskAmount) : '—';
+    $('#calcProfit').textContent = !error && potentialProfit !== null ? U.money(potentialProfit, { sign: true }) : '—';
+    $('#calcRR').textContent = !error && rr !== null ? '1 : ' + decimal(rr, 2) : '—';
 
     $('#calcError').hidden = !error;
-    if (error) $('#calcError').textContent = error;
+    if (error) $('#calcError').textContent = T(error);
 
     const visual = $('#rrVisual');
-    if (rr !== null && rr > 0 && riskAmount !== null) {
+    if (!error && rr !== null && rr > 0 && riskAmount !== null) {
       visual.hidden = false;
       const riskShare = (1 / (1 + rr)) * 100;
       $('#rrRisk').style.flexBasis = riskShare + '%';
       $('#rrReward').style.flexBasis = (100 - riskShare) + '%';
-      $('#rrRisk span').textContent = 'Риск ' + U.money(riskAmount);
-      $('#rrReward span').textContent = 'Прибыль ' + U.money(potentialProfit);
+      $('#rrRisk span').textContent = T('Риск') + ' ' + U.money(riskAmount);
+      $('#rrReward span').textContent = T('Прибыль') + ' ' + U.money(potentialProfit);
     } else {
       visual.hidden = true;
     }
@@ -5019,7 +5025,8 @@
     disciplineSnapshot: disciplineSnapshot,
     renderDiscipline: renderDiscipline,
     getFilteredTrades: getFilteredTrades,
-    collectExitRows: collectExitRows
+    collectExitRows: collectExitRows,
+    calcUpdate: calcUpdate
   };
 
   if (document.readyState === 'loading') {

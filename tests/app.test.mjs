@@ -150,3 +150,57 @@ test('collectExitRows skips empty exit rows even when date is prefilled and vali
   const missingQty = TJ.app.collectExitRows('2026-01-05');
   assert.match(missingQty.error, /количество/);
 });
+
+test('calcUpdate validates negative risk, non-positive entry, same-side target and scales notional by pointValue', function () {
+  const els = {
+    '#calcBalance': { value: '10000' },
+    '#calcRisk': { value: '1' },
+    '#calcEntry': { value: '100' },
+    '#calcStop': { value: '95' },
+    '#calcTarget': { value: '110' },
+    '#calcPointValue': { value: '2' },
+    '#calcQtyValue': { textContent: '' },
+    '#calcNotional': { textContent: '' },
+    '#calcRiskAmount': { textContent: '' },
+    '#calcLoss': { textContent: '' },
+    '#calcProfit': { textContent: '' },
+    '#calcRR': { textContent: '' },
+    '#calcError': { hidden: true, textContent: '' },
+    '#rrVisual': { hidden: true },
+    '#rrRisk': { style: { flexBasis: '' } },
+    '#rrReward': { style: { flexBasis: '' } },
+    '#rrRisk span': { textContent: '' },
+    '#rrReward span': { textContent: '' },
+    '#calcHint': { textContent: '', style: { display: '' } }
+  };
+  const { TJ } = loadApp(els);
+
+  TJ.app.calcUpdate();
+  assert.equal(els['#calcError'].hidden, true);
+  assert.equal(els['#calcQtyValue'].textContent, '10');
+  assert.match(els['#calcNotional'].textContent, /2[\s\u00a0]?000/);
+  assert.equal(els['#rrVisual'].hidden, false);
+
+  els['#calcRisk'].value = '-1';
+  TJ.app.calcUpdate();
+  assert.equal(els['#calcError'].hidden, false);
+  assert.equal(els['#calcQtyValue'].textContent, '—');
+  assert.equal(els['#calcLoss'].textContent, '—');
+  assert.equal(els['#calcRR'].textContent, '—');
+  assert.equal(els['#rrVisual'].hidden, true);
+
+  els['#calcRisk'].value = '1';
+  els['#calcTarget'].value = '90';
+  TJ.app.calcUpdate();
+  assert.equal(els['#calcError'].hidden, false);
+  assert.equal(els['#calcQtyValue'].textContent, '—');
+  assert.equal(els['#calcProfit'].textContent, '—');
+  assert.equal(els['#calcRR'].textContent, '—');
+  assert.equal(els['#rrVisual'].hidden, true);
+
+  els['#calcTarget'].value = '110';
+  els['#calcEntry'].value = '0';
+  TJ.app.calcUpdate();
+  assert.equal(els['#calcError'].hidden, false);
+  assert.equal(els['#calcQtyValue'].textContent, '—');
+});
