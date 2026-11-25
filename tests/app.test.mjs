@@ -295,3 +295,45 @@ test('openModal/closeModal preserves nested focus stack and traps Tab inside top
   TJ.app.closeModal('tradeModal');
   assert.equal(doc.activeElement, triggerBtn);
 });
+
+test('desktop export cancellation does not show success toast or mark backup exported', async function () {
+  let canceled = true;
+  const appendedToasts = [];
+  const toastsEl = {
+    appendChild: function (node) { appendedToasts.push(node); }
+  };
+  const doc = fakeDocument();
+  doc.readyState = 'loading';
+  doc.createElement = function () {
+    return { className: '', classList: { add: function () {} }, innerHTML: '', remove: function () {} };
+  };
+  const origQuery = doc.querySelector;
+  doc.querySelector = function (sel) {
+    if (sel === '#toasts') return toastsEl;
+    return origQuery.call(doc, sel);
+  };
+  const desktopMock = {
+    isDesktop: true,
+    saveDownload: function () {
+      return Promise.resolve({ ok: true, canceled: canceled, path: canceled ? null : '/tmp/out.json' });
+    },
+    saveDownloadBytes: function () {
+      return Promise.resolve({ ok: true, canceled: canceled, path: canceled ? null : '/tmp/out.zip' });
+    }
+  };
+  const { TJ, storage } = loadTradeJournal(['js/app.js'], {
+    globals: { document: doc, setTimeout: function () { return 0; } },
+    desktop: desktopMock
+  });
+
+  await TJ.app.exportJSON();
+  await TJ.app.exportCSV();
+  await TJ.app.exportZIP();
+  assert.equal(appendedToasts.length, 0);
+  assert.equal(storage.getItem(TJ.store.META_KEY), null);
+
+  canceled = false;
+  await TJ.app.exportJSON();
+  assert.equal(appendedToasts.length, 1);
+  assert.ok(JSON.parse(storage.getItem(TJ.store.META_KEY)).lastExportAt);
+});

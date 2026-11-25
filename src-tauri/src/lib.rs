@@ -1104,13 +1104,33 @@ fn choose_download_path(app: &tauri::AppHandle, filename: &str) -> Option<PathBu
     dialog.save_file()
 }
 
+async fn choose_download_path_async(
+    app: tauri::AppHandle,
+    filename: String,
+) -> Result<Option<PathBuf>, String> {
+    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    let dialog_app = app.clone();
+    app.run_on_main_thread(move || {
+        let path = choose_download_path(&dialog_app, &filename);
+        let _ = tx.send(path);
+    })
+    .map_err(|error| format!("Не удалось открыть диалог сохранения: {error}"))?;
+
+    tauri::async_runtime::spawn_blocking(move || {
+        rx.recv()
+            .map_err(|error| format!("Не удалось получить путь сохранения: {error}"))
+    })
+    .await
+    .map_err(|error| format!("Не удалось выбрать файл для сохранения: {error}"))?
+}
+
 #[tauri::command]
-fn save_download(
+async fn save_download(
     app: tauri::AppHandle,
     filename: String,
     content: String,
 ) -> Result<SaveDownloadResult, String> {
-    let Some(path) = choose_download_path(&app, &filename) else {
+    let Some(path) = choose_download_path_async(app, filename).await? else {
         return Ok(SaveDownloadResult {
             ok: true,
             canceled: true,
@@ -1118,27 +1138,26 @@ fn save_download(
         });
     };
 
-    write_atomic(&path, content.as_bytes())
+    let saved_path = path.clone();
+    tauri::async_runtime::spawn_blocking(move || write_atomic(&path, content.as_bytes()))
+        .await
+        .map_err(|error| format!("Не удалось выполнить сохранение файла: {error}"))?
         .map_err(|error| format!("Не удалось сохранить файл: {error}"))?;
 
     Ok(SaveDownloadResult {
         ok: true,
         canceled: false,
-        path: Some(path.to_string_lossy().to_string()),
+        path: Some(saved_path.to_string_lossy().to_string()),
     })
 }
 
 #[tauri::command]
-fn save_download_bytes(
+async fn save_download_bytes(
     app: tauri::AppHandle,
     filename: String,
     content: String,
 ) -> Result<SaveDownloadResult, String> {
-    let bytes = base64::engine::general_purpose::STANDARD
-        .decode(content.as_bytes())
-        .map_err(|_| "Не удалось декодировать данные файла.".to_string())?;
-
-    let Some(path) = choose_download_path(&app, &filename) else {
+    let Some(path) = choose_download_path_async(app, filename).await? else {
         return Ok(SaveDownloadResult {
             ok: true,
             canceled: true,
@@ -1146,12 +1165,22 @@ fn save_download_bytes(
         });
     };
 
-    write_atomic(&path, &bytes).map_err(|error| format!("Не удалось сохранить файл: {error}"))?;
+    let saved_path = path.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(content.as_bytes())
+            .map_err(|_| "Не удалось декодировать данные файла.".to_string())?;
+        write_atomic(&path, &bytes)
+            .map_err(|error| format!("Не удалось сохранить файл: {error}"))?;
+        Ok::<(), String>(())
+    })
+    .await
+    .map_err(|error| format!("Не удалось выполнить сохранение файла: {error}"))??;
 
     Ok(SaveDownloadResult {
         ok: true,
         canceled: false,
-        path: Some(path.to_string_lossy().to_string()),
+        path: Some(saved_path.to_string_lossy().to_string()),
     })
 }
 

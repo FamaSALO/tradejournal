@@ -228,9 +228,10 @@
       downloadBtn.disabled = true;
       downloadBtn.textContent = 'Данные недоступны';
     } else {
-      downloadBtn.addEventListener('click', function () {
-        U.download('tradejournal-corrupt-' + U.todayISO() + '.json', rawData, 'application/json');
-        downloadBtn.textContent = 'Файл скачан';
+      downloadBtn.addEventListener('click', async function () {
+        const result = await U.download('tradejournal-corrupt-' + U.todayISO() + '.json', rawData, 'application/json');
+        if (!result || result.canceled || !result.ok) return;
+        downloadBtn.textContent = T('Файл скачан');
         toast('Повреждённые данные скачаны. Теперь можно сбросить журнал.', 'success');
       });
     }
@@ -2896,7 +2897,8 @@
         appVersion: APP_VERSION,
         exportedAt: new Date().toISOString()
       });
-      U.download('tradejournal-' + U.todayISO() + '.json', JSON.stringify(payload, null, 2), 'application/json');
+      const result = await U.download('tradejournal-' + U.todayISO() + '.json', JSON.stringify(payload, null, 2), 'application/json');
+      if (!result || result.canceled || !result.ok) return;
       markBackupExported();
       toast('Резервная копия скачана');
     } catch (err) {
@@ -2932,7 +2934,7 @@
     }).join('|');
   }
 
-  function exportCSV() {
+  async function exportCSV() {
     const trades = store.sortTrades(store.state.trades, 'desc');
     const headers = [
       'Дата', 'Время', 'Инструмент', 'Направление', 'Вход', 'Выход', 'Стоп при входе',
@@ -2972,7 +2974,8 @@
       ];
       lines.push(row.join(';'));
     });
-    U.download('tradejournal-trades-' + U.todayISO() + '.csv', '\uFEFF' + lines.join('\r\n'), 'text/csv;charset=utf-8');
+    const result = await U.download('tradejournal-trades-' + U.todayISO() + '.csv', '\uFEFF' + lines.join('\r\n'), 'text/csv;charset=utf-8');
+    if (!result || result.canceled || !result.ok) return;
     toast('Таблица сделок скачана в CSV');
   }
 
@@ -3013,7 +3016,8 @@
         { name: 'journal.json', data: JSON.stringify(payload, null, 2), date: new Date() },
         { name: 'README.txt', data: readme, date: new Date() }
       ]);
-      U.downloadBytes('tradejournal-backup-' + U.todayISO() + '.zip', archive, 'application/zip');
+      const result = await U.downloadBytes('tradejournal-backup-' + U.todayISO() + '.zip', archive, 'application/zip');
+      if (!result || result.canceled || !result.ok) return;
       markBackupExported();
       toast('ZIP-архив со скриншотами скачан');
     } catch (err) {
@@ -5123,7 +5127,10 @@
     calcUpdate: calcUpdate,
     openModal: openModal,
     closeModal: closeModal,
-    handleKeydown: handleKeydown
+    handleKeydown: handleKeydown,
+    exportJSON: exportJSON,
+    exportCSV: exportCSV,
+    exportZIP: exportZIP
   };
 
   if (document.readyState === 'loading') {

@@ -552,14 +552,23 @@
   function download(filename, content, mime) {
     const desktop = window.tradeJournalDesktop;
     if (desktop && typeof desktop.saveDownload === 'function') {
-      desktop.saveDownload(filename, String(content), mime || '').catch(function (err) {
+      return Promise.resolve().then(function () {
+        return desktop.saveDownload(filename, String(content), mime || '');
+      }).then(function (result) {
+        return {
+          ok: !!(result && result.ok !== false),
+          canceled: !!(result && result.canceled),
+          path: result && result.path ? result.path : null
+        };
+      }, function (err) {
         const message = err && err.message ? err.message : String(err || 'Не удалось сохранить файл.');
         window.dispatchEvent(new CustomEvent('tj:download-error', { detail: message }));
+        return { ok: false, canceled: false, error: message };
       });
-      return;
     }
 
     saveWebBlob(filename, new Blob([content], { type: mime || 'text/plain;charset=utf-8' }));
+    return Promise.resolve({ ok: true, canceled: false });
   }
 
   function bytesToBase64(bytes) {
@@ -580,16 +589,26 @@
       try {
         encoded = bytesToBase64(data);
       } catch (err) {
-        window.dispatchEvent(new CustomEvent('tj:download-error', { detail: 'Не удалось подготовить файл для сохранения.' }));
-        return;
+        const message = 'Не удалось подготовить файл для сохранения.';
+        window.dispatchEvent(new CustomEvent('tj:download-error', { detail: message }));
+        return Promise.resolve({ ok: false, canceled: false, error: message });
       }
-      desktop.saveDownloadBytes(filename, encoded, mime || '').catch(function (err) {
+      return Promise.resolve().then(function () {
+        return desktop.saveDownloadBytes(filename, encoded, mime || '');
+      }).then(function (result) {
+        return {
+          ok: !!(result && result.ok !== false),
+          canceled: !!(result && result.canceled),
+          path: result && result.path ? result.path : null
+        };
+      }, function (err) {
         const message = err && err.message ? err.message : String(err || 'Не удалось сохранить файл.');
         window.dispatchEvent(new CustomEvent('tj:download-error', { detail: message }));
+        return { ok: false, canceled: false, error: message };
       });
-      return;
     }
     saveWebBlob(filename, new Blob([data], { type: mime || 'application/octet-stream' }));
+    return Promise.resolve({ ok: true, canceled: false });
   }
 
   function bytes(value) {
