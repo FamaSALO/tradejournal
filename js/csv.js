@@ -33,16 +33,24 @@
   const EMOTION_ALIASES = {
     'спокоен': 'calm',
     'спокойно': 'calm',
+    'calm': 'calm',
     'уверен': 'confident',
     'уверенно': 'confident',
+    'confident': 'confident',
     'нейтрально': 'neutral',
     'нейтрален': 'neutral',
+    'neutral': 'neutral',
     'fomo': 'fomo',
     'страх': 'fear',
+    'fear': 'fear',
     'жадность': 'greed',
+    'greed': 'greed',
     'месть': 'revenge',
+    'revenge': 'revenge',
     'скука': 'boredom',
-    'эйфория': 'euphoria'
+    'boredom': 'boredom',
+    'эйфория': 'euphoria',
+    'euphoria': 'euphoria'
   };
 
   function todayISO(timeZone) {
@@ -163,6 +171,7 @@
     let negative = false;
     if (/^\(.*\)$/.test(text)) { negative = true; text = text.slice(1, -1); }
     text = text
+      .replace(/[\u2212\u2013]/g, '-')
       .replace(/[\s']/g, '')
       .replace(/[€$£¥₽₸]/g, '')
       .replace(/%$/, '');
@@ -178,7 +187,8 @@
     }
     const parsed = Number(text);
     if (!Number.isFinite(parsed)) return null;
-    return negative ? -parsed : parsed;
+    if (parsed === 0) return 0;
+    return negative ? (parsed < 0 ? parsed : -parsed) : parsed;
   }
 
   function isoDate(year, month, day) {
@@ -363,17 +373,41 @@
       }
 
       const rawDate = cell(row, result.mapping, 'date');
+      const rawDateText = String(rawDate === null || rawDate === undefined ? '' : rawDate).trim();
       let tradeDate = date(rawDate);
+      let tradeTime = time(cell(row, result.mapping, 'time'));
       if (rawDate && !tradeDate) {
         result.warnings.push(
           tr('Строка {line}: дата «{date}» не распознана, использована сегодняшняя.')
             .replace('{line}', line)
             .replace('{date}', rawDate)
         );
+      } else if (tradeDate && !tradeTime && rawDateText) {
+        const tzMatch = rawDateText.match(/^(\d{4})-(\d{1,2})-(\d{1,2})[T\s](\d{1,2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?\s*(Z|[+-]\d{2}:?\d{2})$/i);
+        if (tzMatch) {
+          const offset = tzMatch[7].toUpperCase() === 'Z'
+            ? 'Z'
+            : (tzMatch[7].length === 5 ? tzMatch[7].slice(0, 3) + ':' + tzMatch[7].slice(3) : tzMatch[7]);
+          const normalizedIso =
+            tzMatch[1] + '-' + String(Number(tzMatch[2])).padStart(2, '0') + '-' + String(Number(tzMatch[3])).padStart(2, '0') +
+            'T' + String(Number(tzMatch[4])).padStart(2, '0') + ':' + tzMatch[5] + ':' + (tzMatch[6] || '00') + offset;
+          const hours = Number(tzMatch[4]);
+          const minutes = Number(tzMatch[5]);
+          const seconds = Number(tzMatch[6] || 0);
+          if (hours <= 23 && minutes <= 59 && seconds <= 59 && U && typeof U.utcToZoned === 'function') {
+            const zoned = U.utcToZoned(normalizedIso, options.timeZone);
+            if (zoned && zoned.date && zoned.time) {
+              tradeDate = zoned.date;
+              tradeTime = zoned.time;
+            }
+          }
+        } else {
+          const localMatch = rawDateText.match(/(?:T|\s)(\d{1,2}:\d{2})(?::\d{2}(?:\.\d+)?)?\s*$/);
+          if (localMatch) tradeTime = time(localMatch[1]);
+        }
       }
       if (!tradeDate) tradeDate = todayISO(options.timeZone);
 
-      const tradeTime = time(cell(row, result.mapping, 'time'));
       const tradeSide = side(cell(row, result.mapping, 'side'));
       if (!tradeSide) {
         result.errors.push(tr('Строка {line}: направление должно быть Long/Short (или покупка/продажа).').replace('{line}', line));

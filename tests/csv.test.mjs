@@ -95,3 +95,40 @@ test('parses exits with their own dates', function () {
   assert.equal(parsed.exits[0].date, '2026-01-06');
   assert.equal(parsed.exits[1].date, '2026-01-05');
 });
+
+test('normalizes Unicode minus signs and maps English emotion aliases (DATA-01)', function () {
+  assert.equal(csv.number('−1 234,50 $'), -1234.5);
+  assert.equal(csv.number('–42.25'), -42.25);
+  assert.equal(csv.number('(−150)'), -150);
+
+  const text = [
+    'Date,Symbol,Side,Entry,Qty,Emotion',
+    '2026-01-05,EURUSD,Long,1.085,100,Calm',
+    '2026-01-06,GBPUSD,Short,1.27,50,GREED',
+    '2026-01-07,USDJPY,Long,150,10,Confident'
+  ].join('\n');
+  const res = csv.analyze(text, [], { timeZone: 'UTC' });
+  assert.equal(res.errors.length, 0);
+  assert.equal(res.trades[0].emotion, 'calm');
+  assert.equal(res.trades[1].emotion, 'greed');
+  assert.equal(res.trades[2].emotion, 'confident');
+});
+
+test('extracts time from ISO datetime column when Time column is empty (DATA-01)', function () {
+  const text = [
+    'Date,Time,Symbol,Side,Entry,Qty',
+    '2026-01-05T23:30:00Z,,BTCUSD,Long,90000,1',
+    '2026-01-05T14:30:00+02:00,,ETHUSD,Long,3000,1',
+    '2026-01-05 16:45,,AAPL,Long,200,10',
+    '2026-01-05T14:30:00Z,09:15,SOLUSD,Long,150,5'
+  ].join('\n');
+  const res = csv.analyze(text, [], { timeZone: 'Europe/Moscow' });
+  assert.equal(res.errors.length, 0);
+  assert.equal(res.trades[0].date, '2026-01-06');
+  assert.equal(res.trades[0].time, '02:30');
+  assert.equal(res.trades[1].date, '2026-01-05');
+  assert.equal(res.trades[1].time, '15:30');
+  assert.equal(res.trades[2].date, '2026-01-05');
+  assert.equal(res.trades[2].time, '16:45');
+  assert.equal(res.trades[3].time, '09:15');
+});
