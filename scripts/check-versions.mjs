@@ -67,10 +67,34 @@ compare('sw.js', 'CACHE_NAME',
 const readme = await text('README.md');
 const setupNames = Array.from(readme.matchAll(/TradeJournal_([0-9]+\.[0-9]+\.[0-9]+)_x64-setup\.exe/g));
 const portableNames = Array.from(readme.matchAll(/TradeJournal-portable-([0-9]+\.[0-9]+\.[0-9]+)-x64\.zip/g));
+const dmgNames = Array.from(readme.matchAll(/TradeJournal_([0-9]+\.[0-9]+\.[0-9]+)_universal\.dmg/g));
 if (!setupNames.length) fail('README.md: не найдено имя установщика TradeJournal_<версия>_x64-setup.exe.');
 if (!portableNames.length) fail('README.md: не найдено имя портативной сборки TradeJournal-portable-<версия>-x64.zip.');
+if (!dmgNames.length) fail('README.md: не найдено имя образа macOS TradeJournal_<версия>_universal.dmg.');
 setupNames.forEach(function (match) { compare('README.md', 'имя установщика', match[1]); });
 portableNames.forEach(function (match) { compare('README.md', 'имя портативной сборки', match[1]); });
+dmgNames.forEach(function (match) { compare('README.md', 'имя macOS DMG', match[1]); });
+
+const readmeRu = await text('README.ru.md');
+const setupNamesRu = Array.from(readmeRu.matchAll(/TradeJournal_([0-9]+\.[0-9]+\.[0-9]+)_x64-setup\.exe/g));
+const portableNamesRu = Array.from(readmeRu.matchAll(/TradeJournal-portable-([0-9]+\.[0-9]+\.[0-9]+)-x64\.zip/g));
+const dmgNamesRu = Array.from(readmeRu.matchAll(/TradeJournal_([0-9]+\.[0-9]+\.[0-9]+)_universal\.dmg/g));
+if (!setupNamesRu.length) fail('README.ru.md: не найдено имя установщика TradeJournal_<версия>_x64-setup.exe.');
+if (!portableNamesRu.length) fail('README.ru.md: не найдено имя портативной сборки TradeJournal-portable-<версия>-x64.zip.');
+if (!dmgNamesRu.length) fail('README.ru.md: не найдено имя образа macOS TradeJournal_<версия>_universal.dmg.');
+setupNamesRu.forEach(function (match) { compare('README.ru.md', 'имя установщика', match[1]); });
+portableNamesRu.forEach(function (match) { compare('README.ru.md', 'имя портативной сборки', match[1]); });
+dmgNamesRu.forEach(function (match) { compare('README.ru.md', 'имя macOS DMG', match[1]); });
+
+const checklist = await text('docs/RELEASE-CHECKLIST.md');
+const checklistTitle = capture('docs/RELEASE-CHECKLIST.md', checklist, /^#\s+Чек-лист ручной проверки релиза\s+([0-9]+\.[0-9]+\.[0-9]+)/m, 'title version');
+compare('docs/RELEASE-CHECKLIST.md', 'заголовок чек-листа', checklistTitle);
+const checklistSetup = Array.from(checklist.matchAll(/TradeJournal_([0-9]+\.[0-9]+\.[0-9]+)_x64-setup\.exe/g));
+const checklistDmg = Array.from(checklist.matchAll(/TradeJournal_([0-9]+\.[0-9]+\.[0-9]+)_universal\.dmg/g));
+if (!checklistSetup.length) fail('docs/RELEASE-CHECKLIST.md: не найдено имя установщика TradeJournal_<версия>_x64-setup.exe.');
+if (!checklistDmg.length) fail('docs/RELEASE-CHECKLIST.md: не найдено имя образа macOS TradeJournal_<версия>_universal.dmg.');
+checklistSetup.forEach(function (match) { compare('docs/RELEASE-CHECKLIST.md', 'имя установщика', match[1]); });
+checklistDmg.forEach(function (match) { compare('docs/RELEASE-CHECKLIST.md', 'имя macOS DMG', match[1]); });
 
 if (problems.length) {
   console.error('Проверка версий не пройдена:');

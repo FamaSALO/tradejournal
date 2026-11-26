@@ -1,8 +1,8 @@
 use base64::Engine as _;
 use serde::Serialize;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs::{self, OpenOptions};
-use std::io::{ErrorKind, Write};
+use std::io::{BufWriter, ErrorKind, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -30,11 +30,18 @@ struct StorePaths {
     screenshots: PathBuf,
 }
 
+struct StagedDownload {
+    target_path: PathBuf,
+    temp_path: PathBuf,
+    writer: Option<BufWriter<fs::File>>,
+}
+
 #[derive(Clone)]
 struct AppState {
     paths: StorePaths,
     save_lock: Arc<Mutex<()>>,
     last_auto_backup: Arc<Mutex<Option<Instant>>>,
+    staged_downloads: Arc<Mutex<HashMap<String, StagedDownload>>>,
 }
 
 #[derive(Serialize)]
@@ -80,6 +87,7 @@ struct StorageHealth {
     unused_count: usize,
     unused_size: u64,
     unused: Vec<UnusedScreenshot>,
+    warnings: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -107,6 +115,15 @@ struct ScreenshotSaved {
 struct SaveDownloadResult {
     ok: bool,
     canceled: bool,
+    path: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DownloadBeginResult {
+    ok: bool,
+    canceled: bool,
+    token: Option<String>,
     path: Option<String>,
 }
 
@@ -175,18 +192,22 @@ fn validate_raw(raw: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn unique_temp_path(path: &Path) -> PathBuf {
+    let counter = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    path.with_file_name(format!(
+        ".tj-{}-{}-{}.tmp",
+        std::process::id(),
+        now_millis(),
+        counter
+    ))
+}
+
 fn write_atomic(path: &Path, content: &[u8]) -> std::io::Result<()> {
     if let Some(directory) = path.parent() {
         fs::create_dir_all(directory)?;
     }
 
-    let counter = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let temp_path = path.with_file_name(format!(
-        ".tj-{}-{}-{}.tmp",
-        std::process::id(),
-        now_millis(),
-        counter
-    ));
+    let temp_path = unique_temp_path(path);
 
     let write_result = (|| -> std::io::Result<()> {
         let mut file = OpenOptions::new()
@@ -263,11 +284,15 @@ fn unique_backup_path(backup_dir: &Path, reason: &str) -> PathBuf {
 
 fn backup_info(path: &Path) -> Option<BackupInfo> {
     let metadata = fs::metadata(path).ok()?;
+    if !metadata.is_file() {
+        return None;
+    }
+    let file_name = path.file_name()?.to_string_lossy().to_string();
     Some(BackupInfo {
-        name: path.file_name()?.to_string_lossy().to_string(),
+        reason: backup_reason(&file_name),
+        name: file_name,
         size: metadata.len(),
         mtime: mtime_millis(&metadata),
-        reason: backup_reason(&path.file_name()?.to_string_lossy()),
     })
 }
 
@@ -292,6 +317,9 @@ fn prune_backups(backup_dir: &Path) {
                 return None;
             }
             let metadata = entry.metadata().ok()?;
+            if !metadata.is_file() {
+                return None;
+            }
             Some((path, mtime_millis(&metadata)))
         })
         .collect();
@@ -338,17 +366,19 @@ fn save_journal(state: &AppState, raw: String) -> Result<usize, String> {
         .map_err(|error| format!("Не удалось создать папку данных: {error}"))?;
 
     if let Ok(old_raw) = fs::read_to_string(&state.paths.journal) {
-        if let Err(error) = write_atomic(&state.paths.previous, old_raw.as_bytes()) {
-            eprintln!("TradeJournal: не удалось обновить предыдущую версию: {error}");
-        }
-        if let Err(error) = make_backup(
-            &state.paths,
-            "auto",
-            &old_raw,
-            false,
-            &state.last_auto_backup,
-        ) {
-            eprintln!("TradeJournal: не удалось создать автоматическую копию: {error}");
+        if validate_raw(&old_raw).is_ok() {
+            if let Err(error) = write_atomic(&state.paths.previous, old_raw.as_bytes()) {
+                eprintln!("TradeJournal: не удалось обновить предыдущую версию: {error}");
+            }
+            if let Err(error) = make_backup(
+                &state.paths,
+                "auto",
+                &old_raw,
+                false,
+                &state.last_auto_backup,
+            ) {
+                eprintln!("TradeJournal: не удалось создать автоматическую копию: {error}");
+            }
         }
     }
 
@@ -362,6 +392,7 @@ fn create_manual_backup(state: &AppState) -> Result<BackupInfo, String> {
     let _guard = lock_or_recover(&state.save_lock);
     let raw = read_journal(&state.paths.journal)?
         .ok_or_else(|| "Файл журнала ещё не создан.".to_string())?;
+    validate_raw(&raw)?;
     make_backup(&state.paths, "manual", &raw, true, &state.last_auto_backup)?
         .ok_or_else(|| "Не удалось создать резервную копию.".to_string())
 }
@@ -467,13 +498,27 @@ fn restore_previous(state: &AppState) -> Result<String, String> {
 
 fn clear_journal(state: &AppState) -> Result<(), String> {
     let _guard = lock_or_recover(&state.save_lock);
-    if !state.paths.journal.exists() {
-        return Ok(());
-    }
+    let raw = match fs::read_to_string(&state.paths.journal) {
+        Ok(raw) => Some(raw),
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(()),
+        Err(_) => None,
+    };
+    let is_valid = raw
+        .as_deref()
+        .is_some_and(|text| validate_raw(text).is_ok());
 
-    fs::create_dir_all(&state.paths.backups)
-        .map_err(|error| format!("Не удалось создать папку резервных копий: {error}"))?;
-    let target = unique_backup_path(&state.paths.backups, "removed");
+    let target = if is_valid {
+        fs::create_dir_all(&state.paths.backups)
+            .map_err(|error| format!("Не удалось создать папку резервных копий: {error}"))?;
+        unique_backup_path(&state.paths.backups, "removed")
+    } else {
+        // Keep unreadable or corrupt files out of backups/ so backup lists and
+        // storage health scans do not fail or offer broken files for restore.
+        let corrupt_dir = state.paths.data_dir.join("corrupt");
+        fs::create_dir_all(&corrupt_dir)
+            .map_err(|error| format!("Не удалось создать папку повреждённых файлов: {error}"))?;
+        unique_backup_path(&corrupt_dir, "corrupt")
+    };
 
     match fs::rename(&state.paths.journal, &target) {
         Ok(()) => {}
@@ -485,7 +530,9 @@ fn clear_journal(state: &AppState) -> Result<(), String> {
         }
     }
 
-    prune_backups(&state.paths.backups);
+    if is_valid {
+        prune_backups(&state.paths.backups);
+    }
     Ok(())
 }
 
@@ -575,21 +622,33 @@ fn display_file_name(path: &Path) -> String {
         .unwrap_or_else(|| path.to_string_lossy().to_string())
 }
 
-fn gather_referenced_screenshots(paths: &StorePaths) -> Result<HashSet<String>, String> {
+struct ReferencedScan {
+    refs: HashSet<String>,
+    warnings: Vec<String>,
+}
+
+fn scan_referenced_screenshots(paths: &StorePaths) -> ReferencedScan {
     let mut sources = vec![paths.journal.clone(), paths.previous.clone()];
+    let mut warnings = Vec::new();
     match fs::read_dir(&paths.backups) {
         Ok(entries) => {
             for entry in entries.filter_map(Result::ok) {
                 let name = entry.file_name().to_string_lossy().to_string();
-                if name.starts_with("journal-") && name.ends_with(".json") {
+                if name.starts_with("journal-")
+                    && name.ends_with(".json")
+                    && entry
+                        .metadata()
+                        .map(|metadata| metadata.is_file())
+                        .unwrap_or(false)
+                {
                     sources.push(entry.path());
                 }
             }
         }
         Err(error) if error.kind() == ErrorKind::NotFound => {}
         Err(error) => {
-            return Err(format!(
-                "Не удалось прочитать папку резервных копий: {error}. Очистка отменена."
+            warnings.push(format!(
+                "Не удалось прочитать папку резервных копий: {error}."
             ));
         }
     }
@@ -600,21 +659,30 @@ fn gather_referenced_screenshots(paths: &StorePaths) -> Result<HashSet<String>, 
             Ok(raw) => raw,
             Err(error) if error.kind() == ErrorKind::NotFound => continue,
             Err(error) => {
-                return Err(format!(
-                    "Не удалось прочитать {}: {error}. Очистка отменена, чтобы не удалить нужные скриншоты.",
+                warnings.push(format!(
+                    "Не удалось прочитать {}: {error}.",
                     display_file_name(&source)
                 ));
+                continue;
             }
         };
-        let parsed: serde_json::Value = serde_json::from_str(&raw).map_err(|_| {
-            format!(
-                "Файл {} повреждён. Очистка отменена, чтобы не удалить нужные скриншоты.",
-                display_file_name(&source)
-            )
-        })?;
+        let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&raw) else {
+            warnings.push(format!("Файл {} повреждён.", display_file_name(&source)));
+            continue;
+        };
         collect_screenshot_refs(&parsed, &mut refs);
     }
-    Ok(refs)
+    ReferencedScan { refs, warnings }
+}
+
+fn gather_referenced_screenshots(paths: &StorePaths) -> Result<HashSet<String>, String> {
+    let scan = scan_referenced_screenshots(paths);
+    if let Some(first_warning) = scan.warnings.first() {
+        return Err(format!(
+            "{first_warning} Очистка отменена, чтобы не удалить нужные скриншоты."
+        ));
+    }
+    Ok(scan.refs)
 }
 
 fn list_screenshot_files(dir: &Path) -> Result<Vec<ScreenshotFile>, String> {
@@ -677,7 +745,9 @@ fn backups_stats(dir: &Path) -> (u64, usize) {
 
 fn collect_storage_health(state: &AppState) -> Result<StorageHealth, String> {
     let _guard = lock_or_recover(&state.save_lock);
-    let referenced = gather_referenced_screenshots(&state.paths)?;
+    let scan = scan_referenced_screenshots(&state.paths);
+    let referenced = scan.refs;
+    let warnings = scan.warnings;
     let files = list_screenshot_files(&state.paths.screenshots)?;
 
     let now = now_millis();
@@ -689,7 +759,8 @@ fn collect_storage_health(state: &AppState) -> Result<StorageHealth, String> {
         screenshots_size += file.size;
         let key = file.name.to_ascii_lowercase();
         present.insert(key.clone());
-        if !referenced.contains(&key)
+        if warnings.is_empty()
+            && !referenced.contains(&key)
             && now.saturating_sub(file.mtime) >= UNUSED_SCREENSHOT_GRACE_MS
         {
             unused_size += file.size;
@@ -725,6 +796,7 @@ fn collect_storage_health(state: &AppState) -> Result<StorageHealth, String> {
         unused_count: unused.len(),
         unused_size,
         unused,
+        warnings,
     })
 }
 
@@ -1052,13 +1124,33 @@ fn choose_download_path(app: &tauri::AppHandle, filename: &str) -> Option<PathBu
     dialog.save_file()
 }
 
+async fn choose_download_path_async(
+    app: tauri::AppHandle,
+    filename: String,
+) -> Result<Option<PathBuf>, String> {
+    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    let dialog_app = app.clone();
+    app.run_on_main_thread(move || {
+        let path = choose_download_path(&dialog_app, &filename);
+        let _ = tx.send(path);
+    })
+    .map_err(|error| format!("Не удалось открыть диалог сохранения: {error}"))?;
+
+    tauri::async_runtime::spawn_blocking(move || {
+        rx.recv()
+            .map_err(|error| format!("Не удалось получить путь сохранения: {error}"))
+    })
+    .await
+    .map_err(|error| format!("Не удалось выбрать файл для сохранения: {error}"))?
+}
+
 #[tauri::command]
-fn save_download(
+async fn save_download(
     app: tauri::AppHandle,
     filename: String,
     content: String,
 ) -> Result<SaveDownloadResult, String> {
-    let Some(path) = choose_download_path(&app, &filename) else {
+    let Some(path) = choose_download_path_async(app, filename).await? else {
         return Ok(SaveDownloadResult {
             ok: true,
             canceled: true,
@@ -1066,27 +1158,26 @@ fn save_download(
         });
     };
 
-    write_atomic(&path, content.as_bytes())
+    let saved_path = path.clone();
+    tauri::async_runtime::spawn_blocking(move || write_atomic(&path, content.as_bytes()))
+        .await
+        .map_err(|error| format!("Не удалось выполнить сохранение файла: {error}"))?
         .map_err(|error| format!("Не удалось сохранить файл: {error}"))?;
 
     Ok(SaveDownloadResult {
         ok: true,
         canceled: false,
-        path: Some(path.to_string_lossy().to_string()),
+        path: Some(saved_path.to_string_lossy().to_string()),
     })
 }
 
 #[tauri::command]
-fn save_download_bytes(
+async fn save_download_bytes(
     app: tauri::AppHandle,
     filename: String,
     content: String,
 ) -> Result<SaveDownloadResult, String> {
-    let bytes = base64::engine::general_purpose::STANDARD
-        .decode(content.as_bytes())
-        .map_err(|_| "Не удалось декодировать данные файла.".to_string())?;
-
-    let Some(path) = choose_download_path(&app, &filename) else {
+    let Some(path) = choose_download_path_async(app, filename).await? else {
         return Ok(SaveDownloadResult {
             ok: true,
             canceled: true,
@@ -1094,13 +1185,191 @@ fn save_download_bytes(
         });
     };
 
-    write_atomic(&path, &bytes).map_err(|error| format!("Не удалось сохранить файл: {error}"))?;
+    let saved_path = path.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(content.as_bytes())
+            .map_err(|_| "Не удалось декодировать данные файла.".to_string())?;
+        write_atomic(&path, &bytes)
+            .map_err(|error| format!("Не удалось сохранить файл: {error}"))?;
+        Ok::<(), String>(())
+    })
+    .await
+    .map_err(|error| format!("Не удалось выполнить сохранение файла: {error}"))??;
 
     Ok(SaveDownloadResult {
         ok: true,
         canceled: false,
-        path: Some(path.to_string_lossy().to_string()),
+        path: Some(saved_path.to_string_lossy().to_string()),
     })
+}
+
+fn begin_staged_download(state: &AppState, target_path: PathBuf) -> Result<String, String> {
+    if let Some(directory) = target_path.parent() {
+        fs::create_dir_all(directory)
+            .map_err(|error| format!("Не удалось создать папку для экспорта: {error}"))?;
+    }
+    let temp_path = unique_temp_path(&target_path);
+    let file = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&temp_path)
+        .map_err(|error| format!("Не удалось подготовить файл экспорта: {error}"))?;
+    let token = format!(
+        "dl-{}-{}",
+        std::process::id(),
+        TEMP_COUNTER.fetch_add(1, Ordering::Relaxed)
+    );
+    let mut map = lock_or_recover(&state.staged_downloads);
+    if map.len() >= 16 {
+        let _ = fs::remove_file(&temp_path);
+        return Err("Слишком много незавершённых операций экспорта.".to_string());
+    }
+    map.insert(
+        token.clone(),
+        StagedDownload {
+            target_path,
+            temp_path,
+            writer: Some(BufWriter::with_capacity(64 * 1024, file)),
+        },
+    );
+    Ok(token)
+}
+
+fn append_staged_download_chunk(
+    state: &AppState,
+    token: &str,
+    chunk_base64: &str,
+) -> Result<(), String> {
+    if chunk_base64.len() > 8 * 1024 * 1024 {
+        return Err("Слишком большой фрагмент экспорта.".to_string());
+    }
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(chunk_base64.as_bytes())
+        .map_err(|_| "Не удалось декодировать фрагмент файла.".to_string())?;
+    let mut map = lock_or_recover(&state.staged_downloads);
+    let staged = map
+        .get_mut(token)
+        .ok_or_else(|| "Сессия экспорта не найдена.".to_string())?;
+    let writer = staged
+        .writer
+        .as_mut()
+        .ok_or_else(|| "Файл экспорта уже закрыт.".to_string())?;
+    writer
+        .write_all(&bytes)
+        .map_err(|error| format!("Не удалось записать фрагмент файла: {error}"))?;
+    Ok(())
+}
+
+fn finish_staged_download(state: &AppState, token: &str) -> Result<String, String> {
+    let mut staged = {
+        let mut map = lock_or_recover(&state.staged_downloads);
+        map.remove(token)
+            .ok_or_else(|| "Сессия экспорта не найдена.".to_string())?
+    };
+
+    let finish_result = (|| -> std::io::Result<()> {
+        if let Some(mut writer) = staged.writer.take() {
+            writer.flush()?;
+            let file = writer
+                .into_inner()
+                .map_err(std::io::IntoInnerError::into_error)?;
+            file.sync_all()?;
+        }
+        fs::rename(&staged.temp_path, &staged.target_path)?;
+        Ok(())
+    })();
+
+    if let Err(error) = finish_result {
+        drop(staged.writer.take());
+        let _ = fs::remove_file(&staged.temp_path);
+        return Err(format!("Не удалось завершить сохранение файла: {error}"));
+    }
+
+    Ok(staged.target_path.to_string_lossy().to_string())
+}
+
+fn abort_staged_download(state: &AppState, token: &str) {
+    let staged = {
+        let mut map = lock_or_recover(&state.staged_downloads);
+        map.remove(token)
+    };
+    if let Some(mut entry) = staged {
+        drop(entry.writer.take());
+        let _ = fs::remove_file(&entry.temp_path);
+    }
+}
+
+#[tauri::command]
+async fn save_download_begin(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    filename: String,
+) -> Result<DownloadBeginResult, String> {
+    let Some(path) = choose_download_path_async(app, filename).await? else {
+        return Ok(DownloadBeginResult {
+            ok: true,
+            canceled: true,
+            token: None,
+            path: None,
+        });
+    };
+
+    let saved_path = path.to_string_lossy().to_string();
+    let state = state.inner().clone();
+    let token = tauri::async_runtime::spawn_blocking(move || begin_staged_download(&state, path))
+        .await
+        .map_err(|error| format!("Не удалось подготовить экспорт: {error}"))??;
+
+    Ok(DownloadBeginResult {
+        ok: true,
+        canceled: false,
+        token: Some(token),
+        path: Some(saved_path),
+    })
+}
+
+#[tauri::command]
+async fn save_download_chunk(
+    state: State<'_, AppState>,
+    token: String,
+    chunk: String,
+) -> Result<OkResult, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        append_staged_download_chunk(&state, &token, &chunk)
+    })
+    .await
+    .map_err(|error| format!("Не удалось записать данные экспорта: {error}"))??;
+    Ok(OkResult { ok: true })
+}
+
+#[tauri::command]
+async fn save_download_finish(
+    state: State<'_, AppState>,
+    token: String,
+) -> Result<SaveDownloadResult, String> {
+    let state = state.inner().clone();
+    let path = tauri::async_runtime::spawn_blocking(move || finish_staged_download(&state, &token))
+        .await
+        .map_err(|error| format!("Не удалось завершить сохранение файла: {error}"))??;
+    Ok(SaveDownloadResult {
+        ok: true,
+        canceled: false,
+        path: Some(path),
+    })
+}
+
+#[tauri::command]
+async fn save_download_abort(
+    state: State<'_, AppState>,
+    token: String,
+) -> Result<OkResult, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || abort_staged_download(&state, &token))
+        .await
+        .map_err(|error| format!("Не удалось отменить экспорт: {error}"))?;
+    Ok(OkResult { ok: true })
 }
 
 #[tauri::command]
@@ -1176,6 +1445,7 @@ pub fn run() {
                 paths,
                 save_lock: Arc::new(Mutex::new(())),
                 last_auto_backup: Arc::new(Mutex::new(None)),
+                staged_downloads: Arc::new(Mutex::new(HashMap::new())),
             });
             Ok(())
         })
@@ -1196,6 +1466,10 @@ pub fn run() {
             open_data_folder,
             save_download,
             save_download_bytes,
+            save_download_begin,
+            save_download_chunk,
+            save_download_finish,
+            save_download_abort,
             update_check,
             update_install
         ])
@@ -1286,5 +1560,281 @@ mod tests {
         assert!(!valid_screenshot_file_name("file:screenshots/abc.png"));
         assert!(!valid_screenshot_file_name("abc.png.txt"));
         assert!(screenshot_reference_name("data:image/png;base64,AAAA").is_none());
+    }
+
+    struct TempStore {
+        dir: PathBuf,
+        state: AppState,
+    }
+
+    impl TempStore {
+        fn new(label: &str) -> Self {
+            let counter = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+            let dir = std::env::temp_dir().join(format!(
+                "tradejournal-{label}-{}-{}-{}",
+                std::process::id(),
+                now_millis(),
+                counter
+            ));
+            let paths = StorePaths {
+                journal: dir.join("journal.json"),
+                previous: dir.join("journal.previous.json"),
+                backups: dir.join("backups"),
+                screenshots: dir.join("screenshots"),
+                data_dir: dir.clone(),
+            };
+            fs::create_dir_all(&paths.backups).unwrap();
+            fs::create_dir_all(&paths.screenshots).unwrap();
+            let state = AppState {
+                paths,
+                save_lock: Arc::new(Mutex::new(())),
+                last_auto_backup: Arc::new(Mutex::new(None)),
+                staged_downloads: Arc::new(Mutex::new(HashMap::new())),
+            };
+            Self { dir, state }
+        }
+    }
+
+    impl Drop for TempStore {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    fn sample_journal(tag: &str) -> String {
+        json!({
+            "version": 4,
+            "accounts": [{
+                "id": format!("acc-{tag}"),
+                "trades": [{ "id": format!("t-{tag}"), "screenshot": "file:screenshots/kept.png" }],
+                "notes": []
+            }]
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn clear_journal_moves_corrupt_file_outside_backups_and_preserves_health() {
+        let store = TempStore::new("clear-corrupt");
+        fs::write(&store.state.paths.journal, "{broken-json").unwrap();
+
+        clear_journal(&store.state).unwrap();
+
+        assert!(!store.state.paths.journal.exists());
+        assert!(list_backups(&store.state).unwrap().is_empty());
+
+        let corrupt_files: Vec<String> = fs::read_dir(store.dir.join("corrupt"))
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(corrupt_files.len(), 1);
+        assert!(corrupt_files[0].ends_with("-corrupt.json"));
+
+        let health = collect_storage_health(&store.state).unwrap();
+        assert_eq!(health.backups_count, 0);
+        assert!(health.warnings.is_empty());
+        let cleanup = cleanup_unused_screenshots(&store.state, vec![]).unwrap();
+        assert_eq!(cleanup.deleted_count, 0);
+    }
+
+    #[test]
+    fn clear_journal_moves_valid_file_into_backups_removed() {
+        let store = TempStore::new("clear-valid");
+        let valid = sample_journal("valid");
+        save_journal(&store.state, valid.clone()).unwrap();
+
+        clear_journal(&store.state).unwrap();
+
+        assert!(!store.state.paths.journal.exists());
+        let backups = list_backups(&store.state).unwrap();
+        assert_eq!(backups.len(), 1);
+        assert_eq!(backups[0].reason, "removed");
+        assert!(backups[0].name.ends_with("-removed.json"));
+        let health = collect_storage_health(&store.state).unwrap();
+        assert_eq!(health.backups_count, 1);
+        assert_eq!(health.referenced_count, 1);
+    }
+
+    #[test]
+    fn save_journal_skips_corrupt_previous_and_backs_up_valid_previous() {
+        let store = TempStore::new("save-journal");
+        fs::write(&store.state.paths.journal, "{not-valid").unwrap();
+
+        let first = sample_journal("first");
+        save_journal(&store.state, first.clone()).unwrap();
+
+        assert!(!store.state.paths.previous.exists());
+        assert!(list_backups(&store.state).unwrap().is_empty());
+
+        let second = sample_journal("second");
+        save_journal(&store.state, second.clone()).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(&store.state.paths.previous).unwrap(),
+            first
+        );
+        assert_eq!(
+            fs::read_to_string(&store.state.paths.journal).unwrap(),
+            second
+        );
+        let backups = list_backups(&store.state).unwrap();
+        assert_eq!(backups.len(), 1);
+        assert_eq!(backups[0].reason, "auto");
+    }
+
+    #[test]
+    fn restore_backup_skips_corrupt_current_and_preserves_valid_current() {
+        let store = TempStore::new("restore-backup");
+        let first = sample_journal("v1");
+        save_journal(&store.state, first.clone()).unwrap();
+        let manual = create_manual_backup(&store.state).unwrap();
+
+        let second = sample_journal("v2");
+        save_journal(&store.state, second.clone()).unwrap();
+
+        let restored = restore_backup(&store.state, &manual.name).unwrap();
+        assert_eq!(restored, first);
+        assert_eq!(
+            fs::read_to_string(&store.state.paths.previous).unwrap(),
+            second
+        );
+        assert!(list_backups(&store.state)
+            .unwrap()
+            .iter()
+            .any(|backup| backup.reason == "before-restore"));
+
+        fs::write(&store.state.paths.journal, "{corrupt-again").unwrap();
+        restore_backup(&store.state, &manual.name).unwrap();
+        assert_eq!(
+            fs::read_to_string(&store.state.paths.previous).unwrap(),
+            second
+        );
+    }
+
+    #[test]
+    fn corrupt_external_backup_reports_warning_and_blocks_cleanup() {
+        let store = TempStore::new("external-corrupt");
+        save_journal(&store.state, sample_journal("ok")).unwrap();
+        fs::write(
+            store
+                .state
+                .paths
+                .backups
+                .join("journal-external-broken.json"),
+            "{bad-json",
+        )
+        .unwrap();
+
+        let health = collect_storage_health(&store.state).unwrap();
+        assert_eq!(health.backups_count, 1);
+        assert!(health.backups_size > 0);
+        assert_eq!(health.unused_count, 0);
+        assert_eq!(health.warnings.len(), 1);
+        assert!(health.warnings[0].contains("journal-external-broken.json"));
+
+        let err = cleanup_unused_screenshots(&store.state, vec!["kept.png".to_string()])
+            .err()
+            .unwrap();
+        assert!(err.contains("journal-external-broken.json"));
+    }
+
+    #[test]
+    fn cleanup_unused_screenshots_respects_grace_period_references_and_invalid_names() {
+        let store = TempStore::new("cleanup-grace");
+        save_journal(&store.state, sample_journal("clean")).unwrap();
+
+        let kept_path = store.state.paths.screenshots.join("kept.png");
+        let fresh_path = store.state.paths.screenshots.join("fresh-orphan.png");
+        let old_path = store.state.paths.screenshots.join("old-orphan.png");
+
+        fs::write(&kept_path, b"kept").unwrap();
+        fs::write(&fresh_path, b"fresh").unwrap();
+        fs::write(&old_path, b"old-bytes").unwrap();
+
+        let past = std::time::SystemTime::now()
+            - std::time::Duration::from_millis(UNUSED_SCREENSHOT_GRACE_MS + 60_000);
+        let old_file = fs::OpenOptions::new().write(true).open(&old_path).unwrap();
+        old_file.set_modified(past).unwrap();
+        drop(old_file);
+
+        let result = cleanup_unused_screenshots(
+            &store.state,
+            vec![
+                "kept.png".to_string(),
+                "fresh-orphan.png".to_string(),
+                "old-orphan.png".to_string(),
+                "../escape.png".to_string(),
+            ],
+        )
+        .unwrap();
+
+        assert_eq!(result.skipped_referenced, 1);
+        assert_eq!(result.skipped_recent, 1);
+        assert_eq!(result.deleted_count, 1);
+        assert_eq!(result.deleted, vec!["old-orphan.png".to_string()]);
+        assert_eq!(result.deleted_size, 9);
+        assert_eq!(result.failed, vec!["../escape.png".to_string()]);
+        assert!(kept_path.exists());
+        assert!(fresh_path.exists());
+        assert!(!old_path.exists());
+    }
+
+    #[test]
+    fn decode_screenshot_data_url_validates_mime_payload_and_magic_bytes() {
+        let b64 = |bytes: &[u8]| base64::engine::general_purpose::STANDARD.encode(bytes);
+
+        let png = b"\x89PNG\r\n\x1a\nrest";
+        let (ext_png, decoded_png) =
+            decode_screenshot_data_url(&format!("data:image/png;base64,{}", b64(png))).unwrap();
+        assert_eq!(ext_png, "png");
+        assert_eq!(decoded_png, png);
+
+        let jpg = b"\xFF\xD8\xFF\xE0data";
+        let (ext_jpg, decoded_jpg) =
+            decode_screenshot_data_url(&format!("data:image/jpeg;base64,{}", b64(jpg))).unwrap();
+        assert_eq!(ext_jpg, "jpg");
+        assert_eq!(decoded_jpg, jpg);
+
+        let webp = b"RIFF\x00\x00\x00\x00WEBPvp8";
+        let (ext_webp, decoded_webp) =
+            decode_screenshot_data_url(&format!("data:image/webp;base64,{}", b64(webp))).unwrap();
+        assert_eq!(ext_webp, "webp");
+        assert_eq!(decoded_webp, webp);
+
+        assert!(decode_screenshot_data_url("not-a-data-url").is_err());
+        assert!(decode_screenshot_data_url("data:image/svg+xml;base64,AAAA").is_err());
+        assert!(decode_screenshot_data_url("data:image/png;base64,!!!").is_err());
+        assert!(decode_screenshot_data_url("data:image/png;base64,").is_err());
+        assert!(
+            decode_screenshot_data_url(&format!("data:image/png;base64,{}", b64(jpg))).is_err()
+        );
+
+        let too_large = vec![0x89u8; MAX_SCREENSHOT_BYTES + 1];
+        assert!(
+            decode_screenshot_data_url(&format!("data:image/png;base64,{}", b64(&too_large)))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn staged_download_streams_chunks_atomically_and_cleans_up_on_abort() {
+        let store = TempStore::new("staged-download");
+        let target = store.dir.join("export.zip");
+        let b64 = |bytes: &[u8]| base64::engine::general_purpose::STANDARD.encode(bytes);
+
+        let token = begin_staged_download(&store.state, target.clone()).unwrap();
+        append_staged_download_chunk(&store.state, &token, &b64(b"hello ")).unwrap();
+        append_staged_download_chunk(&store.state, &token, &b64(b"zip world")).unwrap();
+        assert!(!target.exists());
+
+        let saved_path = finish_staged_download(&store.state, &token).unwrap();
+        assert_eq!(saved_path, target.to_string_lossy().to_string());
+        assert_eq!(fs::read(&target).unwrap(), b"hello zip world");
+
+        let aborted_target = store.dir.join("aborted.zip");
+        let abort_token = begin_staged_download(&store.state, aborted_target.clone()).unwrap();
+        append_staged_download_chunk(&store.state, &abort_token, &b64(b"partial")).unwrap();
+        abort_staged_download(&store.state, &abort_token);
+        assert!(!aborted_target.exists());
     }
 }

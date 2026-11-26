@@ -601,3 +601,228 @@ test('v3 trade without a timezone keeps its wall-clock date and time after migra
   assert.equal(migrated.time, '10:30');
   assert.equal(migrated.timeUtc, fresh.utils.zonedToUtc('2026-01-15', '10:30', systemZone));
 });
+
+test('breakeven-sized trades contribute exact PnL to metrics.net, balanceAll and groupRows', function () {
+  const { TJ: fresh } = loadTradeJournal();
+  const s = fresh.store;
+  const plus = s.normalizeTrade({
+    id: 'be-plus',
+    date: '2026-01-05',
+    symbol: 'EURUSD',
+    side: 'long',
+    entry: 0,
+    stop: 1,
+    qty: 1,
+    exits: [{ qty: 1, price: 0.003, date: '2026-01-05' }]
+  });
+  const minus = s.normalizeTrade({
+    id: 'be-minus',
+    date: '2026-01-06',
+    symbol: 'GBPUSD',
+    side: 'long',
+    entry: 0,
+    stop: 1,
+    qty: 1,
+    exits: [{ qty: 1, price: -0.003, date: '2026-01-06' }]
+  });
+  const secondPlus = s.normalizeTrade({
+    id: 'be-plus-2',
+    date: '2026-01-07',
+    symbol: 'EURUSD',
+    side: 'long',
+    entry: 0,
+    stop: 1,
+    qty: 1,
+    exits: [{ qty: 1, price: 0.003, date: '2026-01-07' }]
+  });
+
+  s.state.trades = [plus, minus, secondPlus];
+  const m = s.metrics(s.state.trades, s.state.settings.startBalance);
+  assert.equal(m.be, 3);
+  assert.equal(m.wins, 0);
+  assert.equal(m.losses, 0);
+  assert.ok(Math.abs(m.net - 0.003) < 1e-12);
+  assert.ok(Math.abs(m.grossProfit - 0.006) < 1e-12);
+  assert.ok(Math.abs(m.grossLoss - (-0.003)) < 1e-12);
+  assert.ok(Math.abs(m.profitFactor - 2) < 1e-12);
+  assert.equal(m.endBalance, s.balanceAll());
+
+  const grouped = s.groupRows(m.rows, function (item) { return item.symbol; });
+  const eurusd = grouped.find(function (g) { return g.key === 'EURUSD'; });
+  const gbpusd = grouped.find(function (g) { return g.key === 'GBPUSD'; });
+  assert.ok(Math.abs(eurusd.pnl - 0.006) < 1e-12);
+  assert.ok(Math.abs(eurusd.grossProfit - 0.006) < 1e-12);
+  assert.equal(eurusd.profitFactor, Infinity);
+  assert.ok(Math.abs(gbpusd.pnl - (-0.003)) < 1e-12);
+  assert.ok(Math.abs(gbpusd.grossLoss - (-0.003)) < 1e-12);
+  assert.equal(gbpusd.profitFactor, 0);
+});
+
+test('plannedRR checks trade direction for target and initial stop (FIN-04)', function () {
+  assert.equal(store.plannedRR({ side: 'long', entry: 100, stop: 95, target: 115 }), 3);
+  assert.equal(store.plannedRR({ side: 'short', entry: 100, stop: 105, target: 85 }), 3);
+  assert.equal(store.plannedRR({ side: 'long', entry: 100, stop: 95, target: 90 }), null);
+  assert.equal(store.plannedRR({ side: 'short', entry: 100, stop: 105, target: 110 }), null);
+  assert.equal(store.plannedRR({ side: 'long', entry: 100, stop: 105, target: 115 }), null);
+});
+
+test('analyzeImport counts multiple screenshots and caps beyond 4 (FEAT-06)', function () {
+  const s = store;
+  const stats = s.analyzeImport({
+    version: 4,
+    activeAccountId: 'a1',
+    accounts: [{
+      id: 'a1',
+      name: 'Main',
+      settings: {},
+      trades: [{
+        id: 't1',
+        date: '2026-01-05',
+        symbol: 'BTCUSD',
+        side: 'long',
+        entry: 10,
+        qty: 1,
+        screenshots: [
+          { src: 'data:image/png;base64,AAAA', label: 'HTF' },
+          { src: 'data:image/png;base64,BBBB', label: 'Вход' },
+          { src: 'data:image/gif;base64,CCCC', label: 'Bad' },
+          { src: 'data:image/png;base64,DDDD', label: 'Выход' },
+          { src: 'data:image/png;base64,EEEE', label: 'Excess' }
+        ]
+      }],
+      notes: []
+    }]
+  });
+  assert.equal(stats.screenshots, 5);
+  assert.equal(stats.screenshotsAccepted, 3);
+  assert.equal(stats.screenshotsDropped, 2);
+  assert.equal(stats.screenshotsInvalid, 1);
+});
+
+test('scale-in entries compute weighted entry price, total qty and preserve fee presets (FEAT-10, FEAT-01)', function () {
+  const s = store;
+  const scaled = s.normalizeTrade({
+    id: 'scaled-1',
+    date: '2026-02-10',
+    symbol: 'BTCUSD',
+    side: 'long',
+    stop: 90,
+    fees: 10,
+    entries: [
+      { id: 'en1', qty: 1, price: 100, date: '2026-02-10' },
+      { id: 'en2', qty: 3, price: 120, date: '2026-02-11' }
+    ],
+    exits: [
+      { id: 'ex1', qty: 4, price: 130, date: '2026-02-12' }
+    ]
+  });
+  // Weighted average entry: (1*100 + 3*120) / 4 = 460 / 4 = 115
+  assert.equal(scaled.qty, 4);
+  assert.equal(scaled.entry, 115);
+  assert.equal(s.weightedEntry(scaled), 115);
+  assert.equal(s.tradeEntries(scaled).length, 2);
+  // PnL = (130 - 115) * 4 - 10 = 50
+  assert.equal(s.tradePnl(scaled), 50);
+  // Risk = |115 - 90| * 4 = 100, R = 0.5
+  assert.equal(s.tradeRisk(scaled), 100);
+  assert.equal(s.tradeR(scaled), 0.5);
+  assert.equal(s.isClosed(scaled), true);
+
+  s.state.settings = Object.assign({}, s.state.settings, { feePresets: [2.5, 0, -5, 2.5, 12.75] });
+  assert.deepEqual(Array.from(s.state.settings.feePresets), [2.5, 12.75]);
+});
+
+test('computes directional openRisk, openPortfolioRisk, breakeven winrate and return on closed risk (FEAT-04)', function () {
+  const s = store;
+  // Closed winner (+3R: entry 100, stop 95, qty 2 => risk $10, exit 115 => pnl +$30)
+  const w1 = s.normalizeTrade({
+    id: 'w1', date: '2026-01-05', symbol: 'BTCUSD', side: 'long',
+    entry: 100, stop: 95, qty: 2, exits: [{ id: 'e1', qty: 2, price: 115, date: '2026-01-05' }]
+  });
+  // Closed loser (-1R: risk $10, pnl -$10)
+  const l1 = s.normalizeTrade({
+    id: 'l1', date: '2026-01-06', symbol: 'BTCUSD', side: 'long',
+    entry: 100, stop: 95, qty: 2, exits: [{ id: 'e2', qty: 2, price: 90, date: '2026-01-06' }]
+  });
+  // net = +$30 - $20 = +$10, closedRisk = $20 => returnOnClosedRisk = +50%
+  const m = s.metrics([w1, l1], 1000);
+  assert.equal(Math.round(m.payoffRatio * 100) / 100, 1.5);
+  assert.equal(Math.round(m.beWinRate), 40);
+  assert.equal(m.closedRisk, 20);
+  assert.equal(Math.round(m.returnOnClosedRisk), 50);
+
+  // Open positions: normal open ($15 risk), profit-locked stop ($0 risk), missing stop (unprotected)
+  const openRiskTrade = s.normalizeTrade({
+    id: 'o1', date: '2026-01-07', symbol: 'ETHUSD', side: 'long', entry: 100, stop: 90, currentStop: 95, qty: 3
+  });
+  const lockedTrade = s.normalizeTrade({
+    id: 'o2', date: '2026-01-07', symbol: 'SOLUSD', side: 'long', entry: 50, stop: 45, currentStop: 55, qty: 2
+  });
+  const noStopTrade = s.normalizeTrade({
+    id: 'o3', date: '2026-01-07', symbol: 'XRPUSD', side: 'short', entry: 1, qty: 100
+  });
+  assert.equal(s.openRisk(openRiskTrade), 15);
+  assert.equal(s.openRisk(lockedTrade), 0);
+  assert.equal(s.openRisk(noStopTrade), null);
+
+  const portfolio = s.openPortfolioRisk([w1, openRiskTrade, lockedTrade, noStopTrade], 1500);
+  assert.equal(portfolio.openCount, 3);
+  assert.equal(portfolio.protectedCount, 2);
+  assert.equal(portfolio.unprotectedCount, 1);
+  assert.equal(portfolio.totalRisk, 15);
+  assert.equal(portfolio.riskPct, 1);
+});
+
+test('drawdownSeries computes depth, duration and groupRows supports multi-tag arrays (FEAT-03)', function () {
+  const s = store;
+  const t1 = s.normalizeTrade({
+    id: 'd1', date: '2026-01-01', symbol: 'BTCUSD', side: 'long', entry: 100, qty: 1,
+    tags: ['breakout', 'trend'], exits: [{ id: 'e1', qty: 1, price: 200, date: '2026-01-01' }] // equity +100, peak 1100
+  });
+  const t2 = s.normalizeTrade({
+    id: 'd2', date: '2026-01-02', symbol: 'BTCUSD', side: 'long', entry: 100, qty: 1,
+    tags: ['breakout'], exits: [{ id: 'e2', qty: 1, price: 45, date: '2026-01-04' }] // equity +45, dd 55 (5%), duration 3 days, 1 trade
+  });
+  const t3 = s.normalizeTrade({
+    id: 'd3', date: '2026-01-05', symbol: 'ETHUSD', side: 'long', entry: 100, qty: 1,
+    tags: ['trend'], exits: [{ id: 'e3', qty: 1, price: 80, date: '2026-01-11' }] // equity +25, dd 75, duration 10 days, 2 trades
+  });
+  const t4 = s.normalizeTrade({
+    id: 'd4', date: '2026-01-12', symbol: 'SOLUSD', side: 'long', entry: 100, qty: 1,
+    tags: [], exits: [{ id: 'e4', qty: 1, price: 200, date: '2026-01-12' }] // equity +125, new peak, dd 0
+  });
+
+  const dd = s.drawdownSeries([t1, t2, t3, t4], 1000);
+  assert.equal(dd.points.length, 5);
+  assert.equal(dd.maxDD, 75);
+  assert.equal(Math.round((dd.maxDDPct) * 100) / 100, Math.round((75 / 1100) * 10000) / 100);
+  assert.equal(dd.maxDurationDays, 10);
+  assert.equal(dd.maxDurationTrades, 2);
+  assert.equal(dd.currentDD, 0);
+
+  const m = s.metrics([t1, t2, t3, t4], 1000);
+  const byTags = s.groupRows(m.rows, function (t) { return t.tags && t.tags.length ? t.tags : ['__EMPTY__']; });
+  const breakout = byTags.find(function (g) { return g.key === 'breakout'; });
+  const trend = byTags.find(function (g) { return g.key === 'trend'; });
+  assert.equal(breakout.count, 2);
+  assert.equal(breakout.pnl, 45);
+  assert.equal(trend.count, 2);
+  assert.equal(trend.pnl, 80);
+});
+
+test('normalizes settings pre-trade checklist and trade checklist items (FEAT-05)', function () {
+  const s = store;
+  s.state.settings = Object.assign({}, s.state.settings, {
+    checklist: ['  Тренд подтверждён ', '', 'тренд подтверждён', 'Стоп выставлен']
+  });
+  assert.deepEqual(Array.from(s.state.settings.checklist), ['Тренд подтверждён', 'Стоп выставлен']);
+
+  const t = s.normalizeTrade({
+    id: 'chk-1', date: '2026-02-01', symbol: 'BTCUSD', side: 'long', entry: 100, qty: 1,
+    checklist: [{ text: 'Тренд подтверждён', done: true }, { text: '   ', done: true }, { text: 'Стоп выставлен', done: false }]
+  });
+  assert.deepEqual(JSON.parse(JSON.stringify(t.checklist)), [
+    { text: 'Тренд подтверждён', done: true },
+    { text: 'Стоп выставлен', done: false }
+  ]);
+});

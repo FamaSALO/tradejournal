@@ -4,7 +4,7 @@
   const U = NS.utils;
   const store = NS.store;
   const desktop = window.tradeJournalDesktop || null;
-  const APP_VERSION = '2.5.2';
+  const APP_VERSION = '2.6.0';
   const DRAFT_PREFIX = 'tradejournal.draft.v1.';
   const META_KEY = store.META_KEY;
   // Drafts live in localStorage even on desktop, so a full screenshot data URL
@@ -38,7 +38,11 @@
   const state = {
     view: 'dashboard',
     period: 'all',
+    dateMode: 'entry',
+    periodFrom: '',
+    periodTo: '',
     filters: { search: '', side: 'all', result: 'all', setup: 'all' },
+    journalFilters: { search: '', mood: 'all', tag: 'all' },
     sort: { key: 'date', dir: 'desc' },
     page: 1,
     pageSize: 25,
@@ -48,8 +52,10 @@
     tradeOriginalId: null,
     tradeAccountId: null,
     tradeBaseline: null,
-    tradeBaselineScreenshot: '',
+    tradeBaselineScreenshots: [],
+    tradeEntries: [],
     tradeExits: [],
+    tradeChecklist: [],
     csvImport: null,
     tradeDirty: false,
     tradeSaving: false,
@@ -59,15 +65,17 @@
     draftShotWarned: false,
     draftScreenshotOmitted: false,
     noteId: null,
-    screenshot: '',
-    screenshotPreview: '',
+    screenshots: [],
+    screenshotPreviews: {},
+    lightboxItems: [],
+    lightboxIndex: 0,
     screenshotBusy: false,
     shotFocus: null,
     noteMood: 'neutral',
     profileAvatarDraft: '',
     accountModalMode: 'create',
     confirmResolver: null,
-    lastFocus: null,
+    focusStack: [],
     storageHealthData: null,
     storageHealthScanning: false,
     storageHealthCleaning: false,
@@ -140,6 +148,7 @@
     }
     applyCurrency();
     setVersionLabel(APP_VERSION);
+    state.calCursor = accountMonthStart();
     state.selectedDay = todayInAccount();
     buildMoodPicker();
     buildEmotionSelect();
@@ -228,9 +237,10 @@
       downloadBtn.disabled = true;
       downloadBtn.textContent = 'Данные недоступны';
     } else {
-      downloadBtn.addEventListener('click', function () {
-        U.download('tradejournal-corrupt-' + U.todayISO() + '.json', rawData, 'application/json');
-        downloadBtn.textContent = 'Файл скачан';
+      downloadBtn.addEventListener('click', async function () {
+        const result = await U.download('tradejournal-corrupt-' + U.todayISO() + '.json', rawData, 'application/json');
+        if (!result || result.canceled || !result.ok) return;
+        downloadBtn.textContent = T('Файл скачан');
         toast('Повреждённые данные скачаны. Теперь можно сбросить журнал.', 'success');
       });
     }
@@ -339,6 +349,10 @@
     return new Date(date.getFullYear(), date.getMonth(), 1);
   }
 
+  function accountMonthStart() {
+    return monthStart(U.parseISO(todayInAccount()) || new Date());
+  }
+
   function pad2(n) { return String(n).padStart(2, '0'); }
 
   function decimal(value, digits) {
@@ -348,6 +362,16 @@
       minimumFractionDigits: digits,
       maximumFractionDigits: digits
     }).format(num);
+  }
+
+  function cssVar(name, fallback) {
+    try {
+      if (typeof getComputedStyle === 'function') {
+        const val = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+        if (val) return val;
+      }
+    } catch (err) { /* ignore */ }
+    return fallback;
   }
 
   function navigate(view, options) {
@@ -377,7 +401,7 @@
 
     if (view === 'calculator') ensureCalcDefaults();
     if (view === 'calendar') {
-      state.calCursor = monthStart(state.calCursor || new Date());
+      state.calCursor = state.calCursor ? monthStart(state.calCursor) : accountMonthStart();
       if (!state.selectedDay) state.selectedDay = todayInAccount();
     }
 
@@ -554,14 +578,68 @@
       case '90': return { from: U.addDaysISO(today, -89), to: today };
       case 'month': return { from: today.slice(0, 8) + '01', to: today };
       case 'year': return { from: today.slice(0, 4) + '-01-01', to: today };
+      case 'custom': {
+        let from = U.validDateISO(state.periodFrom);
+        let to = U.validDateISO(state.periodTo);
+        if (from && to && from > to) { const tmp = from; from = to; to = tmp; }
+        return { from: from || null, to: to || null };
+      }
       default: return { from: null, to: null };
     }
   }
 
+  function dateInRange(dateStr, range) {
+    if (!range || (!range.from && !range.to)) return true;
+    return (!range.from || dateStr >= range.from) && (!range.to || dateStr <= range.to);
+  }
+
+  function projectTradeByExitRange(trade, range) {
+    const exits = store.tradeExits(trade);
+    if (!exits.length) return null;
+    if (!range || (!range.from && !range.to)) {
+      const lastDate = exits.reduce(function (maxD, ex) {
+        const d = ex.date || trade.date || '';
+        return d > maxD ? d : maxD;
+      }, trade.date || '');
+      return lastDate && lastDate !== trade.date
+        ? Object.assign({}, trade, { date: lastDate })
+        : trade;
+    }
+    const matchingExits = exits.filter(function (ex) {
+      return dateInRange(ex.date || trade.date || '', range);
+    });
+    if (!matchingExits.length) return null;
+    const latestExitDate = matchingExits.reduce(function (maxD, ex) {
+      const d = ex.date || trade.date || '';
+      return d > maxD ? d : maxD;
+    }, '');
+    const qtySum = matchingExits.reduce(function (s, ex) { return s + (U.parseNum(ex.qty) || 0); }, 0);
+    if (matchingExits.length === exits.length) {
+      return latestExitDate && latestExitDate !== trade.date
+        ? Object.assign({}, trade, { date: latestExitDate })
+        : trade;
+    }
+    return Object.assign({}, trade, {
+      date: latestExitDate || trade.date,
+      exit: null,
+      exits: matchingExits,
+      fees: matchingExits.reduce(function (s, ex) { return s + Math.max(0, U.parseNum(ex.fees) || 0); }, 0),
+      qty: qtySum > 0 ? qtySum : trade.qty
+    });
+  }
+
   function filterByRange(trades, range) {
+    if (state.dateMode === 'exit') {
+      const projected = [];
+      (trades || []).forEach(function (trade) {
+        const item = projectTradeByExitRange(trade, range);
+        if (item) projected.push(item);
+      });
+      return store.sortTrades(projected, 'asc');
+    }
     if (!range || (!range.from && !range.to)) return trades;
     return trades.filter(function (trade) {
-      return (!range.from || trade.date >= range.from) && (!range.to || trade.date <= range.to);
+      return dateInRange(trade.date, range);
     });
   }
 
@@ -572,21 +650,59 @@
     const filtered = filterByRange(closedAll, range);
     let beforePnl = 0;
     if (range.from) {
-      closedAll.forEach(function (trade) {
-        if (trade.date < range.from) {
-          const pnl = store.tradePnl(trade);
-          if (pnl !== null) beforePnl += pnl;
-        }
-      });
+      if (state.dateMode === 'exit') {
+        closedAll.forEach(function (trade) {
+          store.tradePnlEvents(trade).forEach(function (ev) {
+            if ((ev.date || trade.date || '') < range.from) beforePnl += ev.pnl;
+          });
+        });
+      } else {
+        closedAll.forEach(function (trade) {
+          if (trade.date < range.from) {
+            const pnl = store.tradePnl(trade);
+            if (pnl !== null) beforePnl += pnl;
+          }
+        });
+      }
     }
     const base = (U.parseNum(settings.startBalance) || 0) + beforePnl;
     const m = store.metrics(filtered, base);
     return { range: range, closedAll: closedAll, filtered: filtered, base: base, m: m };
   }
 
+  function renderPeriodControls() {
+    const sel = $('#periodSelect');
+    if (sel && sel.value !== state.period) sel.value = state.period;
+    const customBox = $('#customPeriodRange');
+    if (customBox) customBox.hidden = state.period !== 'custom';
+    const fromEl = $('#periodFrom');
+    const toEl = $('#periodTo');
+    if (fromEl && fromEl.value !== (state.periodFrom || '')) fromEl.value = state.periodFrom || '';
+    if (toEl && toEl.value !== (state.periodTo || '')) toEl.value = state.periodTo || '';
+    $$('#dateModeSegmented [data-date-mode]').forEach(function (btn) {
+      btn.classList.toggle('active', btn.dataset.dateMode === state.dateMode);
+    });
+  }
+
   /* ============================================================
      Dashboard
      ============================================================ */
+
+  let lastDashboardCharts = null;
+
+  function redrawDashboardCharts() {
+    if (!lastDashboardCharts) {
+      renderDashboard();
+      return;
+    }
+    NS.charts.equity($('#equityChart'), lastDashboardCharts.points, { emptyText: T('Нет закрытых сделок за период') });
+    NS.charts.donut($('#donutChart'), [
+      { value: lastDashboardCharts.wins, color: cssVar('--green', '#31e3aa') },
+      { value: lastDashboardCharts.losses, color: cssVar('--red', '#ff6b81') },
+      { value: lastDashboardCharts.be, color: cssVar('--muted-2', '#7c8fa6') }
+    ]);
+    NS.charts.bars($('#dailyChart'), lastDashboardCharts.daily, { emptyText: T('За этот период сделок не было') });
+  }
 
   function renderDashboard() {
     $('#welcomeBanner').hidden = !store.state.demo;
@@ -596,24 +712,27 @@
     renderKpis(m, data.base);
 
     const points = buildEquityPoints(data.filtered, data.base);
-    NS.charts.equity($('#equityChart'), points, { emptyText: 'Нет закрытых сделок за период' });
+    NS.charts.equity($('#equityChart'), points, { emptyText: T('Нет закрытых сделок за период') });
 
     const roi = data.base > 0 ? (m.net / data.base) * 100 : 0;
     const chip = $('#equityChip');
     chip.textContent = m.count ? (roi > 0 ? '+' : '') + U.percent(roi, 1) : 'нет сделок';
     chip.className = 'chip ' + toneClass(m.net);
 
+    const winColor = cssVar('--green', '#31e3aa');
+    const lossColor = cssVar('--red', '#ff6b81');
+    const beColor = cssVar('--muted-2', '#7c8fa6');
     NS.charts.donut($('#donutChart'), [
-      { value: m.wins, color: '#31e3aa' },
-      { value: m.losses, color: '#ff6b81' },
-      { value: m.be, color: '#5f7187' }
+      { value: m.wins, color: winColor },
+      { value: m.losses, color: lossColor },
+      { value: m.be, color: beColor }
     ]);
     $('#donutRate').textContent = m.count ? U.percent(m.winRate, 0) : '—';
 
     const legend = [
-      { label: 'Прибыльные', count: m.wins, color: '#31e3aa' },
-      { label: 'Убыточные', count: m.losses, color: '#ff6b81' },
-      { label: 'Безубыток', count: m.be, color: '#5f7187' }
+      { label: 'Прибыльные', count: m.wins, color: 'var(--green)' },
+      { label: 'Убыточные', count: m.losses, color: 'var(--red)' },
+      { label: 'Безубыток', count: m.be, color: 'var(--muted-2)' }
     ];
     $('#donutLegend').innerHTML = legend.map(function (item) {
       const pct = m.count ? U.percent((item.count / m.count) * 100, 0) : '—';
@@ -622,7 +741,14 @@
     }).join('');
 
     const daily = dailySeries(data.filtered, 30);
-    NS.charts.bars($('#dailyChart'), daily, { emptyText: 'За этот период сделок не было' });
+    NS.charts.bars($('#dailyChart'), daily, { emptyText: T('За этот период сделок не было') });
+    lastDashboardCharts = {
+      points: points,
+      wins: m.wins,
+      losses: m.losses,
+      be: m.be,
+      daily: daily
+    };
     const dailyNet = daily.reduce(function (sum, point) { return sum + point.value; }, 0);
     const dailyChip = $('#dailyChip');
     dailyChip.textContent = daily.length ? U.money(dailyNet, { sign: true }) : '—';
@@ -643,43 +769,78 @@
     const streak = m.currentStreak
       ? m.currentStreak.n + (m.currentStreak.type === 'win' ? 'W' : 'L')
       : '—';
+    const openRisk = store.openPortfolioRisk(store.state.trades, store.balanceAll());
+    const openRiskTone = openRisk.unprotectedCount > 0
+      ? 'warn'
+      : (openRisk.riskPct > (store.state.settings.dailyLossLimit || 3) ? 'neg' : (openRisk.totalRisk > 0 ? 'neutral' : ''));
+    const openSub = openRisk.openCount
+      ? T('{pct} счёта · {count} открытых')
+        .replace('{pct}', U.percent(openRisk.riskPct, 1))
+        .replace('{count}', openRisk.openCount) +
+        (openRisk.unprotectedCount ? ' · ' + T('{count} без стопа').replace('{count}', openRisk.unprotectedCount) : '')
+      : T('Нет открытых позиций');
+    const beTone = m.beWinRate !== null
+      ? (m.winRate >= m.beWinRate ? 'pos' : 'neg')
+      : '';
+    const rSub = hasR
+      ? T('Итого {total} · {count} с R').replace('{total}', U.rfmt(m.totalR, { sign: true })).replace('{count}', m.rCount) +
+        (m.returnOnClosedRisk !== null ? ' · ' + (m.returnOnClosedRisk > 0 ? '+' : '') + U.percent(m.returnOnClosedRisk, 1) + ' RoR' : '')
+      : T('Добавьте стоп при входе к сделкам');
 
     const cards = [
       {
         label: 'Чистый P&L',
         value: m.count ? U.money(m.net, { sign: true }) : '—',
         tone: toneClass(m.net),
-        sub: m.count ? 'ROI ' + (roi > 0 ? '+' : '') + U.percent(roi, 1) + ' · ' + m.count + ' ' + pluralTrades(m.count) : 'Нет закрытых сделок'
+        sub: m.count
+          ? 'ROI ' + (roi > 0 ? '+' : '') + U.percent(roi, 1) + ' · ' + m.count + ' ' + pluralTrades(m.count)
+          : T('Нет закрытых сделок')
       },
       {
         label: 'Винрейт',
         value: m.count ? U.percent(m.winRate, 0) : '—',
         tone: m.count ? (m.winRate >= 50 ? 'pos' : '') : '',
-        sub: m.count ? m.wins + 'W · ' + m.losses + 'L · ' + m.be + 'BE' : 'Нужны закрытые сделки'
+        sub: m.count ? m.wins + 'W · ' + m.losses + 'L · ' + m.be + 'BE' : T('Нужны закрытые сделки')
+      },
+      {
+        label: 'Безубыточный WR',
+        value: m.beWinRate !== null ? U.percent(m.beWinRate, 0) : '—',
+        tone: beTone,
+        sub: m.payoffRatio !== null
+          ? T('под средний R:R 1 : {rr}').replace('{rr}', decimal(m.payoffRatio, 2))
+          : T('Нужны прибыли и убытки')
       },
       {
         label: 'Профит-фактор',
         value: m.count ? pf : '—',
         tone: m.count ? (m.profitFactor > 1 ? 'pos' : (m.profitFactor < 1 ? 'neg' : '')) : '',
-        sub: m.count ? 'Прибыль / убыток' : 'Отношение валовой прибыли к убытку'
+        sub: m.count ? T('Прибыль / убыток') : T('Отношение валовой прибыли к убытку')
       },
       {
         label: 'Средний R',
         value: hasR ? U.rfmt(m.avgR, { sign: true }) : '—',
         tone: hasR ? toneClass(m.avgR) : '',
-        sub: hasR ? 'Итого ' + U.rfmt(m.totalR, { sign: true }) + ' · ' + m.rCount + ' с R' : 'Добавьте стоп при входе к сделкам'
+        sub: rSub
+      },
+      {
+        label: 'Открытый риск',
+        value: openRisk.openCount ? U.money(openRisk.totalRisk) : '—',
+        tone: openRiskTone,
+        sub: openSub
       },
       {
         label: 'Макс. просадка, $',
         value: m.count ? U.money(m.maxDD) : '—',
         tone: m.maxDD > 0.004 ? 'neg' : '',
-        sub: m.count ? 'Макс. просадка, %: ' + U.percent(m.maxDDPct, 1) + ' от пика счёта' : 'Пока без просадок'
+        sub: m.count
+          ? T('Макс. просадка, %: {pct} от пика счёта').replace('{pct}', U.percent(m.maxDDPct, 1))
+          : T('Пока без просадок')
       },
       {
         label: 'Серия',
         value: streak,
         tone: m.currentStreak ? (m.currentStreak.type === 'win' ? 'pos' : 'neg') : '',
-        sub: m.count ? 'Макс. ' + m.maxWinStreak + 'W / ' + m.maxLossStreak + 'L' : 'Текущая серия'
+        sub: m.count ? T('Макс. {w}W / {l}L').replace('{w}', m.maxWinStreak).replace('{l}', m.maxLossStreak) : T('Текущая серия')
       }
     ];
 
@@ -690,40 +851,15 @@
     }).join('');
   }
 
-  function orderedPnlEvents(trades) {
-    const events = [];
-    (trades || []).forEach(function (trade) {
-      store.tradePnlEvents(trade).forEach(function (event, index) {
-        events.push({
-          date: event.date || trade.date || '',
-          time: trade.time || '00:00',
-          tradeId: trade.id || '',
-          exitId: event.exitId || '',
-          index: index,
-          pnl: event.pnl,
-          trade: trade
-        });
-      });
-    });
-    events.sort(function (a, b) {
-      return (a.date || '').localeCompare(b.date || '') ||
-        (a.time || '').localeCompare(b.time || '') ||
-        (a.tradeId || '').localeCompare(b.tradeId || '') ||
-        (a.exitId || '').localeCompare(b.exitId || '') ||
-        a.index - b.index;
-    });
-    return events;
-  }
-
   function buildEquityPoints(closedAsc, base) {
     let balance = base;
-    const points = [{ label: 'Старт', value: balance, meta: 'Начало периода' }];
-    orderedPnlEvents(closedAsc).forEach(function (event) {
+    const points = [{ label: T('Старт'), value: balance, meta: T('Начало периода') }];
+    store.pnlEventRows(closedAsc).forEach(function (event) {
       balance += event.pnl;
       points.push({
         label: event.date,
         value: balance,
-        meta: event.trade.symbol + ' · ' + U.money(event.pnl, { sign: true })
+        meta: (event.trade ? event.trade.symbol : '') + ' · ' + U.money(event.pnl, { sign: true })
       });
     });
 
@@ -760,11 +896,15 @@
     const settings = store.state.settings;
     const today = todayInAccount();
     const todayTrades = store.state.trades.filter(function (trade) { return trade.date === today; });
-    const todayInfo = store.dayPnlMap(store.state.trades).get(today);
+    const dayMap = store.dayPnlMap(store.state.trades);
+    const todayInfo = dayMap.get(today);
     const dayPnl = todayInfo ? todayInfo.pnl : 0;
 
-    const balance = store.balanceAll();
-    const startOfDayBalance = Math.max(0, balance - dayPnl);
+    let netBeforeToday = 0;
+    dayMap.forEach(function (info, day) {
+      if (day < today) netBeforeToday += info.pnl;
+    });
+    const startOfDayBalance = Math.max(0, (U.parseNum(settings.startBalance) || 0) + netBeforeToday);
     const lossLimit = Math.max(0, (U.parseNum(settings.dailyLossLimit) || 0) / 100 * startOfDayBalance);
     const maxTrades = U.parseNum(settings.maxTradesPerDay) || 0;
     return {
@@ -784,18 +924,28 @@
 
     if (snapshot.lossLimit > 0 && snapshot.dayPnl <= -snapshot.lossLimit) {
       title = 'Дневной лимит убытка достигнут';
-      messages.push('Убыток за сегодня: ' + U.money(-snapshot.dayPnl) + ' при лимите ' + U.money(snapshot.lossLimit) + '.');
+      messages.push(
+        T('Убыток за сегодня: {loss} при лимите {limit}.')
+          .replace('{loss}', U.money(-snapshot.dayPnl))
+          .replace('{limit}', U.money(snapshot.lossLimit))
+      );
     }
     if (snapshot.maxTrades > 0 && snapshot.todayTrades.length >= snapshot.maxTrades) {
       if (messages.length) title = 'Дневные лимиты превышены';
       else title = 'Лимит сделок на день достигнут';
-      messages.push('Сегодня уже ' + snapshot.todayTrades.length + ' ' + pluralTrades(snapshot.todayTrades.length) + ' при лимите ' + snapshot.maxTrades + '.');
+      messages.push(
+        T('Сегодня уже {count} {unit} при лимите {max}.')
+          .replace('{count}', snapshot.todayTrades.length)
+          .replace('{unit}', pluralTrades(snapshot.todayTrades.length))
+          .replace('{max}', snapshot.maxTrades)
+      );
     }
     if (!messages.length) return null;
 
     return {
       title: title,
-      text: messages.join(' ') + ' Добавить сделку вне плана?'
+      text: messages.join(' ') + ' ' + T('Добавить сделку вне плана?'),
+      textReady: true
     };
   }
 
@@ -811,14 +961,14 @@
 
     let statusTone = 'ok';
     let statusText = 'В рамках плана. Сохраняйте темп.';
-    if (!todayTrades.length) {
-      statusText = 'Сделок сегодня ещё нет — можно работать по плану.';
-    } else if (lossLimit > 0 && dayPnl <= -lossLimit) {
+    if (lossLimit > 0 && dayPnl <= -lossLimit) {
       statusTone = 'bad';
       statusText = 'Дневной лимит убытка достигнут. Остановитесь на сегодня.';
     } else if (maxTrades > 0 && todayTrades.length >= maxTrades) {
       statusTone = 'warn';
       statusText = 'Лимит сделок на день исчерпан. Больше не входите.';
+    } else if (!todayTrades.length) {
+      statusText = 'Сделок сегодня ещё нет — можно работать по плану.';
     }
 
     const lossBarClass = lossPct >= 100 ? 'bad' : (lossPct > 55 ? 'warn' : '');
@@ -857,8 +1007,8 @@
         : (status === 'partial' ? U.money(pnl, { sign: true }) : 'Открыта');
       const statusLabel = status === 'closed'
         ? (r !== null ? U.rfmt(r, { sign: true }) : '—')
-        : (status === 'partial' ? 'частично · остаток ' + U.qty(store.remainingQty(trade)) : 'без выхода');
-      return '<div class="mini-row" data-open-trade="' + U.escapeHtml(trade.id) + '" tabindex="0">' +
+        : (status === 'partial' ? T('частично · остаток {qty}').replace('{qty}', U.qty(store.remainingQty(trade))) : T('без выхода'));
+      return '<div class="mini-row" role="button" data-open-trade="' + U.escapeHtml(trade.id) + '" tabindex="0">' +
         '<div class="mini-icon ' + trade.side + '" data-i18n-skip>' + U.escapeHtml(trade.symbol.slice(0, 2)) + '</div>' +
         '<div class="mini-main"><strong data-i18n-skip>' + U.escapeHtml(trade.symbol) + '</strong><span>' +
         U.escapeHtml(U.formatDate(trade.date, 'med')) + (trade.time ? ' · ' + U.escapeHtml(trade.time) : '') +
@@ -893,6 +1043,18 @@
      Trades
      ============================================================ */
 
+  let collatorLocale = '';
+  let textCollator = null;
+
+  function getCollator() {
+    const loc = U.locale();
+    if (!textCollator || collatorLocale !== loc) {
+      collatorLocale = loc;
+      textCollator = new Intl.Collator(loc);
+    }
+    return textCollator;
+  }
+
   function getFilteredTrades() {
     const filters = state.filters;
     let list = store.state.trades.slice();
@@ -914,7 +1076,6 @@
         const status = store.tradeStatus(trade);
         if (filters.result === 'open') return status === 'open';
         if (filters.result === 'partial') return status === 'partial';
-        if (!store.hasRealized(trade)) return false;
         const pnl = store.tradePnl(trade);
         if (pnl === null) return false;
         if (filters.result === 'win') return pnl > 0.004;
@@ -925,58 +1086,81 @@
 
     const key = state.sort.key;
     const dir = state.sort.dir === 'asc' ? 1 : -1;
-    list.sort(function (a, b) {
-      let av, bv;
-      if (key === 'date') {
-        av = (a.date || '') + ' ' + (a.time || '00:00');
-        bv = (b.date || '') + ' ' + (b.time || '00:00');
-        return av.localeCompare(bv) * dir;
-      }
-      if (key === 'session') {
-        const sessions = store.state.settings.sessions;
-        const aSession = U.sessionInfo(a.time, sessions);
-        const bSession = U.sessionInfo(b.time, sessions);
-        if (!aSession && !bSession) return 0;
-        if (!aSession) return 1;
-        if (!bSession) return -1;
-        const aStart = timeToMinutes(aSession.start);
-        const bStart = timeToMinutes(bSession.start);
-        if (aStart !== bStart) return (aStart - bStart) * dir;
-        return ((a.date || '') + ' ' + (a.time || '')).localeCompare((b.date || '') + ' ' + (b.time || '')) * dir;
-      }
-      if (key === 'symbol' || key === 'setup') {
-        av = String(a[key] || '').toLowerCase();
-        bv = String(b[key] || '').toLowerCase();
-        return av.localeCompare(bv, 'ru') * dir;
-      }
-      if (key === 'pnl') {
-        av = store.hasRealized(a) ? store.tradePnl(a) : null;
-        bv = store.hasRealized(b) ? store.tradePnl(b) : null;
-      } else if (key === 'r') {
-        av = store.tradeR(a);
-        bv = store.tradeR(b);
-      } else {
-        av = U.parseNum(a[key]);
-        bv = U.parseNum(b[key]);
-      }
-      if (av === null && bv === null) return 0;
-      if (av === null) return 1;
-      if (bv === null) return -1;
-      return (av - bv) * dir;
+    if (key === 'date') {
+      const decorated = list.map(function (trade) {
+        return { trade: trade, val: (trade.date || '') + ' ' + (trade.time || '00:00') };
+      });
+      decorated.sort(function (a, b) {
+        return (a.val < b.val ? -1 : (a.val > b.val ? 1 : 0)) * dir;
+      });
+      return decorated.map(function (item) { return item.trade; });
+    }
+    if (key === 'session') {
+      const sessions = store.state.settings.sessions;
+      const decorated = list.map(function (trade) {
+        const info = U.sessionInfo(trade.time, sessions);
+        return {
+          trade: trade,
+          start: info ? timeToMinutes(info.start) : null,
+          dt: (trade.date || '') + ' ' + (trade.time || '')
+        };
+      });
+      decorated.sort(function (a, b) {
+        if (a.start === null && b.start === null) return 0;
+        if (a.start === null) return 1;
+        if (b.start === null) return -1;
+        if (a.start !== b.start) return (a.start - b.start) * dir;
+        return (a.dt < b.dt ? -1 : (a.dt > b.dt ? 1 : 0)) * dir;
+      });
+      return decorated.map(function (item) { return item.trade; });
+    }
+    if (key === 'symbol' || key === 'setup') {
+      const collator = getCollator();
+      const decorated = list.map(function (trade) {
+        return { trade: trade, val: String(trade[key] || '').toLowerCase() };
+      });
+      decorated.sort(function (a, b) {
+        return collator.compare(a.val, b.val) * dir;
+      });
+      return decorated.map(function (item) { return item.trade; });
+    }
+
+    const decorated = list.map(function (trade) {
+      let val;
+      if (key === 'pnl') val = store.tradePnl(trade);
+      else if (key === 'r') val = store.tradeR(trade);
+      else if (key === 'exit') val = store.weightedExit(trade);
+      else val = U.parseNum(trade[key]);
+      return { trade: trade, val: val };
     });
-    return list;
+    decorated.sort(function (a, b) {
+      if (a.val === null && b.val === null) return 0;
+      if (a.val === null) return 1;
+      if (b.val === null) return -1;
+      return (a.val - b.val) * dir;
+    });
+    return decorated.map(function (item) { return item.trade; });
   }
+
+  let lastSetupsSelect = null;
+  let lastSetupsKey = '';
 
   function populateSetupFilter() {
     const select = $('#filterSetup');
+    const collator = getCollator();
     const setups = Array.from(new Set(store.state.trades.map(function (t) { return t.setup; }).filter(function (s) { return !!s; })))
-      .sort(function (a, b) { return a.localeCompare(b, 'ru'); });
+      .sort(function (a, b) { return collator.compare(a, b); });
+    const cacheKey = U.locale() + '\u0000' + setups.join('\u0000');
     const current = state.filters.setup;
-    let html = '<option value="all">Все сетапы</option>';
-    setups.forEach(function (setup) {
-      html += '<option value="' + U.escapeHtml(setup) + '">' + U.escapeHtml(setup) + '</option>';
-    });
-    select.innerHTML = html;
+    if (lastSetupsSelect !== select || lastSetupsKey !== cacheKey) {
+      let html = '<option value="all">Все сетапы</option>';
+      setups.forEach(function (setup) {
+        html += '<option data-i18n-skip value="' + U.escapeHtml(setup) + '">' + U.escapeHtml(setup) + '</option>';
+      });
+      select.innerHTML = html;
+      lastSetupsSelect = select;
+      lastSetupsKey = cacheKey;
+    }
     if (current !== 'all' && setups.indexOf(current) === -1) {
       state.filters.setup = 'all';
       select.value = 'all';
@@ -996,23 +1180,27 @@
     const weighted = store.weightedExit(trade);
     const remaining = store.remainingQty(trade);
     const exitHtml = status === 'open'
-      ? '<span class="open-badge">Открыта</span>'
+      ? '<span class="open-badge">' + T('Открыта') + '</span>'
       : '<span class="exit-value">' + U.escapeHtml(U.price(weighted)) + '</span>' +
-        (status === 'partial' ? '<small class="exit-remain">ост. ' + U.escapeHtml(U.qty(remaining)) + '</small>' : '');
+        (status === 'partial' ? '<small class="exit-remain">' + U.escapeHtml(T('ост. {qty}').replace('{qty}', U.qty(remaining))) + '</small>' : '');
     const pnlHtml = pnl === null
       ? '<span class="muted">—</span>'
       : '<span class="' + toneClass(pnl) + '">' + U.escapeHtml(U.money(pnl, { sign: true })) + '</span>' +
-        (status === 'partial' ? '<small class="exit-remain">реализовано</small>' : '');
+        (status === 'partial' ? '<small class="exit-remain">' + T('реализовано') + '</small>' : '');
+    const shots = store.tradeScreenshots(trade);
+    const hasShot = shots.length > 0;
     const statusHtml = status === 'partial'
-      ? '<span class="partial-badge">частично</span>'
-      : (status === 'open' ? '<span class="open-badge">открыта</span>' : '');
+      ? '<span class="partial-badge">' + T('частично') + '</span>'
+      : (status === 'open' ? '<span class="open-badge">' + T('открыта') + '</span>' : '');
     return '<tr data-open-trade="' + U.escapeHtml(trade.id) + '" tabindex="0">' +
       '<td><div class="cell-date"><strong>' + U.escapeHtml(U.formatDate(trade.date, 'med')) + '</strong><span>' + U.escapeHtml(trade.time || '—') + '</span></div></td>' +
       '<td>' + (session ? '<span class="session-chip" data-i18n-skip>' + U.escapeHtml(session.label) + '</span>' : '<span class="muted">—</span>') + '</td>' +
       '<td><div class="symbol-cell"><div class="symbol-main">' +
-      '<button type="button" class="symbol-thumb' + (trade.screenshot ? ' has-shot' : '') + '"' +
-      (trade.screenshot ? ' data-open-shot="' + U.escapeHtml(trade.id) + '" title="Открыть скриншот"' : ' tabindex="-1" aria-hidden="true"') + '>' +
-      '<span class="thumb-empty"></span></button>' +
+      '<button type="button" class="symbol-thumb' + (hasShot ? ' has-shot' : '') + '"' +
+      (hasShot ? ' data-open-shot="' + U.escapeHtml(trade.id) + '" title="' + U.escapeHtml(T('Открыть скриншот')) + '"' : ' tabindex="-1" aria-hidden="true"') + '>' +
+      '<span class="thumb-empty"></span>' +
+      (shots.length > 1 ? '<span class="thumb-count">' + shots.length + '</span>' : '') +
+      '</button>' +
       '<div class="symbol-line"><strong data-i18n-skip>' + U.escapeHtml(trade.symbol) + '</strong></div></div>' +
       '<span class="side-badge ' + trade.side + '"><span class="arr">' + (trade.side === 'long' ? '↑' : '↓') + '</span>' + (trade.side === 'long' ? 'Long' : 'Short') + '</span>' +
       statusHtml + '</div></td>' +
@@ -1031,8 +1219,9 @@
     const byId = new Map(trades.map(function (trade) { return [trade.id, trade]; }));
     $$('#tradesTbody [data-open-shot]').forEach(function (button) {
       const trade = byId.get(button.dataset.openShot);
-      if (!trade || !trade.screenshot) return;
-      store.screenshotSource(trade.screenshot).then(function (source) {
+      const shots = store.tradeScreenshots(trade);
+      if (!shots.length) return;
+      store.screenshotSource(shots[0].src).then(function (source) {
         if (token !== thumbHydrationToken || !source || !document.contains(button)) return;
         const image = document.createElement('img');
         image.src = source;
@@ -1040,6 +1229,12 @@
         image.loading = 'lazy';
         button.innerHTML = '';
         button.appendChild(image);
+        if (shots.length > 1) {
+          const badge = document.createElement('span');
+          badge.className = 'thumb-count';
+          badge.textContent = String(shots.length);
+          button.appendChild(badge);
+        }
       }).catch(function () { /* the placeholder stays */ });
     });
   }
@@ -1077,8 +1272,13 @@
     const hasAny = store.state.trades.length > 0;
 
     $$('#tradesTable th[data-sort]').forEach(function (th) {
-      if (th.dataset.sort === state.sort.key) th.dataset.dir = state.sort.dir;
-      else th.removeAttribute('data-dir');
+      if (th.dataset.sort === state.sort.key) {
+        th.dataset.dir = state.sort.dir;
+        th.setAttribute('aria-sort', state.sort.dir === 'asc' ? 'ascending' : 'descending');
+      } else {
+        th.removeAttribute('data-dir');
+        th.setAttribute('aria-sort', 'none');
+      }
     });
 
     if (!list.length) {
@@ -1124,12 +1324,12 @@
 
     const from = startIndex + 1;
     const to = startIndex + pageTrades.length;
-    $('#tradesFooter').innerHTML = '<span>Показано <b>' + from + '–' + to + '</b> из <b>' + list.length + '</b></span>' +
-      '<span class="dot-sep">·</span><span>Итого по фильтру: <b class="' + toneClass(net) + '">' + U.escapeHtml(U.money(net, { sign: true })) + '</b></span>' +
-      (realizedCount !== list.length ? '<span class="dot-sep">·</span><span>с результатом: <b>' + realizedCount + '</b></span>' : '') +
-      (rCount ? '<span class="dot-sep">·</span><span>Средний R: <b class="' + toneClass(rSum / rCount) + '">' + U.escapeHtml(U.rfmt(rSum / rCount, { sign: true })) + '</b></span>' : '') +
+    $('#tradesFooter').innerHTML = '<span>' + U.escapeHtml(T('Показано {from}–{to} из {total}').replace('{from}', from).replace('{to}', to).replace('{total}', list.length)) + '</span>' +
+      '<span class="dot-sep">·</span><span>' + U.escapeHtml(T('Итого по фильтру:')) + ' <b class="' + toneClass(net) + '">' + U.escapeHtml(U.money(net, { sign: true })) + '</b></span>' +
+      (realizedCount !== list.length ? '<span class="dot-sep">·</span><span>' + U.escapeHtml(T('с результатом:')) + ' <b>' + realizedCount + '</b></span>' : '') +
+      (rCount ? '<span class="dot-sep">·</span><span>' + U.escapeHtml(T('Средний R')) + ': <b class="' + toneClass(rSum / rCount) + '">' + U.escapeHtml(U.rfmt(rSum / rCount, { sign: true })) + '</b></span>' : '') +
       pagerHtml(state.page, totalPages) +
-      '<span class="table-foot-hint">Клик по строке — редактирование</span>';
+      '<span class="table-foot-hint">' + U.escapeHtml(T('Клик по строке — редактирование')) + '</span>';
   }
 
   function resetFilters() {
@@ -1152,17 +1352,27 @@
     const prefix = year + '-' + pad2(month + 1);
 
     $('#calTitle').textContent = U.monthTitle(year, month);
-    $('#calWeekdays').innerHTML = NS.WEEKDAY_LABELS.map(function (label) { return '<span>' + label + '</span>'; }).join('');
+    $('#calWeekdays').innerHTML = U.weekdayLabels().map(function (label) { return '<span>' + label + '</span>'; }).join('');
 
     const dayMap = store.dayPnlMap(store.state.trades);
-    const monthTrades = store.state.trades.filter(function (trade) {
-      return store.tradePnlEvents(trade).some(function (event) {
-        return (event.date || '').slice(0, 7) === prefix;
+    const monthTradePnl = new Map();
+    store.state.trades.forEach(function (trade) {
+      let tradeMonthPnl = 0;
+      let hasMonthEvent = false;
+      store.tradePnlEvents(trade).forEach(function (event) {
+        if ((event.date || '').slice(0, 7) !== prefix) return;
+        tradeMonthPnl += event.pnl;
+        hasMonthEvent = true;
       });
+      if (hasMonthEvent) monthTradePnl.set(trade.id, tradeMonthPnl);
     });
-    const closedMonth = monthTrades.filter(store.hasRealized);
+    const monthTradeValues = Array.from(monthTradePnl.values());
+    const monthTradeCount = monthTradeValues.length;
+    const monthWins = monthTradeValues.filter(function (value) { return value > 0.004; }).length;
+    const monthWinRate = monthTradeCount ? (monthWins / monthTradeCount) * 100 : 0;
+
     const monthKeys = Array.from(dayMap.keys()).filter(function (key) {
-      return key.slice(0, 7) === prefix;
+      return key.slice(0, 7) === prefix && dayMap.get(key).realizedCount > 0;
     });
     const monthPnl = monthKeys.reduce(function (sum, key) {
       return sum + dayMap.get(key).pnl;
@@ -1179,15 +1389,13 @@
       notesByDate[note.date].push(note);
     });
 
-    const settings = store.state.settings;
-    const monthMetrics = store.metrics(closedMonth, U.parseNum(settings.startBalance) || 0);
     const dayValues = monthKeys.map(function (key) { return dayMap.get(key).pnl; });
 
     $('#calSummary').innerHTML =
       '<span class="chip ' + toneClass(monthPnl) + '">' + U.escapeHtml(U.money(monthPnl, { sign: true })) + '</span>' +
-      '<span class="chip">' + closedMonth.length + ' ' + pluralTrades(closedMonth.length) + '</span>' +
-      '<span class="chip">Винрейт ' + (monthMetrics.count ? U.percent(monthMetrics.winRate, 0) : '—') + '</span>' +
-      (bestDay && bestDay.value > 0.004 ? '<span class="chip pos">Лучший день +' + U.escapeHtml(U.money(bestDay.value)) + '</span>' : '');
+      '<span class="chip">' + monthTradeCount + ' ' + pluralTrades(monthTradeCount) + '</span>' +
+      '<span class="chip">' + U.escapeHtml(T('Винрейт {wr}').replace('{wr}', monthTradeCount ? U.percent(monthWinRate, 0) : '—')) + '</span>' +
+      (bestDay && bestDay.value > 0.004 ? '<span class="chip pos">' + U.escapeHtml(T('Лучший день +{val}').replace('{val}', U.money(bestDay.value))) + '</span>' : '');
 
     const first = new Date(year, month, 1);
     const offset = (first.getDay() + 6) % 7;
@@ -1203,6 +1411,7 @@
       const dayInfo = dayMap.get(iso);
       const dayPnl = dayInfo ? dayInfo.pnl : 0;
       const count = dayInfo ? dayInfo.count : 0;
+      const realizedCount = dayInfo ? (dayInfo.realizedCount || 0) : 0;
       const hasNote = notesByDate[iso] && notesByDate[iso].length > 0;
       const ratio = maxAbs > 0 ? Math.abs(dayPnl) / maxAbs : 0;
 
@@ -1212,22 +1421,23 @@
       if (iso === state.selectedDay) classes.push('selected');
 
       let style = '';
-      if (dayPnl > 0.004 || dayPnl < -0.004) {
+      if (realizedCount > 0 && (dayPnl > 0.004 || dayPnl < -0.004)) {
         classes.push(dayPnl > 0 ? 'pos' : 'neg');
         style = '--heat:' + ratio.toFixed(3);
       }
 
       const titleParts = [U.formatDate(iso, 'full')];
-      if (count) titleParts.push(U.money(dayPnl, { sign: true }) + ' · ' + count + ' ' + pluralTrades(count));
-      if (hasNote) titleParts.push('есть запись в журнале');
+      if (realizedCount > 0) titleParts.push(U.money(dayPnl, { sign: true }) + ' · ' + count + ' ' + pluralTrades(count));
+      else if (count) titleParts.push(count + ' ' + pluralTrades(count) + ' (' + T('открыта') + ')');
+      if (hasNote) titleParts.push(T('есть запись в журнале'));
 
       html += '<button type="button" class="' + classes.join(' ') + '" data-date="' + iso + '"' +
         (style ? ' style="' + style + '"' : '') + ' title="' + U.escapeHtml(titleParts.join(' · ')) + '">' +
         '<span class="cal-num">' + date.getDate() + '</span>' +
-        (count ? '<span class="cal-pnl ' + toneClass(dayPnl) + '">' + U.escapeHtml(U.compactMoney(dayPnl, { sign: true })) + '</span>' : '') +
+        (realizedCount > 0 ? '<span class="cal-pnl ' + toneClass(dayPnl) + '">' + U.escapeHtml(U.compactMoney(dayPnl, { sign: true })) + '</span>' : '') +
         (count || hasNote
           ? '<span class="cal-meta">' + (count ? count + ' ' + pluralTrades(count) : '') +
-            (hasNote ? '<span class="cal-note-dot" title="Есть запись"></span>' : '') + '</span>'
+            (hasNote ? '<span class="cal-note-dot" title="' + U.escapeHtml(T('Есть запись')) + '"></span>' : '') + '</span>'
           : '') +
         '</button>';
     }
@@ -1244,7 +1454,7 @@
       return;
     }
 
-    const dayInfo = store.dayPnlMap(store.state.trades).get(day) || { pnl: 0, count: 0 };
+    const dayInfo = store.dayPnlMap(store.state.trades).get(day) || { pnl: 0, count: 0, realizedCount: 0 };
     const dayPnl = dayInfo.pnl;
     const dayEventPnl = store.dayEventPnlMap(store.state.trades, day);
     const dayTrades = store.state.trades
@@ -1260,6 +1470,7 @@
 
     const wins = closedTrades.filter(function (trade) { return dayEventPnl.get(trade.id) > 0.004; }).length;
     const losses = closedTrades.filter(function (trade) { return dayEventPnl.get(trade.id) < -0.004; }).length;
+    const be = closedTrades.length - wins - losses;
 
     let tradesHtml;
     if (!dayTrades.length) {
@@ -1269,12 +1480,12 @@
         const status = store.tradeStatus(trade);
         const hasEvent = dayEventPnl.has(trade.id);
         const pnl = hasEvent ? dayEventPnl.get(trade.id) : null;
-        return '<div class="day-trade" data-open-trade="' + U.escapeHtml(trade.id) + '" tabindex="0">' +
+        return '<div class="day-trade" role="button" data-open-trade="' + U.escapeHtml(trade.id) + '" tabindex="0">' +
           '<span class="day-trade-symbol" data-i18n-skip>' + U.escapeHtml(trade.symbol) +
           ' <span class="day-trade-side">' + (trade.side === 'long' ? 'long' : 'short') + '</span>' +
           (status === 'partial' ? ' <span class="partial-badge">' + T('частично') + '</span>' : '') + '</span>' +
           '<span class="day-trade-pnl ' + (hasEvent ? toneClass(pnl) : 'neutral') + '">' +
-          (status === 'open' ? T('открыта') : (hasEvent ? U.escapeHtml(U.money(pnl, { sign: true })) : '—')) + '</span></div>';
+          (hasEvent ? U.escapeHtml(U.money(pnl, { sign: true })) : (status === 'open' ? T('открыта') : T('выход в другой день'))) + '</span></div>';
       }).join('');
     }
 
@@ -1285,13 +1496,13 @@
       notesHtml = '<div class="day-sub">Запись в журнале</div>' +
         '<div class="day-note"><div class="day-note-head">' + mood.emoji + ' <span data-i18n-skip>' + U.escapeHtml(note.title || mood.label) + '</span></div>' +
         '<p data-i18n-skip>' + U.escapeHtml(U.truncate(note.text, 180)) + '</p>' +
-        '<div style="margin-top:6px"><button type="button" class="link-btn" data-edit-note="' + U.escapeHtml(note.id) + '">Открыть запись</button>' +
-        (dayNotes.length > 1 ? '<span class="muted small"> · ещё ' + (dayNotes.length - 1) + '</span>' : '') + '</div></div>';
+        '<div style="margin-top:6px"><button type="button" class="link-btn" data-edit-note="' + U.escapeHtml(note.id) + '">' + U.escapeHtml(T('Открыть запись')) + '</button>' +
+        (dayNotes.length > 1 ? '<span class="muted small"> · ' + U.escapeHtml(T('ещё {count}').replace('{count}', dayNotes.length - 1)) + '</span>' : '') + '</div></div>';
     }
 
     const closedInfo = closedTrades.length
-      ? closedTrades.length + ' ' + pluralTrades(closedTrades.length) + ' · ' + wins + 'W / ' + losses + 'L'
-      : 'закрытых сделок нет';
+      ? closedTrades.length + ' ' + pluralTrades(closedTrades.length) + ' · ' + wins + 'W / ' + losses + 'L' + (be ? ' / ' + be + 'BE' : '')
+      : T('закрытых сделок нет');
 
     card.innerHTML =
       '<div class="day-head"><div><h2>' + U.escapeHtml(U.formatDate(day, 'long')) + '</h2>' +
@@ -1307,15 +1518,16 @@
   }
 
   function changeMonth(delta) {
-    if (!state.calCursor) state.calCursor = monthStart(new Date());
+    if (!state.calCursor) state.calCursor = accountMonthStart();
     state.calCursor = new Date(state.calCursor.getFullYear(), state.calCursor.getMonth() + delta, 1);
     state.selectedDay = defaultDayForMonth(state.calCursor);
     renderCalendar();
   }
 
   function defaultDayForMonth(cursor) {
-    const now = new Date();
-    if (cursor.getFullYear() === now.getFullYear() && cursor.getMonth() === now.getMonth()) return todayInAccount();
+    const today = todayInAccount();
+    const todayDate = U.parseISO(today);
+    if (todayDate && cursor.getFullYear() === todayDate.getFullYear() && cursor.getMonth() === todayDate.getMonth()) return today;
     const prefix = cursor.getFullYear() + '-' + pad2(cursor.getMonth() + 1);
     const days = Array.from(store.dayPnlMap(store.state.trades).keys())
       .filter(function (day) { return day.slice(0, 7) === prefix; })
@@ -1327,11 +1539,42 @@
      Analytics
      ============================================================ */
 
+  let lastAnalyticsDrawdown = null;
+
+  function redrawAnalyticsCharts() {
+    const canvas = $('#drawdownChart');
+    if (!canvas || !NS.charts) return;
+    if (!lastAnalyticsDrawdown) {
+      renderAnalytics();
+      return;
+    }
+    NS.charts.drawdown(canvas, lastAnalyticsDrawdown.points, { emptyText: T('Нет данных о просадках за период') });
+  }
+
   function renderAnalytics() {
     const data = buildPeriodMetrics();
     const m = data.m;
     const rows = m.rows;
     const hasR = m.rCount > 0;
+
+    const ddSeries = store.drawdownSeries(data.filtered, data.base);
+    lastAnalyticsDrawdown = ddSeries;
+    if (NS.charts && $('#drawdownChart')) {
+      NS.charts.drawdown($('#drawdownChart'), ddSeries.points, { emptyText: T('Нет данных о просадках за период') });
+    }
+    const ddChip = $('#drawdownChip');
+    if (ddChip) {
+      if (!ddSeries.points.length || ddSeries.maxDD <= 0.004) {
+        ddChip.textContent = m.count ? T('Без просадок') : '—';
+        ddChip.className = 'chip ' + (m.count ? 'pos' : '');
+      } else {
+        ddChip.textContent = T('-{pct} · макс. {days} дн. ({trades} сд.)')
+          .replace('{pct}', U.percent(ddSeries.maxDDPct, 1))
+          .replace('{days}', ddSeries.maxDurationDays)
+          .replace('{trades}', ddSeries.maxDurationTrades);
+        ddChip.className = 'chip neg';
+      }
+    }
 
     $('#insights').innerHTML = buildInsights(m).map(function (insight) {
       return '<div class="insight ' + (insight.tone || '') + '"><span class="insight-ico">' + insight.icon + '</span><span>' + insight.text + '</span></div>';
@@ -1348,13 +1591,17 @@
         label: 'Средний R',
         value: hasR ? U.rfmt(m.avgR, { sign: true }) : '—',
         tone: hasR ? toneClass(m.avgR) : '',
-        sub: hasR ? 'Всего ' + U.rfmt(m.totalR, { sign: true }) + ' · ' + m.rCount + ' с R' : 'Нужны стопы при входе'
+        sub: hasR
+          ? T('Всего {total} · {count} с R').replace('{total}', U.rfmt(m.totalR, { sign: true })).replace('{count}', m.rCount)
+          : T('Нужны стопы при входе')
       },
       {
         label: 'Винрейт',
         value: m.count ? U.percent(m.winRate, 0) : '—',
         tone: m.count ? (m.winRate >= 50 ? 'pos' : '') : '',
-        sub: m.count ? m.wins + ' прибыльных · ' + m.losses + ' убыточных' : 'Нет данных'
+        sub: m.count
+          ? T('{wins} прибыльных · {losses} убыточных').replace('{wins}', m.wins).replace('{losses}', m.losses)
+          : T('Нет данных')
       },
       {
         label: 'Профит-фактор',
@@ -1389,7 +1636,9 @@
       empty: 'Нет сделок за период'
     });
 
-    renderBreakdown($('#setupBreakdown'), store.groupRows(rows, function (t) { return t.setup || 'Без сетапа'; }), {
+    renderBreakdown($('#setupBreakdown'), store.groupRows(rows, function (t) { return t.setup || '__EMPTY__'; }), {
+      labelSkip: function (key) { return key !== '__EMPTY__'; },
+      labelFn: function (key) { return key === '__EMPTY__' ? T('Без сетапа') : key; },
       empty: 'Сетапы не указаны'
     });
 
@@ -1420,15 +1669,17 @@
 
     renderQuality(m);
     renderSetupTable(rows);
+    renderMonthTable(rows);
+    renderTagTable(rows);
   }
 
   function buildInsights(m) {
     if (!m.count) {
-      return [{ tone: '', icon: '💡', text: 'Пока нет закрытых сделок за выбранный период. Добавьте сделки — и здесь появятся закономерности вашей торговли.' }];
+      return [{ tone: '', icon: '💡', text: T('Пока нет закрытых сделок за выбранный период. Добавьте сделки — и здесь появятся закономерности вашей торговли.') }];
     }
     const out = [];
     const rows = m.rows;
-    const setups = store.groupRows(rows, function (t) { return t.setup || 'Без сетапа'; })
+    const setups = store.groupRows(rows, function (t) { return t.setup || T('Без сетапа'); })
       .filter(function (g) { return g.count >= 3; })
       .sort(function (a, b) { return b.pnl - a.pnl; });
 
@@ -1437,7 +1688,12 @@
       if (best.pnl > 0.004) {
         out.push({
           tone: 'pos', icon: '★',
-          text: 'Лучший сетап — <b>' + U.escapeHtml(best.key) + '</b>: <b class="pos">' + U.escapeHtml(U.money(best.pnl, { sign: true })) + '</b> за ' + best.count + ' ' + pluralTrades(best.count) + ', винрейт ' + U.percent(best.winRate, 0) + '.'
+          text: T('Лучший сетап — <b>{setup}</b>: <b class="pos">{pnl}</b> за {count} {unit}, винрейт {wr}.')
+            .replace('{setup}', U.escapeHtml(best.key))
+            .replace('{pnl}', U.escapeHtml(U.money(best.pnl, { sign: true })))
+            .replace('{count}', best.count)
+            .replace('{unit}', pluralTrades(best.count))
+            .replace('{wr}', U.percent(best.winRate, 0))
         });
       }
       if (setups.length > 1) {
@@ -1445,15 +1701,22 @@
         if (worst.pnl < -0.004) {
           out.push({
             tone: 'neg', icon: '!',
-            text: 'Проблемный сетап — <b>' + U.escapeHtml(worst.key) + '</b>: <b class="neg">' + U.escapeHtml(U.money(worst.pnl, { sign: true })) + '</b> за ' + worst.count + ' ' + pluralTrades(worst.count) + '. Стоит пересмотреть условия входа.'
+            text: T('Проблемный сетап — <b>{setup}</b>: <b class="neg">{pnl}</b> за {count} {unit}. Стоит пересмотреть условия входа.')
+              .replace('{setup}', U.escapeHtml(worst.key))
+              .replace('{pnl}', U.escapeHtml(U.money(worst.pnl, { sign: true })))
+              .replace('{count}', worst.count)
+              .replace('{unit}', pluralTrades(worst.count))
           });
         }
       }
     }
 
     const weekdayMap = new Map();
-    rows.forEach(function (trade) {
+    rows.forEach(function (row) {
+      const trade = row && row.trade ? row.trade : row;
+      if (!trade) return;
       store.tradePnlEvents(trade).forEach(function (event) {
+        if (!event.date || !U.validDateISO(event.date)) return;
         const key = String(U.weekdayIndex(event.date));
         let group = weekdayMap.get(key);
         if (!group) { group = { key: key, count: 0, pnl: 0, trades: new Set() }; weekdayMap.set(key, group); }
@@ -1467,9 +1730,14 @@
     if (weekdayGroups.length > 1) {
       const worstDay = weekdayGroups[0];
       if (worstDay.pnl < -0.004) {
+        const weekdayLabels = U.weekdayLabels();
         out.push({
           tone: 'warn', icon: '◷',
-          text: 'Самый слабый день — <b>' + NS.WEEKDAY_LABELS[Number(worstDay.key)] + '</b>: <b class="neg">' + U.escapeHtml(U.money(worstDay.pnl, { sign: true })) + '</b> за ' + worstDay.count + ' ' + pluralTrades(worstDay.count) + '. Возможно, стоит торговать в этот день меньшим объёмом.'
+          text: T('Самый слабый день — <b>{day}</b>: <b class="neg">{pnl}</b> за {count} {unit}. Возможно, стоит торговать в этот день меньшим объёмом.')
+            .replace('{day}', weekdayLabels[Number(worstDay.key)])
+            .replace('{pnl}', U.escapeHtml(U.money(worstDay.pnl, { sign: true })))
+            .replace('{count}', worstDay.count)
+            .replace('{unit}', pluralTrades(worstDay.count))
         });
       }
     }
@@ -1483,7 +1751,11 @@
         const meta = U.emotionMeta(worstEmotion.key);
         out.push({
           tone: 'warn', icon: '🧠',
-          text: 'Эмоция <b>' + U.escapeHtml(meta.label) + '</b> стоит вам <b class="neg">' + U.escapeHtml(U.money(worstEmotion.pnl, { sign: true })) + '</b> за ' + worstEmotion.count + ' ' + pluralTrades(worstEmotion.count) + '. Замечайте её до входа.'
+          text: T('Эмоция <b>{emotion}</b> стоит вам <b class="neg">{pnl}</b> за {count} {unit}. Замечайте её до входа.')
+            .replace('{emotion}', U.escapeHtml(meta.label))
+            .replace('{pnl}', U.escapeHtml(U.money(worstEmotion.pnl, { sign: true })))
+            .replace('{count}', worstEmotion.count)
+            .replace('{unit}', pluralTrades(worstEmotion.count))
         });
       }
     }
@@ -1497,7 +1769,11 @@
       if (better.pnl > 0.004) {
         out.push({
           tone: '', icon: '↗',
-          text: 'Сильнее работает направление <b>' + label + '</b>: <b class="pos">' + U.escapeHtml(U.money(better.pnl, { sign: true })) + '</b> и винрейт ' + U.percent(better.winRate, 0) + ' против ' + U.percent((better === longGroup ? shortGroup : longGroup).winRate, 0) + ' у противоположного.'
+          text: T('Сильнее работает направление <b>{side}</b>: <b class="pos">{pnl}</b> и винрейт {wr} против {otherWr} у противоположного.')
+            .replace('{side}', label)
+            .replace('{pnl}', U.escapeHtml(U.money(better.pnl, { sign: true })))
+            .replace('{wr}', U.percent(better.winRate, 0))
+            .replace('{otherWr}', U.percent((better === longGroup ? shortGroup : longGroup).winRate, 0))
         });
       }
     }
@@ -1506,12 +1782,14 @@
       if (m.avgDiscipline < 3.5) {
         out.push({
           tone: 'warn', icon: '◎',
-          text: 'Средняя дисциплина <b>' + decimal(m.avgDiscipline, 1) + ' / 5</b>. Сделки вне плана заметно ухудшают результат — начните с чек-листа перед входом.'
+          text: T('Средняя дисциплина <b>{score} / 5</b>. Сделки вне плана заметно ухудшают результат — начните с чек-листа перед входом.')
+            .replace('{score}', decimal(m.avgDiscipline, 1))
         });
       } else if (m.avgDiscipline >= 4.2) {
         out.push({
           tone: 'pos', icon: '✓',
-          text: 'Средняя дисциплина <b>' + decimal(m.avgDiscipline, 1) + ' / 5</b>. Вы стабильно следуете плану — это важнее отдельной прибыльной сделки.'
+          text: T('Средняя дисциплина <b>{score} / 5</b>. Вы стабильно следуете плану — это важнее отдельной прибыльной сделки.')
+            .replace('{score}', decimal(m.avgDiscipline, 1))
         });
       }
     }
@@ -1519,7 +1797,9 @@
     if (!out.length && m.best) {
       out.push({
         tone: 'pos', icon: '★',
-        text: 'Лучшая сделка периода — <b>' + U.escapeHtml(m.best.trade.symbol) + '</b> на <b class="pos">' + U.escapeHtml(U.money(m.best.pnl, { sign: true })) + '</b>. Продолжайте собирать статистику: для выводов нужно больше сделок.'
+        text: T('Лучшая сделка периода — <b>{symbol}</b> на <b class="pos">{pnl}</b>. Продолжайте собирать статистику: для выводов нужно больше сделок.')
+          .replace('{symbol}', U.escapeHtml(m.best.trade.symbol))
+          .replace('{pnl}', U.escapeHtml(U.money(m.best.pnl, { sign: true })))
       });
     }
 
@@ -1577,7 +1857,7 @@
       const side = item[0], label = item[1], group = item[2];
       return '<div class="side-box ' + side + '"><div class="side-box-top"><span>' + label + '</span>' +
         '<strong class="' + toneClass(group.pnl) + '">' + U.escapeHtml(U.money(group.pnl, { sign: true })) + '</strong></div>' +
-        '<sub>' + group.count + ' ' + pluralTrades(group.count) + ' · винрейт ' + (group.count ? U.percent(group.winRate, 0) : '—') + '</sub>' +
+        '<sub>' + U.escapeHtml(T('{count} {unit} · винрейт {wr}').replace('{count}', group.count).replace('{unit}', pluralTrades(group.count)).replace('{wr}', group.count ? U.percent(group.winRate, 0) : '—')) + '</sub>' +
         '<div class="side-bar"><i style="width:' + (group.count ? Math.min(100, group.winRate) : 0) + '%"></i></div></div>';
     }).join('');
   }
@@ -1598,9 +1878,10 @@
     const max = Math.max.apply(null, list.map(function (group) { return Math.abs(group.pnl); }).concat([1]));
     container.innerHTML = list.map(function (group) {
       const label = options.labelFn ? options.labelFn(group.key) : group.key;
+      const skip = typeof options.labelSkip === 'function' ? options.labelSkip(group.key) : !!options.labelSkip;
       const width = group.pnl === 0 ? 0 : Math.max(3, Math.abs(group.pnl) / max * 100);
-      return '<div class="hb-row" title="' + U.escapeHtml(group.count + ' ' + pluralTrades(group.count) + ' · винрейт ' + U.percent(group.winRate, 0)) + '">' +
-        '<div class="hb-top"><span class="hb-label"' + (options.labelSkip ? ' data-i18n-skip' : '') + '>' + U.escapeHtml(label) +
+      return '<div class="hb-row" title="' + U.escapeHtml(T('{count} {unit} · винрейт {wr}').replace('{count}', group.count).replace('{unit}', pluralTrades(group.count)).replace('{wr}', U.percent(group.winRate, 0))) + '">' +
+        '<div class="hb-top"><span class="hb-label"' + (skip ? ' data-i18n-skip' : '') + '>' + U.escapeHtml(label) +
         '<small>' + group.count + '</small></span>' +
         '<span class="hb-value ' + toneClass(group.pnl) + '">' + U.escapeHtml(U.money(group.pnl, { sign: true })) + '</span></div>' +
         '<div class="hb-track"><div class="hb-fill ' + (group.pnl < 0 ? 'neg' : '') + '" style="width:' + width + '%"></div></div></div>';
@@ -1611,9 +1892,16 @@
     const withR = m.rows.filter(function (row) { return row.r !== null; }).length;
     const discipline = m.avgDiscipline > 0 ? decimal(m.avgDiscipline, 1) + ' / 5' : '—';
     const totalR = withR ? U.rfmt(m.totalR, { sign: true }) : '—';
+    const beWr = m.beWinRate !== null ? U.percent(m.beWinRate, 0) : '—';
+    const beTone = m.beWinRate !== null ? (m.winRate >= m.beWinRate ? 'pos' : 'neg') : '';
+    const ror = m.returnOnClosedRisk !== null
+      ? (m.returnOnClosedRisk > 0 ? '+' : '') + U.percent(m.returnOnClosedRisk, 1)
+      : '—';
     $('#qualityBlock').innerHTML =
       '<div class="quality-row"><span>Всего R</span><b class="' + (withR ? toneClass(m.totalR) : '') + '">' + U.escapeHtml(totalR) + '</b></div>' +
-      '<div class="quality-row"><span>Сделок с рассчитанным R</span><b>' + withR + ' из ' + m.count + '</b></div>' +
+      '<div class="quality-row"><span>Безубыточный винрейт (мин.)</span><b class="' + beTone + '">' + U.escapeHtml(beWr) + '</b></div>' +
+      '<div class="quality-row"><span>Доходность на закрытый риск</span><b class="' + (m.returnOnClosedRisk !== null ? toneClass(m.returnOnClosedRisk) : '') + '">' + U.escapeHtml(ror) + '</b></div>' +
+      '<div class="quality-row"><span>Сделок с рассчитанным R</span><b>' + U.escapeHtml(T('{withR} из {total}').replace('{withR}', withR).replace('{total}', m.count)) + '</b></div>' +
       '<div class="quality-row"><span>Средняя дисциплина</span><b>' + discipline + '</b></div>' +
       '<div class="quality-row"><span>Комиссии и издержки</span><b class="neg">' + U.escapeHtml(U.money(-m.fees)) + '</b></div>' +
       '<div class="quality-row"><span>Средняя прибыль</span><b class="pos">' + U.escapeHtml(U.money(m.avgWin)) + '</b></div>' +
@@ -1622,18 +1910,22 @@
       '<div class="quality-row"><span>Серия поражений</span><b>' + m.maxLossStreak + '</b></div>';
   }
 
-  function renderSetupTable(rows) {
-    const groups = store.groupRows(rows, function (t) { return t.setup || 'Без сетапа'; })
-      .sort(function (a, b) { return b.pnl - a.pnl; });
-    const tbody = $('#setupTableBody');
+  function renderStatsTable(tbody, groups, emptyMessage, labelOpts) {
+    if (!tbody) return;
+    labelOpts = labelOpts || {};
     if (!groups.length) {
-      tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--muted-2);padding:24px">Нет данных за период</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--muted-2);padding:24px">' + U.escapeHtml(T(emptyMessage || 'Нет данных за период')) + '</td></tr>';
       return;
     }
     tbody.innerHTML = groups.map(function (group) {
       const pf = group.profitFactor === Infinity ? '∞' : decimal(group.profitFactor, 2);
       const hasR = group.rCount > 0;
-      return '<tr><td>' + U.escapeHtml(group.key) + '</td>' +
+      const isEmpty = group.key === '__EMPTY__';
+      const label = labelOpts.format
+        ? labelOpts.format(group.key, isEmpty)
+        : (isEmpty ? T(labelOpts.emptyKeyLabel || 'Без категории') : group.key);
+      const skip = typeof labelOpts.skip === 'function' ? labelOpts.skip(group.key, isEmpty) : !isEmpty;
+      return '<tr><td' + (skip ? ' data-i18n-skip' : '') + '>' + U.escapeHtml(label) + '</td>' +
         '<td class="num">' + group.count + '</td>' +
         '<td class="num">' + U.percent(group.winRate, 0) + '</td>' +
         '<td class="num ' + (hasR ? toneClass(group.avgR) : '') + '">' + (hasR ? U.escapeHtml(U.rfmt(group.avgR, { sign: true })) : '—') + '</td>' +
@@ -1642,14 +1934,116 @@
     }).join('');
   }
 
+  function formatMonthKey(key) {
+    if (!/^\d{4}-\d{2}$/.test(key || '')) return key || '—';
+    const parts = key.split('-').map(Number);
+    const dt = new Date(Date.UTC(parts[0], parts[1] - 1, 1));
+    const locale = NS.i18n && NS.i18n.locale ? NS.i18n.locale() : 'ru-RU';
+    try {
+      return U.capitalize(new Intl.DateTimeFormat(locale, { month: 'long', year: 'numeric', timeZone: 'UTC' }).format(dt));
+    } catch (err) {
+      return key;
+    }
+  }
+
+  function renderSetupTable(rows) {
+    const groups = store.groupRows(rows, function (t) { return t.setup || '__EMPTY__'; })
+      .sort(function (a, b) { return b.pnl - a.pnl; });
+    renderStatsTable($('#setupTableBody'), groups, 'Нет данных за период', { emptyKeyLabel: 'Без сетапа' });
+  }
+
+  function renderMonthTable(rows) {
+    const groups = store.groupRows(rows, function (t) { return (t.date || '').slice(0, 7) || '__EMPTY__'; })
+      .sort(function (a, b) { return b.key.localeCompare(a.key); });
+    renderStatsTable($('#monthTableBody'), groups, 'Нет данных за период', {
+      emptyKeyLabel: 'Без даты',
+      format: function (key, isEmpty) { return isEmpty ? T('Без даты') : formatMonthKey(key); },
+      skip: function (key, isEmpty) { return !isEmpty; }
+    });
+  }
+
+  function renderTagTable(rows) {
+    const groups = store.groupRows(rows, function (t) {
+      return t.tags && t.tags.length ? t.tags : ['__EMPTY__'];
+    }).sort(function (a, b) { return b.pnl - a.pnl; });
+    renderStatsTable($('#tagTableBody'), groups, 'Нет данных за период', { emptyKeyLabel: 'Без тега' });
+  }
+
   /* ============================================================
      Journal
      ============================================================ */
+
+  function fillJournalFilterOptions(notes) {
+    const moodSel = $('#journalMoodFilter');
+    if (moodSel) {
+      const currentMood = state.journalFilters.mood;
+      const moods = Object.keys(NS.MOODS || {});
+      moodSel.innerHTML = '<option value="all">' + T('Все настроения') + '</option>' + moods.map(function (key) {
+        const meta = U.moodMeta(key);
+        return '<option value="' + U.escapeHtml(key) + '">' + U.escapeHtml(meta.emoji + ' ' + meta.label) + '</option>';
+      }).join('');
+      moodSel.value = (currentMood !== 'all' && moods.indexOf(currentMood) !== -1) ? currentMood : 'all';
+      state.journalFilters.mood = moodSel.value;
+    }
+
+    const tagSel = $('#journalTagFilter');
+    if (tagSel) {
+      const currentTag = state.journalFilters.tag;
+      const tagsSet = new Set();
+      (notes || []).forEach(function (note) {
+        (note.tags || []).forEach(function (tag) { if (tag) tagsSet.add(tag); });
+      });
+      const tags = Array.from(tagsSet).sort();
+      tagSel.innerHTML = '<option value="all">' + T('Все теги') + '</option>' + tags.map(function (tag) {
+        return '<option data-i18n-skip value="' + U.escapeHtml(tag) + '">' + U.escapeHtml(tag) + '</option>';
+      }).join('');
+      if (currentTag !== 'all' && tags.indexOf(currentTag) === -1) {
+        state.journalFilters.tag = 'all';
+        tagSel.value = 'all';
+      } else {
+        tagSel.value = currentTag;
+      }
+    }
+  }
+
+  function getFilteredNotes(notes) {
+    const sorted = (notes || store.state.notes).slice().sort(function (a, b) {
+      return (b.date + String(b.createdAt)).localeCompare(a.date + String(a.createdAt));
+    });
+    const q = (state.journalFilters.search || '').trim().toLowerCase();
+    const mood = state.journalFilters.mood;
+    const tag = state.journalFilters.tag;
+    return sorted.filter(function (note) {
+      if (mood !== 'all' && note.mood !== mood) return false;
+      if (tag !== 'all' && (!Array.isArray(note.tags) || note.tags.indexOf(tag) === -1)) return false;
+      if (q) {
+        const hay = ((note.title || '') + ' ' + (note.text || '') + ' ' + ((note.tags || []).join(' '))).toLowerCase();
+        if (hay.indexOf(q) === -1) return false;
+      }
+      return true;
+    });
+  }
+
+  function resetJournalFilters() {
+    state.journalFilters = { search: '', mood: 'all', tag: 'all' };
+    if ($('#journalSearch')) $('#journalSearch').value = '';
+    if ($('#journalMoodFilter')) $('#journalMoodFilter').value = 'all';
+    if ($('#journalTagFilter')) $('#journalTagFilter').value = 'all';
+    renderJournal();
+  }
 
   function renderJournal() {
     const notes = store.state.notes.slice().sort(function (a, b) {
       return (b.date + String(b.createdAt)).localeCompare(a.date + String(a.createdAt));
     });
+    fillJournalFilterOptions(notes);
+    const filtered = getFilteredNotes(notes);
+    const countLabel = $('#journalCountLabel');
+    if (countLabel) {
+      countLabel.textContent = notes.length
+        ? T('Показано {shown} из {total}').replace('{shown}', filtered.length).replace('{total}', notes.length)
+        : '';
+    }
 
     const dates = new Set(notes.map(function (note) { return note.date; }));
     const moodScore = notes.length
@@ -1672,20 +2066,28 @@
       return;
     }
 
+    if (!filtered.length) {
+      container.innerHTML = '<div class="card empty-state" style="grid-column:1/-1">' +
+        '<div class="empty-icon">🔍</div><h3>' + T('По заданным фильтрам записей нет') + '</h3>' +
+        '<p>' + T('Попробуйте изменить поисковый запрос, настроение или тег.') + '</p>' +
+        '<div class="empty-actions"><button class="btn btn-ghost" data-action="clear-journal-filters">' + T('Сбросить фильтры') + '</button></div></div>';
+      return;
+    }
+
     const dayStats = store.dayPnlMap(store.state.trades);
 
-    container.innerHTML = notes.map(function (note) {
+    container.innerHTML = filtered.map(function (note) {
       const mood = U.moodMeta(note.mood);
       const day = dayStats.get(note.date) || { pnl: 0, count: 0 };
       return '<article class="note-card" style="--mood:' + mood.color + '">' +
         '<div class="note-head"><span class="note-date">' + U.escapeHtml(U.formatDate(note.date, 'long')) +
         '<span>' + U.escapeHtml(U.formatDate(note.date, 'weekday')) + '</span></span>' +
         '<span class="mood-chip">' + mood.emoji + ' ' + U.escapeHtml(mood.label) + '</span></div>' +
-        (day.count ? '<span class="note-daypnl ' + toneClass(day.pnl) + '">' + U.escapeHtml(U.money(day.pnl, { sign: true })) + ' · ' + day.count + ' ' + pluralTrades(day.count) + '</span>' : '') +
+        (day.realizedCount ? '<span class="note-daypnl ' + toneClass(day.pnl) + '">' + U.escapeHtml(U.money(day.pnl, { sign: true })) + ' · ' + day.count + ' ' + pluralTrades(day.count) + '</span>' : '') +
         '<h3 data-i18n-skip>' + U.escapeHtml(note.title || T('Без заголовка')) + '</h3>' +
         '<p class="note-text" data-i18n-skip>' + U.escapeHtml(note.text) + '</p>' +
         (note.tags.length ? '<div class="note-tags" data-i18n-skip>' + note.tags.map(function (tag) { return '<span class="tag">' + U.escapeHtml(tag) + '</span>'; }).join('') + '</div>' : '') +
-        '<div class="note-foot"><span>' + (day.count ? day.count + ' ' + pluralTrades(day.count) + ' в этот день' : 'без сделок') + '</span>' +
+        '<div class="note-foot"><span>' + U.escapeHtml(day.count ? T('{count} {unit} в этот день').replace('{count}', day.count).replace('{unit}', pluralTrades(day.count)) : T('без сделок')) + '</span>' +
         '<div class="note-actions">' +
         '<button type="button" class="icon-btn" data-edit-note="' + U.escapeHtml(note.id) + '" title="Редактировать" aria-label="Редактировать запись">' +
         '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg></button>' +
@@ -1732,59 +2134,68 @@
     const target = U.parseNum($('#calcTarget').value);
     const pointValue = U.parseNum($('#calcPointValue').value);
 
-    const riskAmount = balance !== null && riskPct !== null ? balance * riskPct / 100 : null;
     const distance = entry !== null && stop !== null ? Math.abs(entry - stop) : null;
+
+    let error = '';
+    if (balance !== null && balance <= 0) error = 'Укажите баланс счёта больше нуля.';
+    else if (riskPct !== null && (riskPct < 0 || riskPct > 100)) error = 'Риск на сделку должен быть от 0 до 100%.';
+    else if (pointValue !== null && pointValue <= 0) error = 'Стоимость пункта должна быть больше нуля.';
+    else if (entry !== null && entry <= 0) error = 'Цена входа должна быть больше нуля.';
+    else if (stop !== null && stop < 0) error = 'Стоп-лосс не может быть отрицательным.';
+    else if (target !== null && target < 0) error = 'Тейк-профит не может быть отрицательным.';
+    else if (entry !== null && stop !== null && Math.abs(entry - stop) < 1e-12) error = 'Стоп-лосс не может совпадать с ценой входа.';
+    else if (entry !== null && stop !== null && target !== null && distance > 0 && (target - entry) * (stop - entry) > 0) {
+      error = 'Стоп и тейк должны находиться по разные стороны от входа.';
+    }
+
+    const riskAmount = !error && balance !== null && riskPct !== null ? balance * riskPct / 100 : null;
     let quantity = null;
     let notional = null;
 
-    if (riskAmount !== null && distance !== null && distance > 0 && pointValue !== null && pointValue > 0) {
+    if (!error && riskAmount !== null && distance !== null && distance > 0 && pointValue !== null && pointValue > 0) {
       quantity = riskAmount / (distance * pointValue);
-      if (entry !== null) notional = quantity * entry;
+      if (entry !== null) notional = quantity * entry * pointValue;
     }
 
     let rr = null;
-    if (entry !== null && stop !== null && target !== null && distance > 0) {
+    if (!error && entry !== null && stop !== null && target !== null && distance > 0) {
       rr = Math.abs(target - entry) / distance;
     }
     const potentialProfit = rr !== null && riskAmount !== null ? riskAmount * rr : null;
 
-    $('#calcQtyValue').textContent = quantity !== null ? U.qty(quantity) : '—';
-    $('#calcNotional').textContent = 'Номинал: ' + (notional !== null ? U.money(notional) : '—');
-    $('#calcRiskAmount').textContent = riskAmount !== null ? U.money(riskAmount) : '—';
-    $('#calcLoss').textContent = riskAmount !== null ? U.money(-riskAmount) : '—';
-    $('#calcProfit').textContent = potentialProfit !== null ? U.money(potentialProfit, { sign: true }) : '—';
-    $('#calcRR').textContent = rr !== null ? '1 : ' + decimal(rr, 2) : '—';
-
-    let error = '';
-    if (entry !== null && stop !== null && Math.abs(entry - stop) < 1e-12) error = 'Стоп-лосс не может совпадать с ценой входа.';
-    else if (entry !== null && stop !== null && target !== null && distance > 0 && (target - entry) * (stop - entry) > 0) {
-      error = 'Стоп и тейк должны находиться по разные стороны от входа.';
-    } else if (pointValue !== null && pointValue <= 0) error = 'Стоимость пункта должна быть больше нуля.';
-    else if (balance !== null && balance <= 0) error = 'Укажите баланс счёта больше нуля.';
+    $('#calcQtyValue').textContent = !error && quantity !== null ? U.qty(quantity) : '—';
+    $('#calcNotional').textContent = T('Номинал') + ': ' + (!error && notional !== null ? U.money(notional) : '—');
+    $('#calcRiskAmount').textContent = !error && riskAmount !== null ? U.money(riskAmount) : '—';
+    $('#calcLoss').textContent = !error && riskAmount !== null ? U.money(-riskAmount) : '—';
+    $('#calcProfit').textContent = !error && potentialProfit !== null ? U.money(potentialProfit, { sign: true }) : '—';
+    $('#calcRR').textContent = !error && rr !== null ? '1 : ' + decimal(rr, 2) : '—';
 
     $('#calcError').hidden = !error;
-    if (error) $('#calcError').textContent = error;
+    if (error) $('#calcError').textContent = T(error);
 
     const visual = $('#rrVisual');
-    if (rr !== null && rr > 0 && riskAmount !== null) {
+    if (!error && rr !== null && rr > 0 && riskAmount !== null) {
       visual.hidden = false;
       const riskShare = (1 / (1 + rr)) * 100;
       $('#rrRisk').style.flexBasis = riskShare + '%';
       $('#rrReward').style.flexBasis = (100 - riskShare) + '%';
-      $('#rrRisk span').textContent = 'Риск ' + U.money(riskAmount);
-      $('#rrReward span').textContent = 'Прибыль ' + U.money(potentialProfit);
+      $('#rrRisk span').textContent = T('Риск') + ' ' + U.money(riskAmount);
+      $('#rrReward span').textContent = T('Прибыль') + ' ' + U.money(potentialProfit);
     } else {
       visual.hidden = true;
     }
 
-    let hint = 'Заполните вход и стоп, чтобы увидеть размер позиции.';
+    let hint = T('Заполните вход и стоп, чтобы увидеть размер позиции.');
     if (error) {
       hint = '';
     } else if (quantity !== null) {
-      hint = 'При риске ' + U.percent(riskPct, 1) + ' (' + U.money(riskAmount) + ') и стопе ' + U.price(stop) +
-        ' размер позиции — ' + U.qty(quantity) + '. Убыток по стопу ограничен ' + U.money(riskAmount) + '.';
+      hint = T('При риске {pct} ({risk}) и стопе {stop} размер позиции — {qty}. Убыток по стопу ограничен {risk}.')
+        .replace('{pct}', U.percent(riskPct, 1))
+        .replace(/\{risk\}/g, U.money(riskAmount))
+        .replace('{stop}', U.price(stop))
+        .replace('{qty}', U.qty(quantity));
     } else if (balance === null || riskPct === null) {
-      hint = 'Укажите баланс и риск на сделку.';
+      hint = T('Укажите баланс и риск на сделку.');
     }
     $('#calcHint').textContent = hint;
     $('#calcHint').style.display = hint ? '' : 'none';
@@ -1794,37 +2205,54 @@
      Settings & data
      ============================================================ */
 
+  let tzOptionsCache = null;
+
   function fillTimezoneOptions(selected) {
     const select = $('#settingTimezone');
     if (!select) return;
-    let supported = [];
-    try {
-      if (typeof Intl.supportedValuesOf === 'function') supported = Intl.supportedValuesOf('timeZone');
-    } catch (err) { supported = []; }
-    const common = COMMON_TIMEZONES.filter(function (zone) { return U.validTimeZone(zone); });
-    const seen = new Set();
-    const all = [];
-    common.concat(supported).forEach(function (zone) {
-      if (!zone || seen.has(zone) || !U.validTimeZone(zone)) return;
-      seen.add(zone);
-      all.push(zone);
-    });
-    if (selected && U.validTimeZone(selected) && !seen.has(selected)) {
-      seen.add(selected);
-      all.push(selected);
+    const hourKey = U.locale() + '|' + Math.floor(Date.now() / 3600000);
+    if (!tzOptionsCache || tzOptionsCache.key !== hourKey) {
+      let supported = [];
+      try {
+        if (typeof Intl.supportedValuesOf === 'function') supported = Intl.supportedValuesOf('timeZone');
+      } catch (err) { supported = []; }
+      const common = COMMON_TIMEZONES.filter(function (zone) { return U.validTimeZone(zone); });
+      const seen = new Set();
+      const all = [];
+      common.concat(supported).forEach(function (zone) {
+        if (!zone || seen.has(zone) || !U.validTimeZone(zone)) return;
+        seen.add(zone);
+        all.push(zone);
+      });
+      const commonSet = new Set(common);
+      const rest = all.filter(function (zone) { return !commonSet.has(zone); });
+      const now = new Date();
+      const offsetLabel = function (zone) {
+        return U.escapeHtml(zone + ' · ' + U.timeZoneOffsetLabel(zone, now));
+      };
+      const option = function (zone) {
+        return '<option value="' + U.escapeHtml(zone) + '">' + offsetLabel(zone) + '</option>';
+      };
+      tzOptionsCache = {
+        key: hourKey,
+        zones: seen,
+        select: null,
+        html:
+          '<optgroup label="' + U.escapeHtml(T('Популярные')) + '">' + common.map(option).join('') + '</optgroup>' +
+          (rest.length ? '<optgroup label="' + U.escapeHtml(T('Все часовые пояса')) + '">' + rest.map(option).join('') + '</optgroup>' : '')
+      };
     }
-    const commonSet = new Set(common);
-    const rest = all.filter(function (zone) { return !commonSet.has(zone); });
-    const now = new Date();
-    const offsetLabel = function (zone) {
-      return U.escapeHtml(zone + ' · ' + U.timeZoneOffsetLabel(zone, now));
-    };
-    const option = function (zone) {
-      return '<option value="' + U.escapeHtml(zone) + '">' + offsetLabel(zone) + '</option>';
-    };
-    select.innerHTML =
-      '<optgroup label="' + U.escapeHtml(T('Популярные')) + '">' + common.map(option).join('') + '</optgroup>' +
-      (rest.length ? '<optgroup label="' + U.escapeHtml(T('Все часовые пояса')) + '">' + rest.map(option).join('') + '</optgroup>' : '');
+    const extraNeeded = !!(selected && U.validTimeZone(selected) && !tzOptionsCache.zones.has(selected));
+    if (tzOptionsCache.select !== select || extraNeeded || tzOptionsCache.extra !== (extraNeeded ? selected : '')) {
+      let html = tzOptionsCache.html;
+      if (extraNeeded) {
+        html += '<option value="' + U.escapeHtml(selected) + '">' +
+          U.escapeHtml(selected + ' · ' + U.timeZoneOffsetLabel(selected, new Date())) + '</option>';
+      }
+      select.innerHTML = html;
+      tzOptionsCache.select = select;
+      tzOptionsCache.extra = extraNeeded ? selected : '';
+    }
     if (selected && U.validTimeZone(selected)) select.value = selected;
   }
 
@@ -1844,6 +2272,75 @@
       const button = row.querySelector('[data-remove-session]');
       if (button) button.disabled = rows.length <= 1;
     });
+  }
+
+  const STARTER_CHECKLIST_RULES = [
+    'Соответствует тренду и структуре рынка',
+    'Соотношение R:R не ниже 1 : 2',
+    'Определён уровень стоп-лосса и объём',
+    'Нет важных новостей и эмоционального тильта'
+  ];
+
+  function checklistRuleRowHtml(text, index) {
+    return '<div class="checklist-setting-row">' +
+      '<input type="text" data-checklist-rule="' + index + '" maxlength="120" value="' + U.escapeHtml(text) + '" placeholder="' + U.escapeHtml(T('Текст правила…')) + '" aria-label="' + U.escapeHtml(T('Правило чек-листа')) + ' ' + (index + 1) + '">' +
+      '<button type="button" class="icon-btn" data-remove-rule="' + index + '" title="' + U.escapeHtml(T('Удалить правило')) + '" aria-label="' + U.escapeHtml(T('Удалить правило')) + '">×</button>' +
+      '</div>';
+  }
+
+  function renderChecklistSettings(rules) {
+    const box = $('#checklistSettings');
+    if (!box) return;
+    const list = Array.isArray(rules) ? rules : (store.state.settings.checklist || []);
+    if (!list.length) {
+      box.innerHTML = '<div class="checklist-empty">' + T('Правила пока не добавлены. Нажмите «+ Добавить правило» или загрузите базовый набор.') + '</div>';
+      return;
+    }
+    box.innerHTML = list.map(checklistRuleRowHtml).join('');
+  }
+
+  function readChecklistSettings() {
+    const inputs = $$('#checklistSettings [data-checklist-rule]');
+    const out = [];
+    const seen = new Set();
+    inputs.forEach(function (input) {
+      if (out.length >= (store.MAX_CHECKLIST || 20)) return;
+      const text = String(input.value || '').trim().slice(0, 120);
+      if (!text) return;
+      const key = text.toLowerCase();
+      if (seen.has(key)) return;
+      seen.add(key);
+      out.push(text);
+    });
+    return out;
+  }
+
+  function addChecklistRuleRow(text) {
+    const existing = readChecklistSettings();
+    const max = store.MAX_CHECKLIST || 20;
+    if (existing.length >= max) {
+      toast(T('Слишком много правил: максимум {max}.').replace('{max}', max), 'warn', null, { skip: true });
+      return;
+    }
+    const list = existing.concat([text || '']);
+    renderChecklistSettings(list);
+    const inputs = $$('#checklistSettings [data-checklist-rule]');
+    const last = inputs[inputs.length - 1];
+    if (last && !text) last.focus();
+  }
+
+  function loadStarterChecklistRules() {
+    const existing = readChecklistSettings();
+    const seen = new Set(existing.map(function (r) { return r.toLowerCase(); }));
+    const merged = existing.slice();
+    STARTER_CHECKLIST_RULES.forEach(function (rule) {
+      const translated = T(rule);
+      if (seen.has(translated.toLowerCase()) || merged.length >= (store.MAX_CHECKLIST || 20)) return;
+      seen.add(translated.toLowerCase());
+      merged.push(translated);
+    });
+    renderChecklistSettings(merged);
+    toast('Базовые правила загружены в список');
   }
 
   function renderSessionSettings() {
@@ -1976,10 +2473,11 @@
     $('#settingTimezone').value = settings.timezone || U.systemTimeZone();
     renderSessionSettings();
     renderClockSettings();
+    renderChecklistSettings();
     $('#settingsSavedAt').textContent = '';
     setVersionLabel(APP_VERSION);
 
-    renderStorageMeter(store.storageSize(), desktop ? 100 * 1024 * 1024 : 5 * 1024 * 1024);
+    renderStorageMeter(store.storageSize(), (desktop || store.usesIdbJournal) ? 100 * 1024 * 1024 : 5 * 1024 * 1024);
     if (!desktop) renderWebStorageEstimate();
     renderBackupMeta();
 
@@ -2071,21 +2569,30 @@
     const note = $('#storageEstimate');
     if (!note) return;
     note.hidden = false;
-    note.textContent = 'Скриншоты хранятся в IndexedDB. Считаем размер хранилища…';
+    const idbJournal = store.usesIdbJournal;
+    note.textContent = T(idbJournal
+      ? 'Журнал и скриншоты хранятся в IndexedDB. Считаем размер хранилища…'
+      : 'Скриншоты хранятся в IndexedDB. Считаем размер хранилища…');
     Promise.all([store.storageEstimate(), store.isStoragePersisted()]).then(function (results) {
       if (!note.isConnected) return;
       const data = results[0];
       const persisted = results[1] === true;
       if (!data) {
-        note.textContent = 'Скриншоты хранятся в IndexedDB. Браузер не сообщает точный размер хранилища.' +
-          (persisted ? ' Постоянное хранилище включено.' : '');
+        note.textContent = T(idbJournal
+          ? 'Журнал и скриншоты хранятся в IndexedDB. Браузер не сообщает точный размер хранилища.'
+          : 'Скриншоты хранятся в IndexedDB. Браузер не сообщает точный размер хранилища.') +
+          (persisted ? ' ' + T('Постоянное хранилище включено.') : '');
         return;
       }
       renderStorageMeter(data.usage, data.quota);
       const pct = data.usage / data.quota * 100;
-      note.textContent = 'Оценка браузера: ' + U.bytes(data.usage) + ' из ' + U.bytes(data.quota) +
-        ' (' + U.percent(pct, 1) + '). Скриншоты хранятся в IndexedDB.' +
-        (persisted ? ' Постоянное хранилище включено.' : '');
+      note.textContent = T(idbJournal
+        ? 'Оценка браузера: {used} из {quota} ({pct}). Журнал и скриншоты хранятся в IndexedDB.'
+        : 'Оценка браузера: {used} из {quota} ({pct}). Скриншоты хранятся в IndexedDB.')
+        .replace('{used}', U.bytes(data.usage))
+        .replace('{quota}', U.bytes(data.quota))
+        .replace('{pct}', U.percent(pct, 1)) +
+        (persisted ? ' ' + T('Постоянное хранилище включено.') : '');
     });
   }
 
@@ -2164,22 +2671,22 @@
     if (!button) return;
     button.hidden = !visible;
     button.disabled = false;
-    button.textContent = 'Скачать и установить';
+    button.textContent = T('Скачать и установить');
   }
 
   async function checkDesktopUpdate(manual) {
     if (!desktop || typeof desktop.checkUpdate !== 'function' || desktopUpdate.checking || desktopUpdate.installing) return;
     if (desktop.platform === 'darwin') {
-      setDesktopUpdateStatus('Для macOS обновления устанавливаются вручную: скачайте новый DMG со страницы релизов.');
+      setDesktopUpdateStatus(T('Для macOS обновления устанавливаются вручную: скачайте новый DMG со страницы релизов.'));
       return;
     }
     desktopUpdate.checking = true;
     const button = $('#checkUpdateBtn');
     if (button) {
       button.disabled = true;
-      button.textContent = 'Проверяем…';
+      button.textContent = T('Проверяем…');
     }
-    if (manual) setDesktopUpdateStatus('Проверяем обновления…');
+    if (manual) setDesktopUpdateStatus(T('Проверяем обновления…'));
     try {
       const info = await desktop.checkUpdate();
       const current = info && info.currentVersion ? String(info.currentVersion) : APP_VERSION;
@@ -2187,25 +2694,25 @@
       desktopUpdate.available = !!(info && info.available);
       desktopUpdate.version = info && info.version ? String(info.version) : '';
       if (desktopUpdate.available) {
-        setDesktopUpdateStatus('Доступна версия ' + (desktopUpdate.version || '—') + '. Можно скачать и установить её здесь.', 'pos');
+        setDesktopUpdateStatus(T('Доступна версия {version}. Можно скачать и установить её здесь.').replace('{version}', desktopUpdate.version || '—'), 'pos');
         setDownloadUpdateButton(true);
         showUpdateBanner(
-          'Доступно обновление TradeJournal',
-          'Версия ' + (desktopUpdate.version || '') + ' готова к установке. Приложение скачает обновление и перезапустится.',
-          'Установить'
+          T('Доступно обновление TradeJournal'),
+          T('Версия {version} готова к установке. Приложение скачает обновление и перезапустится.').replace('{version}', desktopUpdate.version || ''),
+          T('Установить')
         );
       } else {
-        setDesktopUpdateStatus('Установлена последняя версия (' + current + ').', 'pos');
+        setDesktopUpdateStatus(T('Установлена последняя версия ({version}).').replace('{version}', current), 'pos');
         setDownloadUpdateButton(false);
       }
     } catch (err) {
-      const message = err && err.message ? err.message : String(err || 'неизвестная ошибка');
-      setDesktopUpdateStatus('Не удалось проверить обновления: ' + message, 'neg');
+      const message = err && err.message ? err.message : T('неизвестная ошибка');
+      setDesktopUpdateStatus(T('Не удалось проверить обновления: {error}').replace('{error}', message), 'neg');
     } finally {
       desktopUpdate.checking = false;
       if (button) {
         button.disabled = false;
-        button.textContent = 'Проверить обновления';
+        button.textContent = T('Проверить обновления');
       }
     }
   }
@@ -2222,40 +2729,40 @@
     const checkButton = $('#checkUpdateBtn');
     if (bannerButton) {
       bannerButton.disabled = true;
-      bannerButton.textContent = 'Устанавливаем…';
+      bannerButton.textContent = T('Устанавливаем…');
     }
     if (downloadButton) {
       downloadButton.disabled = true;
-      downloadButton.textContent = 'Скачиваем…';
+      downloadButton.textContent = T('Скачиваем…');
     }
     if (checkButton) checkButton.disabled = true;
-    setDesktopUpdateStatus('Скачиваем и устанавливаем обновление…');
+    setDesktopUpdateStatus(T('Скачиваем и устанавливаем обновление…'));
     try {
       await desktop.installUpdate();
       desktopUpdate.available = false;
-      setDesktopUpdateStatus('Обновление установлено. Приложение перезапустится.', 'pos');
+      setDesktopUpdateStatus(T('Обновление установлено. Приложение перезапустится.'), 'pos');
       const banner = $('#updateBanner');
       if (banner) banner.hidden = true;
       setDownloadUpdateButton(false);
       toast('Обновление установлено. Приложение перезапустится.');
     } catch (err) {
-      const message = err && err.message ? err.message : String(err || 'неизвестная ошибка');
-      setDesktopUpdateStatus('Не удалось установить обновление: ' + message, 'neg');
-      toast('Не удалось установить обновление: ' + message, 'error');
+      const message = err && err.message ? err.message : T('неизвестная ошибка');
+      setDesktopUpdateStatus(T('Не удалось установить обновление: {error}').replace('{error}', message), 'neg');
+      toast(T('Не удалось установить обновление: {error}').replace('{error}', message), 'error', null, { skip: true });
       if (bannerButton) {
         bannerButton.disabled = false;
-        bannerButton.textContent = 'Установить';
+        bannerButton.textContent = T('Установить');
       }
       if (downloadButton) {
         downloadButton.disabled = false;
-        downloadButton.textContent = 'Скачать и установить';
+        downloadButton.textContent = T('Скачать и установить');
       }
     } finally {
       desktopUpdate.installing = false;
       if (checkButton) checkButton.disabled = false;
       if (bannerButton && desktopUpdate.available) {
         bannerButton.disabled = false;
-        bannerButton.textContent = 'Установить';
+        bannerButton.textContent = T('Установить');
       }
     }
   }
@@ -2300,10 +2807,10 @@
           '<button type="button" class="btn btn-ghost btn-sm" data-backup="' + U.escapeHtml(backup.name) + '">Восстановить</button>' +
         '</div>';
       }).join('') + (backups.length > visible.length
-        ? '<p class="muted small">Показаны последние ' + visible.length + ' из ' + backups.length + ' копий. Остальные лежат в папке backups.</p>'
+        ? '<p class="muted small">' + U.escapeHtml(T('Показаны последние {visible} из {total} копий. Остальные лежат в папке backups.').replace('{visible}', visible.length).replace('{total}', backups.length)) + '</p>'
         : '');
     } catch (err) {
-      list.innerHTML = '<p class="muted small">Не удалось прочитать список резервных копий. Откройте папку данных вручную.</p>';
+      list.innerHTML = '<p class="muted small">' + U.escapeHtml(T('Не удалось прочитать список резервных копий. Откройте папку данных вручную.')) + '</p>';
     }
   }
 
@@ -2338,14 +2845,18 @@
     }).join('');
     if (unused.length > visible.length) {
       note.hidden = false;
-      note.textContent = 'Показаны первые ' + visible.length + ' из ' + unused.length + '. Кнопка удалит все найденные неиспользуемые файлы.';
+      note.textContent = T('Показаны первые {visible} из {total}. Кнопка удалит все найденные неиспользуемые файлы.')
+        .replace('{visible}', visible.length)
+        .replace('{total}', unused.length);
     } else {
       note.hidden = true;
       note.textContent = '';
     }
     $('#unusedSummary').textContent = U.bytes(data.unusedSize || 0);
     button.disabled = false;
-    button.textContent = 'Удалить неиспользуемые (' + unused.length + ' · ' + U.bytes(data.unusedSize || 0) + ')';
+    button.textContent = T('Удалить неиспользуемые ({count} · {size})')
+      .replace('{count}', unused.length)
+      .replace('{size}', U.bytes(data.unusedSize || 0));
   }
 
   function renderStorageHealth(data) {
@@ -2359,18 +2870,31 @@
     $('#healthShotsMeta').textContent = (data.screenshotsCount || 0) + ' ' + U.plural(data.screenshotsCount || 0, ['файл', 'файла', 'файлов']);
     $('#healthBackupsMeta').textContent = (data.backupsCount || 0) + ' ' + U.plural(data.backupsCount || 0, ['копия', 'копии', 'копий']);
 
+    const translateMsg = desktop && typeof desktop.translateMessage === 'function'
+      ? desktop.translateMessage
+      : T;
+    const warnings = Array.isArray(data.warnings) ? data.warnings.filter(Boolean).map(translateMsg) : [];
     const parts = [
-      'Ссылок на скриншоты в журнале и копиях: ' + (data.referencedCount || 0) + '.'
+      T('Ссылок на скриншоты в журнале и копиях: {count}.').replace('{count}', data.referencedCount || 0)
     ];
+    if (warnings.length) {
+      parts.push(warnings.join(' '));
+    }
     if (data.missingCount) {
-      parts.push('Не хватает файлов по ссылкам: ' + data.missingCount + ' — возможно, они были удалены вручную.');
+      parts.push(T('Не хватает файлов по ссылкам: {count} — возможно, они были удалены вручную.').replace('{count}', data.missingCount));
     }
     if (data.unusedCount) {
-      parts.push('Найдено неиспользуемых файлов: ' + data.unusedCount + ' на ' + U.bytes(data.unusedSize || 0) + '.');
+      parts.push(
+        T('Найдено неиспользуемых файлов: {count} на {size}.')
+          .replace('{count}', data.unusedCount)
+          .replace('{size}', U.bytes(data.unusedSize || 0))
+      );
+    } else if (warnings.length) {
+      parts.push(T('Очистка неиспользуемых файлов отключена, пока есть повреждённые файлы.'));
     } else {
-      parts.push('Неиспользуемых скриншотов не найдено.');
+      parts.push(T('Неиспользуемых скриншотов не найдено.'));
     }
-    setStorageHealthStatus(parts.join(' '), data.missingCount ? 'warn' : '');
+    setStorageHealthStatus(parts.join(' '), (warnings.length || data.missingCount) ? 'warn' : '');
     renderUnusedScreenshots(data);
   }
 
@@ -2380,22 +2904,22 @@
     const button = $('#scanStorageBtn');
     if (button) {
       button.disabled = true;
-      button.textContent = 'Проверяем…';
+      button.textContent = T('Проверяем…');
     }
-    if (manual) setStorageHealthStatus('Проверяем журнал, скриншоты и резервные копии…');
+    if (manual) setStorageHealthStatus(T('Проверяем журнал, скриншоты и резервные копии…'));
     try {
       const data = await desktop.storageHealth();
       renderStorageHealth(data || {});
       if (manual) toast('Хранилище проверено');
     } catch (err) {
-      const message = err && err.message ? err.message : String(err || 'неизвестная ошибка');
-      setStorageHealthStatus('Не удалось проверить хранилище: ' + message, 'error');
-      if (manual) toast('Не удалось проверить хранилище: ' + message, 'error');
+      const message = err && err.message ? err.message : T('неизвестная ошибка');
+      setStorageHealthStatus(T('Не удалось проверить хранилище: {error}').replace('{error}', message), 'error');
+      if (manual) toast(T('Не удалось проверить хранилище: {error}').replace('{error}', message), 'error', null, { skip: true });
     } finally {
       state.storageHealthScanning = false;
       if (button) {
         button.disabled = false;
-        button.textContent = 'Проверить';
+        button.textContent = T('Проверить');
       }
     }
   }
@@ -2408,7 +2932,11 @@
 
     askConfirm({
       title: 'Удалить неиспользуемые скриншоты?',
-      text: 'Будет удалено ' + unused.length + ' ' + pluralScreenshots(unused.length) + ' на ' + U.bytes(data.unusedSize || 0) + '. Файлы, на которые ссылаются журнал, предыдущая версия или резервные копии, не затрагиваются. Действие нельзя отменить.',
+      text: T('Будет удалено {count} {unit} на {size}. Файлы, на которые ссылаются журнал, предыдущая версия или резервные копии, не затрагиваются. Действие нельзя отменить.')
+        .replace('{count}', unused.length)
+        .replace('{unit}', pluralScreenshots(unused.length))
+        .replace('{size}', U.bytes(data.unusedSize || 0)),
+      textReady: true,
       okLabel: 'Удалить'
     }).then(async function (confirmed) {
       if (!confirmed) return;
@@ -2416,7 +2944,7 @@
       const button = $('#cleanupScreenshotsBtn');
       if (button) {
         button.disabled = true;
-        button.textContent = 'Удаляем…';
+        button.textContent = T('Удаляем…');
       }
       try {
         const result = await desktop.cleanupUnusedScreenshots(unused.map(function (file) { return file.name; }));
@@ -2424,31 +2952,36 @@
         const skippedRecent = result && result.skippedRecent ? result.skippedRecent : 0;
         const message = [];
         if (deleted) {
-          message.push('Удалено ' + deleted + ' ' + pluralScreenshots(deleted) + ' (' + U.bytes(result.deletedSize || 0) + ').');
+          message.push(
+            T('Удалено {count} {unit} ({size}).')
+              .replace('{count}', deleted)
+              .replace('{unit}', pluralScreenshots(deleted))
+              .replace('{size}', U.bytes(result.deletedSize || 0))
+          );
         } else if (skippedRecent) {
-          message.push('Недавно созданные файлы пока не удаляются — повторите проверку позже.');
+          message.push(T('Недавно созданные файлы пока не удаляются — повторите проверку позже.'));
         } else {
-          message.push('Нечего удалять: файлы уже отсутствуют или используются.');
+          message.push(T('Нечего удалять: файлы уже отсутствуют или используются.'));
         }
         if (deleted && skippedRecent) {
-          message.push('Пропущено недавно созданных файлов: ' + skippedRecent + '.');
+          message.push(T('Пропущено недавно созданных файлов: {count}.').replace('{count}', skippedRecent));
         }
-        toast(message.join(' '), deleted ? 'success' : 'warn');
+        toast(message.join(' '), deleted ? 'success' : 'warn', null, { skip: true });
         if (result && Array.isArray(result.failed) && result.failed.length) {
-          toast('Не удалось удалить файлов: ' + result.failed.length + '. Проверьте папку данных.', 'error');
+          toast(T('Не удалось удалить файлов: {count}. Проверьте папку данных.').replace('{count}', result.failed.length), 'error', null, { skip: true });
         }
         await scanStorageHealth(false);
       } catch (err) {
-        const message = err && err.message ? err.message : String(err || 'неизвестная ошибка');
-        setStorageHealthStatus('Не удалось удалить скриншоты: ' + message, 'error');
-        toast('Не удалось удалить скриншоты: ' + message, 'error');
+        const message = err && err.message ? err.message : T('неизвестная ошибка');
+        setStorageHealthStatus(T('Не удалось удалить скриншоты: {error}').replace('{error}', message), 'error');
+        toast(T('Не удалось удалить скриншоты: {error}').replace('{error}', message), 'error', null, { skip: true });
       } finally {
         state.storageHealthCleaning = false;
         if (state.storageHealthData) {
           renderUnusedScreenshots(state.storageHealthData);
         } else if (button) {
           button.disabled = false;
-          button.textContent = 'Удалить неиспользуемые';
+          button.textContent = T('Удалить неиспользуемые');
         }
       }
     });
@@ -2465,7 +2998,7 @@
       refreshDesktopBackups();
       toast('Резервная копия создана');
     } catch (err) {
-      toast('Не удалось создать резервную копию: ' + (err && err.message ? err.message : err), 'error');
+      toast(T('Не удалось создать резервную копию: {error}').replace('{error}', err && err.message ? err.message : err), 'error', null, { skip: true });
     }
   }
 
@@ -2477,7 +3010,7 @@
         toast(result && result.error ? result.error : 'Не удалось открыть папку данных.', 'error');
       }
     } catch (err) {
-      toast('Не удалось открыть папку данных: ' + (err && err.message ? err.message : err), 'error');
+      toast(T('Не удалось открыть папку данных: {error}').replace('{error}', err && err.message ? err.message : err), 'error', null, { skip: true });
     }
   }
 
@@ -2503,13 +3036,13 @@
         if (store.needsMigration) await store.save();
         clearAllDrafts();
         applyCurrency();
-        state.calCursor = monthStart(new Date());
+        state.calCursor = accountMonthStart();
         state.selectedDay = todayInAccount();
         renderAll();
         refreshDesktopBackups();
         toast('Резервная копия восстановлена');
       } catch (err) {
-        toast('Не удалось восстановить копию: ' + (err && err.message ? err.message : err), 'error');
+        toast(T('Не удалось восстановить копию: {error}').replace('{error}', err && err.message ? err.message : err), 'error', null, { skip: true });
       }
     });
   }
@@ -2543,7 +3076,7 @@
       if (!name) return toast('У каждой торговой сессии должно быть название.', 'error');
       if (seenNames.has(name.toLowerCase())) return toast('Названия торговых сессий должны быть разными.', 'error');
       const start = U.validTimeHM(session.start);
-      if (!start) return toast('Укажите время начала для сессии «' + name + '».', 'error');
+      if (!start) return toast(T('Укажите время начала для сессии «{name}».').replace('{name}', name), 'error', null, { skip: true });
       if (seenStarts.has(start)) return toast('Время начала торговых сессий должно быть разным.', 'error');
       let key = String(session.key || '').trim();
       if (!/^[A-Za-z0-9_-]{1,40}$/.test(key) || seenKeys.has(key)) key = U.newSessionKey();
@@ -2561,7 +3094,9 @@
       dailyLossLimit: daily,
       maxTradesPerDay: Math.round(maxTrades),
       timezone: timezone,
-      sessions: cleaned
+      sessions: cleaned,
+      feePresets: store.state.settings.feePresets || [],
+      checklist: readChecklistSettings()
     };
     state.selectedDay = todayInAccount();
     store.state.demo = false;
@@ -2614,9 +3149,17 @@
         const ctx = canvas.getContext('2d');
         const sx = Math.max(0, (image.width - side) / 2);
         const sy = Math.max(0, (image.height - side) / 2);
+        const keepAlpha = /^image\/(png|webp|gif|svg\+xml)$/i.test(file.type);
+        const mime = keepAlpha ? (supportsWebpEncoding() ? 'image/webp' : 'image/png') : 'image/jpeg';
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+        if (!keepAlpha) {
+          ctx.fillStyle = cssVar('--panel', '#101822');
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+        }
         ctx.drawImage(image, sx, sy, side, side, 0, 0, canvas.width, canvas.height);
         try {
-          state.profileAvatarDraft = canvas.toDataURL('image/jpeg', 0.84);
+          state.profileAvatarDraft = mime === 'image/png' ? canvas.toDataURL(mime) : canvas.toDataURL(mime, 0.84);
           renderProfileAvatar();
           toast('Аватар обновлён — нажмите «Сохранить профиль»');
         } catch (err) {
@@ -2669,7 +3212,7 @@
     }
     closeModal('accountModal');
     applyCurrency();
-    state.calCursor = monthStart(new Date());
+    state.calCursor = accountMonthStart();
     state.selectedDay = todayInAccount();
     renderAll();
     toast(rename ? 'Счёт переименован' : 'Счёт создан');
@@ -2697,7 +3240,7 @@
       return;
     }
     applyCurrency();
-    state.calCursor = monthStart(new Date());
+    state.calCursor = accountMonthStart();
     state.selectedDay = todayInAccount();
     renderAll();
     const account = store.activeAccount();
@@ -2713,7 +3256,7 @@
     }
     askConfirm({
       title: 'Удалить счёт?',
-      text: T('Счёт') + ' «' + account.name + '» ' + T('и все его сделки и записи будут удалены. Сразу после удаления действие можно будет отменить.'),
+      text: T('Счёт «{name}» и все его сделки и записи будут удалены. Сразу после удаления действие можно будет отменить.').replace('{name}', account.name),
       textReady: true,
       okLabel: 'Удалить'
     }).then(async function (confirmed) {
@@ -2733,7 +3276,7 @@
       }
       clearAccountDrafts(id);
       applyCurrency();
-      state.calCursor = monthStart(new Date());
+      state.calCursor = accountMonthStart();
       state.selectedDay = todayInAccount();
       renderAll();
       toast('Счёт удалён', 'success', {
@@ -2741,7 +3284,7 @@
         onClick: async function () {
           const restored = await store.replaceData(before);
           applyCurrency();
-          state.calCursor = monthStart(new Date());
+          state.calCursor = accountMonthStart();
           state.selectedDay = todayInAccount();
           renderAll();
           toast(restored ? 'Счёт восстановлен' : 'Не удалось восстановить счёт', restored ? 'success' : 'error');
@@ -2804,10 +3347,10 @@
     const meta = readBackupMeta();
     const parts = [];
     const last = formatBackupTime(meta.lastExportAt);
-    parts.push(last ? 'Последняя резервная копия: ' + last + '.' : 'Резервная копия ещё не создавалась.');
+    parts.push(last ? T('Последняя резервная копия: {date}.').replace('{date}', last) : T('Резервная копия ещё не создавалась.'));
     const remindLater = Date.parse(meta.remindLaterUntil);
     if (Number.isFinite(remindLater) && remindLater > Date.now()) {
-      parts.push('Напоминание отложено до ' + formatBackupTime(meta.remindLaterUntil) + '.');
+      parts.push(T('Напоминание отложено до {date}.').replace('{date}', formatBackupTime(meta.remindLaterUntil)));
     }
     el.textContent = parts.join(' ');
   }
@@ -2846,11 +3389,12 @@
         appVersion: APP_VERSION,
         exportedAt: new Date().toISOString()
       });
-      U.download('tradejournal-' + U.todayISO() + '.json', JSON.stringify(payload, null, 2), 'application/json');
+      const result = await U.download('tradejournal-' + U.todayISO() + '.json', JSON.stringify(payload, null, 2), 'application/json');
+      if (!result || result.canceled || !result.ok) return;
       markBackupExported();
       toast('Резервная копия скачана');
     } catch (err) {
-      toast('Не удалось подготовить экспорт: ' + (err && err.message ? err.message : err), 'error');
+      toast(T('Не удалось подготовить экспорт: {error}').replace('{error}', err && err.message ? err.message : err), 'error', null, { skip: true });
     }
   }
 
@@ -2875,22 +3419,41 @@
     return num === null ? '' : String(num);
   }
 
-  function exitsForCsv(trade) {
-    return store.tradeExits(trade).map(function (exit) {
-      const date = exit.date && exit.date !== trade.date ? '@' + exit.date : '';
-      return plainNumber(exit.qty) + '@' + plainNumber(exit.price) + date;
+  function legsForCsv(legs, tradeDate) {
+    return (legs || []).map(function (leg) {
+      const date = leg.date && leg.date !== tradeDate ? '@' + leg.date : '';
+      return plainNumber(leg.qty) + '@' + plainNumber(leg.price) + date;
     }).join('|');
   }
 
-  function exportCSV() {
+  function entriesForCsv(trade) {
+    return trade && Array.isArray(trade.entries) && trade.entries.length > 1
+      ? legsForCsv(trade.entries, trade.date)
+      : '';
+  }
+
+  function exitsForCsv(trade) {
+    return legsForCsv(store.tradeExits(trade), trade.date);
+  }
+
+  async function exportCSV() {
     const trades = store.sortTrades(store.state.trades, 'desc');
-    const headers = [
-      'Дата', 'Время', 'Инструмент', 'Направление', 'Вход', 'Выход', 'Стоп при входе',
-      'Текущий стоп', 'Тейк', 'Количество', 'Множитель', 'Комиссия', 'Выходы',
-      'Остаток', 'Статус', 'P&L', 'R', 'Сетап', 'Эмоция', 'Дисциплина', 'Теги', 'Заметка'
-    ];
+    const english = NS.i18n && typeof NS.i18n.lang === 'function' && NS.i18n.lang() === 'en';
+    const headers = english
+      ? [
+        'Date', 'Time', 'Symbol', 'Side', 'Entry', 'Exit', 'Initial Stop',
+        'Current Stop', 'Target', 'Qty', 'Multiplier', 'Fees', 'Entries', 'Exits',
+        'Remaining', 'Status', 'P&L', 'R', 'Setup', 'Emotion', 'Discipline', 'Tags', 'Notes'
+      ]
+      : [
+        'Дата', 'Время', 'Инструмент', 'Направление', 'Вход', 'Выход', 'Стоп при входе',
+        'Текущий стоп', 'Тейк', 'Количество', 'Множитель', 'Комиссия', 'Входы', 'Выходы',
+        'Остаток', 'Статус', 'P&L', 'R', 'Сетап', 'Эмоция', 'Дисциплина', 'Теги', 'Заметка'
+      ];
     const lines = [headers.map(csvCell).join(';')];
-    const statusLabels = { closed: 'Закрыта', partial: 'Частично закрыта', open: 'Открыта' };
+    const statusLabels = english
+      ? { closed: 'Closed', partial: 'Partially closed', open: 'Open' }
+      : { closed: 'Закрыта', partial: 'Частично закрыта', open: 'Открыта' };
     trades.forEach(function (trade) {
       const emotion = U.emotionMeta(trade.emotion);
       const pnl = store.hasRealized(trade) ? store.tradePnl(trade) : null;
@@ -2909,6 +3472,7 @@
         csvNumber(trade.qty, 4),
         csvNumber(trade.multiplier, 8),
         csvNumber(trade.fees, 2),
+        csvText(entriesForCsv(trade)),
         csvText(exitsForCsv(trade)),
         store.remainingQty(trade) === null ? '' : csvNumber(store.remainingQty(trade), 4),
         csvText(statusLabels[status] || status),
@@ -2922,7 +3486,8 @@
       ];
       lines.push(row.join(';'));
     });
-    U.download('tradejournal-trades-' + U.todayISO() + '.csv', '\uFEFF' + lines.join('\r\n'), 'text/csv;charset=utf-8');
+    const result = await U.download('tradejournal-trades-' + U.todayISO() + '.csv', '\uFEFF' + lines.join('\r\n'), 'text/csv;charset=utf-8');
+    if (!result || result.canceled || !result.ok) return;
     toast('Таблица сделок скачана в CSV');
   }
 
@@ -2939,35 +3504,43 @@
       const tradeCount = accounts.reduce(function (sum, account) { return sum + (account.trades ? account.trades.length : 0); }, 0);
       const noteCount = accounts.reduce(function (sum, account) { return sum + (account.notes ? account.notes.length : 0); }, 0);
       const shotCount = accounts.reduce(function (sum, account) {
-        return sum + (account.trades || []).filter(function (trade) { return !!trade.screenshot; }).length;
+        return sum + (account.trades || []).reduce(function (tSum, trade) {
+          return tSum + store.tradeScreenshots(trade).length;
+        }, 0);
       }, 0);
       const readme = [
-        'TradeJournal — резервная копия',
+        T('TradeJournal — резервная копия'),
         '',
-        'Версия приложения: ' + APP_VERSION,
-        'Дата экспорта: ' + exportedAt,
-        'Счетов: ' + accounts.length + ', сделок: ' + tradeCount + ', записей журнала: ' + noteCount + ', скриншотов: ' + shotCount + '.',
+        T('Версия приложения: {version}').replace('{version}', APP_VERSION),
+        T('Дата экспорта: {date}').replace('{date}', exportedAt),
+        T('Счетов: {accounts}, сделок: {trades}, записей журнала: {notes}, скриншотов: {shots}.')
+          .replace('{accounts}', accounts.length)
+          .replace('{trades}', tradeCount)
+          .replace('{notes}', noteCount)
+          .replace('{shots}', shotCount),
         '',
-        'Файл journal.json содержит все счета, сделки, записи и скриншоты.',
-        'Скриншоты встроены в JSON, поэтому архив можно перенести на другое устройство.',
+        T('Файл journal.json содержит все счета, сделки, записи и скриншоты.'),
+        T('Скриншоты встроены в JSON, поэтому архив можно перенести на другое устройство.'),
         '',
-        'Как восстановить:',
-        '1. Откройте TradeJournal.',
-        '2. Настройки → «Импорт JSON».',
-        '3. Выберите journal.json из этого архива.',
+        T('Как восстановить:'),
+        T('1. Откройте TradeJournal.'),
+        T('2. Настройки → «Импорт JSON / ZIP».'),
+        T('3. Выберите journal.json из этого архива.'),
         '',
-        'Импорт заменяет текущие данные журнала. Перед восстановлением сделайте резервную копию текущего состояния.',
+        T('Импорт заменяет текущие данные журнала. Перед восстановлением сделайте резервную копию текущего состояния.'),
         ''
       ].join('\r\n');
-      const archive = NS.zip.create([
-        { name: 'journal.json', data: JSON.stringify(payload, null, 2), date: new Date() },
+      const zipCreate = NS.zip.createAsync || NS.zip.create;
+      const archive = await zipCreate([
+        { name: 'journal.json', data: JSON.stringify(payload), date: new Date() },
         { name: 'README.txt', data: readme, date: new Date() }
       ]);
-      U.downloadBytes('tradejournal-backup-' + U.todayISO() + '.zip', archive, 'application/zip');
+      const result = await U.downloadBytes('tradejournal-backup-' + U.todayISO() + '.zip', archive, 'application/zip');
+      if (!result || result.canceled || !result.ok) return;
       markBackupExported();
       toast('ZIP-архив со скриншотами скачан');
     } catch (err) {
-      toast('Не удалось подготовить ZIP-архив: ' + (err && err.message ? err.message : err), 'error');
+      toast(T('Не удалось подготовить ZIP-архив: {error}').replace('{error}', err && err.message ? err.message : err), 'error', null, { skip: true });
     }
   }
 
@@ -2998,39 +3571,41 @@
     if (!data) return;
     const result = data.result;
     const stats = result.stats || {};
-    const delimiterLabels = { ';': 'точка с запятой', ',': 'запятая', '\t': 'табуляция' };
+    const delimiterLabels = { ';': T('точка с запятой'), ',': T('запятая'), '\t': T('табуляция') };
     summary.innerHTML = [
-      ['Файл', data.fileName],
-      ['Строк', stats.rows || 0],
-      ['К импорту', result.trades.length],
-      ['Дубликаты', result.duplicates || 0],
-      ['Выходы', stats.exits || 0],
-      ['Разделитель', delimiterLabels[result.delimiter] || result.delimiter]
+      [T('Файл'), data.fileName],
+      [T('Строк'), stats.rows || 0],
+      [T('К импорту'), result.trades.length],
+      [T('Дубликаты'), result.duplicates || 0],
+      [T('Выходы'), stats.exits || 0],
+      [T('Разделитель'), delimiterLabels[result.delimiter] || result.delimiter]
     ].map(function (item) {
-      return '<span class="chip"><b>' + U.escapeHtml(item[0]) + ':</b> ' + U.escapeHtml(item[1]) + '</span>';
+      return '<span class="chip"><b>' + U.escapeHtml(item[0]) + ':</b> <span data-i18n-skip>' + U.escapeHtml(item[1]) + '</span></span>';
     }).join('');
 
     const alertHtml = [];
     if (result.errors.length) {
-      alertHtml.push('<div class="csv-alert error"><b>Ошибки (' + result.errors.length + '):</b> ' +
+      alertHtml.push('<div class="csv-alert error"><b>' + U.escapeHtml(T('Ошибки ({count}):').replace('{count}', result.errors.length)) + '</b> <span data-i18n-skip>' +
         U.escapeHtml(result.errors.slice(0, 6).join(' ')) +
-        (result.errors.length > 6 ? ' …' : '') + '</div>');
+        (result.errors.length > 6 ? ' …' : '') + '</span></div>');
     }
     if (result.warnings.length) {
-      alertHtml.push('<div class="csv-alert warn"><b>Предупреждения (' + result.warnings.length + '):</b> ' +
+      alertHtml.push('<div class="csv-alert warn"><b>' + U.escapeHtml(T('Предупреждения ({count}):').replace('{count}', result.warnings.length)) + '</b> <span data-i18n-skip>' +
         U.escapeHtml(result.warnings.slice(0, 5).join(' ')) +
-        (result.warnings.length > 5 ? ' …' : '') + '</div>');
+        (result.warnings.length > 5 ? ' …' : '') + '</span></div>');
     }
     const account = store.activeAccount();
-    alertHtml.push('<div class="csv-alert info">Сделки будут добавлены в активный счёт «<span data-i18n-skip>' +
-      U.escapeHtml(account ? account.name : '—') + '</span>». Существующие сделки не изменятся.</div>');
+    alertHtml.push('<div class="csv-alert info">' +
+      T('Сделки будут добавлены в активный счёт «{name}». Существующие сделки не изменятся.')
+        .replace('{name}', '<span data-i18n-skip>' + U.escapeHtml(account ? account.name : '—') + '</span>') +
+      '</div>');
     if (!result.trades.length) {
-      alertHtml.push('<div class="csv-alert warn">Нет строк, готовых к импорту. Исправьте файл и попробуйте снова.</div>');
+      alertHtml.push('<div class="csv-alert warn">' + U.escapeHtml(T('Нет строк, готовых к импорту. Исправьте файл и попробуйте снова.')) + '</div>');
     }
     alerts.innerHTML = alertHtml.join('');
 
     if (!result.trades.length) {
-      body.innerHTML = '<tr><td colspan="8" class="csv-empty">Нет данных для предпросмотра</td></tr>';
+      body.innerHTML = '<tr><td colspan="8" class="csv-empty">' + U.escapeHtml(T('Нет данных для предпросмотра')) + '</td></tr>';
     } else {
       body.innerHTML = result.trades.slice(0, 200).map(function (raw) {
         const trade = store.normalizeTrade(raw, { timeZone: accountTimeZone() });
@@ -3049,11 +3624,11 @@
           '<td class="num ' + (pnl !== null ? toneClass(pnl) : '') + '">' + (pnl !== null ? U.escapeHtml(U.money(pnl, { sign: true })) : '—') + '</td>' +
           '<td data-i18n-skip>' + U.escapeHtml(trade.setup || '—') + '</td>' +
           '</tr>';
-      }).join('') + (result.trades.length > 200 ? '<tr><td colspan="8" class="csv-empty">Показаны первые 200 из ' + result.trades.length + ' строк</td></tr>' : '');
+      }).join('') + (result.trades.length > 200 ? '<tr><td colspan="8" class="csv-empty">' + U.escapeHtml(T('Показаны первые 200 из {count} строк').replace('{count}', result.trades.length)) + '</td></tr>' : '');
     }
     if (confirm) {
       confirm.disabled = !result.trades.length;
-      confirm.textContent = result.trades.length ? 'Импортировать ' + result.trades.length : 'Импортировать';
+      confirm.textContent = result.trades.length ? T('Импортировать {count}').replace('{count}', result.trades.length) : T('Импортировать');
     }
   }
 
@@ -3096,15 +3671,21 @@
     state.page = 1;
     applyCurrency();
     renderAll();
-    toast('Импортировано сделок: ' + added + (skipped ? '. Пропущено дубликатов: ' + skipped : ''), 'success', {
-      label: 'Отменить',
-      onClick: async function () {
-        const restored = await store.replaceData(before);
-        applyCurrency();
-        renderAll();
-        toast(restored ? 'Импорт CSV отменён' : 'Не удалось отменить импорт', restored ? 'success' : 'error');
-      }
-    });
+    toast(
+      T('Импортировано сделок: {added}').replace('{added}', added) +
+        (skipped ? '. ' + T('Пропущено дубликатов: {skipped}').replace('{skipped}', skipped) : ''),
+      'success',
+      {
+        label: 'Отменить',
+        onClick: async function () {
+          const restored = await store.replaceData(before);
+          applyCurrency();
+          renderAll();
+          toast(restored ? 'Импорт CSV отменён' : 'Не удалось отменить импорт', restored ? 'success' : 'error');
+        }
+      },
+      { skip: true }
+    );
   }
 
   function importJSONFile(file) {
@@ -3130,7 +3711,7 @@
     reader.onload = function () {
       let data;
       try {
-        data = JSON.parse(String(reader.result || ''));
+        data = JSON.parse(String(reader.result || '').replace(/^\uFEFF/, ''));
       } catch (err) {
         toast('Не удалось прочитать файл: это не корректный JSON.', 'error');
         return;
@@ -3146,7 +3727,7 @@
     try {
       data = await NS.zip.readJournal(arrayBuffer);
     } catch (err) {
-      toast('Не удалось открыть ZIP-архив: ' + (err && err.message ? err.message : err), 'error');
+      toast(T('Не удалось открыть ZIP-архив: {error}').replace('{error}', err && err.message ? err.message : err), 'error', null, { skip: true });
       return;
     }
     importJSONData(data);
@@ -3161,40 +3742,61 @@
     const currentNotes = store.state.accounts.reduce(function (sum, account) { return sum + account.notes.length; }, 0);
     const stats = store.analyzeImport(data);
     const dropReasons = [];
-    if (stats.missingSymbols) dropReasons.push('без символа: ' + stats.missingSymbols);
-    if (stats.invalidDates) dropReasons.push('битая дата: ' + stats.invalidDates);
-    const replacementSummary = 'Будет заменено ' + currentTrades + ' ' + pluralTrades(currentTrades) +
-      ', ' + stats.tradesDropped + ' ' + pluralTrades(stats.tradesDropped) + ' отброшено' +
-      (dropReasons.length ? ' (' + dropReasons.join(', ') + ')' : '') + '.';
+    if (stats.missingSymbols) dropReasons.push(T('без символа: {count}').replace('{count}', stats.missingSymbols));
+    if (stats.invalidDates) dropReasons.push(T('битая дата: {count}').replace('{count}', stats.invalidDates));
+    const replacementSummary = T('Будет заменено {replaced} {replacedUnit}, {dropped} {droppedUnit} отброшено{reasons}.')
+      .replace('{replaced}', currentTrades)
+      .replace('{replacedUnit}', pluralTrades(currentTrades))
+      .replace('{dropped}', stats.tradesDropped)
+      .replace('{droppedUnit}', pluralTrades(stats.tradesDropped))
+      .replace('{reasons}', dropReasons.length ? ' (' + dropReasons.join(', ') + ')' : '');
     const details = [
-      'Все счета, сделки и записи будут заменены данными из файла. Рекомендуем сначала сделать экспорт текущего журнала.',
+      T('Все счета, сделки и записи будут заменены данными из файла. Рекомендуем сначала сделать экспорт текущего журнала.'),
       replacementSummary,
-      'Сейчас: счетов ' + store.state.accounts.length + ', сделок ' + currentTrades + ', записей ' + currentNotes + '.',
-      'В файле: счетов ' + stats.accounts + ', сделок ' + stats.trades + ', записей ' + stats.notes + ', скриншотов ' + stats.screenshots + '.',
-      'Будет импортировано: сделок ' + stats.tradesAccepted + ', записей ' + stats.notesAccepted + ', скриншотов ' + stats.screenshotsAccepted + '.'
+      T('Сейчас: счетов {accounts}, сделок {trades}, записей {notes}.')
+        .replace('{accounts}', store.state.accounts.length)
+        .replace('{trades}', currentTrades)
+        .replace('{notes}', currentNotes),
+      T('В файле: счетов {accounts}, сделок {trades}, записей {notes}, скриншотов {shots}.')
+        .replace('{accounts}', stats.accounts)
+        .replace('{trades}', stats.trades)
+        .replace('{notes}', stats.notes)
+        .replace('{shots}', stats.screenshots),
+      T('Будет импортировано: сделок {trades}, записей {notes}, скриншотов {shots}.')
+        .replace('{trades}', stats.tradesAccepted)
+        .replace('{notes}', stats.notesAccepted)
+        .replace('{shots}', stats.screenshotsAccepted)
     ];
     if (stats.tradesDropped) {
-      details.push('Отброшенные сделки не попадут в журнал: без символа импортировать нельзя, а битую дату не подменяем сегодняшней.');
+      details.push(T('Отброшенные сделки не попадут в журнал: без символа импортировать нельзя, а битую дату не подменяем сегодняшней.'));
     }
     if (stats.notesDropped) {
-      details.push('Не будет импортировано записей: ' + stats.notesDropped + '.');
+      details.push(T('Не будет импортировано записей: {count}.').replace('{count}', stats.notesDropped));
     }
     if (stats.screenshotsDropped) {
       const dropped = stats.screenshotsDropped;
       const singular = dropped % 10 === 1 && dropped % 100 !== 11;
       const reasons = [];
-      if (stats.screenshotsTooLarge) reasons.push('слишком большой размер: ' + stats.screenshotsTooLarge);
-      if (stats.screenshotsInvalid) reasons.push('неподдерживаемый формат: ' + stats.screenshotsInvalid);
-      details.push('Внимание: ' + dropped + ' ' + pluralScreenshots(dropped) + (singular ? ' не будет импортирован' : ' не будут импортированы') + (reasons.length ? ' (' + reasons.join(', ') + ')' : '') + '. Эти скриншоты будут потеряны.');
+      if (stats.screenshotsTooLarge) reasons.push(T('слишком большой размер: {count}').replace('{count}', stats.screenshotsTooLarge));
+      if (stats.screenshotsInvalid) reasons.push(T('неподдерживаемый формат: {count}').replace('{count}', stats.screenshotsInvalid));
+      details.push(
+        T(singular
+          ? 'Внимание: {count} {unit} не будет импортирован{reasons}. Эти скриншоты будут потеряны.'
+          : 'Внимание: {count} {unit} не будут импортированы{reasons}. Эти скриншоты будут потеряны.')
+          .replace('{count}', dropped)
+          .replace('{unit}', pluralScreenshots(dropped))
+          .replace('{reasons}', reasons.length ? ' (' + reasons.join(', ') + ')' : '')
+      );
     }
     if (stats.fileScreenshots) {
-      details.push('Скриншотов-ссылок на файлы: ' + stats.fileScreenshots + '. Они откроются только на ПК, где создан бэкап.');
+      details.push(T('Скриншотов-ссылок на файлы: {count}. Они откроются только на ПК, где создан бэкап.').replace('{count}', stats.fileScreenshots));
     }
-    details.push('Сразу после импорта действие можно будет отменить.');
+    details.push(T('Сразу после импорта действие можно будет отменить.'));
 
     askConfirm({
       title: 'Импортировать данные?',
       text: details.join(' '),
+      textReady: true,
       okLabel: 'Импортировать'
     }).then(async function (confirmed) {
       if (!confirmed) return;
@@ -3207,18 +3809,20 @@
         toast('Импорт не сохранён: не удалось записать данные. Журнал оставлен прежним.', 'error');
         return;
       }
-      await store.migrateScreenshots();
       clearAllDrafts();
       applyCurrency();
-      state.calCursor = monthStart(new Date());
+      state.calCursor = accountMonthStart();
       state.selectedDay = todayInAccount();
       renderAll();
       const importedAccounts = store.state.accounts.length;
       const importedTrades = store.state.accounts.reduce(function (sum, account) { return sum + account.trades.length; }, 0);
       const importedNotes = store.state.accounts.reduce(function (sum, account) { return sum + account.notes.length; }, 0);
-      let importedMessage = 'Импортировано: счетов ' + importedAccounts + ', сделок ' + importedTrades + ', записей ' + importedNotes;
+      let importedMessage = T('Импортировано: счетов {accounts}, сделок {trades}, записей {notes}')
+        .replace('{accounts}', importedAccounts)
+        .replace('{trades}', importedTrades)
+        .replace('{notes}', importedNotes);
       if (stats.screenshotsDropped) {
-        importedMessage += '. Не импортировано скриншотов: ' + stats.screenshotsDropped;
+        importedMessage += '. ' + T('Не импортировано скриншотов: {count}').replace('{count}', stats.screenshotsDropped);
       }
       toast(importedMessage, stats.screenshotsDropped ? 'warn' : 'success', {
         label: 'Отменить',
@@ -3226,12 +3830,12 @@
           const restored = await store.replaceData(before);
           clearAllDrafts();
           applyCurrency();
-          state.calCursor = monthStart(new Date());
+          state.calCursor = accountMonthStart();
           state.selectedDay = todayInAccount();
           renderAll();
           toast(restored ? 'Импорт отменён, прежние данные восстановлены' : 'Не удалось сохранить откат', restored ? 'success' : 'error');
         }
-      });
+      }, { skip: true });
     });
   }
 
@@ -3252,7 +3856,7 @@
       }
       clearAccountDrafts(store.state.activeAccountId);
       applyCurrency();
-      state.calCursor = monthStart(new Date());
+      state.calCursor = accountMonthStart();
       state.selectedDay = todayInAccount();
       renderAll();
       toast('Демо-данные загружены', 'success', {
@@ -3261,7 +3865,7 @@
           const restored = await store.replaceData(before);
           clearAccountDrafts(store.state.activeAccountId);
           applyCurrency();
-          state.calCursor = monthStart(new Date());
+          state.calCursor = accountMonthStart();
           state.selectedDay = todayInAccount();
           renderAll();
           toast(restored ? 'Демо-данные убраны, прежние восстановлены' : 'Не удалось сохранить откат', restored ? 'success' : 'error');
@@ -3287,7 +3891,7 @@
       }
       clearAccountDrafts(store.state.activeAccountId);
       applyCurrency();
-      state.calCursor = monthStart(new Date());
+      state.calCursor = accountMonthStart();
       state.selectedDay = todayInAccount();
       renderAll();
       toast('Журнал очищен. Начинаем с чистого листа.', 'success', {
@@ -3296,7 +3900,7 @@
           const restored = await store.replaceData(before);
           clearAccountDrafts(store.state.activeAccountId);
           applyCurrency();
-          state.calCursor = monthStart(new Date());
+          state.calCursor = accountMonthStart();
           state.selectedDay = todayInAccount();
           renderAll();
           toast(restored ? 'Очистка отменена, данные восстановлены' : 'Не удалось сохранить откат', restored ? 'success' : 'error');
@@ -3316,7 +3920,7 @@
     }).join('');
   }
 
-  const TRADE_FIELD_KEYS = ['date', 'time', 'symbol', 'entry', 'stop', 'currentStop', 'target', 'qty', 'multiplier', 'fees', 'setup', 'emotion', 'discipline', 'tags', 'notes', 'side', 'exits'];
+  const TRADE_FIELD_KEYS = ['date', 'time', 'symbol', 'entry', 'stop', 'currentStop', 'target', 'qty', 'multiplier', 'fees', 'setup', 'emotion', 'discipline', 'tags', 'notes', 'side', 'entries', 'exits', 'checklist'];
 
   function tradeDraftKey(accountId, tradeId) {
     return DRAFT_PREFIX + String(accountId || '') + '.' + (tradeId || 'new');
@@ -3329,9 +3933,9 @@
       || /^idb:screenshots\/[a-z0-9-]{1,80}$/i.test(value);
   }
 
-  function normalizeExitRows(rows) {
+  function normalizeLegRows(rows, maxRows) {
     const result = [];
-    (Array.isArray(rows) ? rows : []).slice(0, store.MAX_EXITS || 50).forEach(function (row) {
+    (Array.isArray(rows) ? rows : []).slice(0, maxRows || store.MAX_EXITS || 50).forEach(function (row) {
       if (!row || typeof row !== 'object') return;
       const qty = row.qty === null || row.qty === undefined ? '' : String(row.qty).slice(0, 40);
       const price = row.price === null || row.price === undefined ? '' : String(row.price).slice(0, 40);
@@ -3346,20 +3950,98 @@
     return result;
   }
 
-  function exitsFromField(value) {
+  function legsFromField(value, maxRows) {
     if (!value) return [];
     try {
       const parsed = typeof value === 'string' ? JSON.parse(value) : value;
-      return normalizeExitRows(parsed);
+      return normalizeLegRows(parsed, maxRows);
     } catch (err) {
       return [];
     }
   }
 
-  function exitsToField(rows) {
-    return JSON.stringify(normalizeExitRows(rows).map(function (row) {
+  function legsToField(rows, maxRows) {
+    return JSON.stringify(normalizeLegRows(rows, maxRows).map(function (row) {
       return { qty: row.qty, price: row.price, date: row.date };
     }));
+  }
+
+  function checklistForTrade(trade) {
+    const saved = trade && Array.isArray(trade.checklist) ? trade.checklist : [];
+    const rules = (store.state.settings && Array.isArray(store.state.settings.checklist))
+      ? store.state.settings.checklist
+      : [];
+    const out = [];
+    const seen = new Set();
+    saved.forEach(function (item) {
+      if (!item || !item.text || out.length >= (store.MAX_CHECKLIST || 20)) return;
+      const text = String(item.text).trim().slice(0, 120);
+      if (!text) return;
+      seen.add(text.toLowerCase());
+      out.push({ text: text, done: !!item.done });
+    });
+    rules.forEach(function (rule) {
+      if (out.length >= (store.MAX_CHECKLIST || 20)) return;
+      const text = String(rule || '').trim().slice(0, 120);
+      if (!text || seen.has(text.toLowerCase())) return;
+      seen.add(text.toLowerCase());
+      out.push({ text: text, done: false });
+    });
+    return out;
+  }
+
+  function normalizeChecklistField(raw) {
+    const list = [];
+    let source = [];
+    if (typeof raw === 'string' && raw) {
+      try { source = JSON.parse(raw); } catch (err) { source = []; }
+    } else if (Array.isArray(raw)) {
+      source = raw;
+    }
+    (Array.isArray(source) ? source : []).slice(0, store.MAX_CHECKLIST || 20).forEach(function (item) {
+      if (!item || typeof item !== 'object') return;
+      const text = String(item.text || '').trim().slice(0, 120);
+      if (text) list.push({ text: text, done: !!item.done });
+    });
+    return list;
+  }
+
+  function checklistToField(items) {
+    return JSON.stringify(normalizeChecklistField(items));
+  }
+
+  function syncTradeChecklistProgress() {
+    const prog = $('#tradeChecklistProgress');
+    const warn = $('#tradeChecklistWarn');
+    const list = state.tradeChecklist || [];
+    const done = list.filter(function (item) { return !!item.done; }).length;
+    if (prog) {
+      prog.textContent = done + ' / ' + list.length;
+      prog.classList.toggle('all-done', list.length > 0 && done === list.length);
+    }
+    if (warn) warn.hidden = !list.length || done === list.length;
+  }
+
+  function renderTradeChecklist() {
+    const field = $('#tradeChecklistField');
+    const box = $('#tradeChecklistBox');
+    const warn = $('#tradeChecklistWarn');
+    if (!field || !box) return;
+    const list = state.tradeChecklist || [];
+    if (!list.length) {
+      field.hidden = true;
+      box.innerHTML = '';
+      if (warn) warn.hidden = true;
+      return;
+    }
+    field.hidden = false;
+    syncTradeChecklistProgress();
+    box.innerHTML = list.map(function (item, index) {
+      return '<label class="checklist-item' + (item.done ? ' is-done' : '') + '">' +
+        '<input type="checkbox" data-check-idx="' + index + '"' + (item.done ? ' checked' : '') + '>' +
+        '<span data-i18n-skip>' + U.escapeHtml(item.text) + '</span>' +
+        '</label>';
+    }).join('');
   }
 
   function tradeFieldsFromTrade(trade, presetDate) {
@@ -3381,7 +4063,9 @@
       tags: trade ? trade.tags.join(', ') : '',
       notes: trade ? (trade.notes || '') : '',
       side: trade ? trade.side : 'long',
-      exits: exitsToField(trade ? store.tradeExits(trade) : [])
+      entries: legsToField(trade && Array.isArray(trade.entries) ? trade.entries : [], store.MAX_ENTRIES),
+      exits: legsToField(trade ? store.tradeExits(trade) : [], store.MAX_EXITS),
+      checklist: checklistToField(checklistForTrade(trade))
     };
   }
 
@@ -3403,7 +4087,9 @@
       tags: $('#tradeTags').value,
       notes: $('#tradeNotes').value,
       side: $('#tradeSide').value,
-      exits: exitsToField(state.tradeExits)
+      entries: legsToField(state.tradeEntries, store.MAX_ENTRIES),
+      exits: legsToField(state.tradeExits, store.MAX_EXITS),
+      checklist: checklistToField(state.tradeChecklist)
     };
   }
 
@@ -3419,18 +4105,286 @@
     if (!fields || typeof fields !== 'object') return result;
     TRADE_FIELD_KEYS.forEach(function (key) {
       if (typeof fields[key] !== 'string') return;
-      const max = key === 'notes' ? 20000 : (key === 'tags' ? 2000 : (key === 'exits' ? 20000 : 200));
+      const max = key === 'notes' ? 20000 : (key === 'tags' ? 2000 : (key === 'exits' || key === 'entries' || key === 'checklist' ? 20000 : 200));
       result[key] = fields[key].slice(0, max);
     });
-    result.exits = exitsToField(exitsFromField(result.exits));
+    result.entries = legsToField(legsFromField(result.entries, store.MAX_ENTRIES), store.MAX_ENTRIES);
+    result.exits = legsToField(legsFromField(result.exits, store.MAX_EXITS), store.MAX_EXITS);
+    result.checklist = checklistToField(normalizeChecklistField(result.checklist));
     result.multiplier = result.multiplier || '1';
     result.side = result.side === 'short' ? 'short' : 'long';
     result.discipline = String(U.clamp(Math.round(U.parseNum(result.discipline) || 0), 0, 5));
     return result;
   }
 
+  function setTradeEntries(rows) {
+    state.tradeEntries = normalizeLegRows(rows, store.MAX_ENTRIES);
+  }
+
   function setTradeExits(rows) {
-    state.tradeExits = normalizeExitRows(rows);
+    state.tradeExits = normalizeLegRows(rows, store.MAX_EXITS);
+  }
+
+  function entryRowsTotals() {
+    let qty = 0;
+    let notional = 0;
+    let validCount = 0;
+    state.tradeEntries.forEach(function (row) {
+      const q = U.parseNum(row.qty);
+      const p = U.parseNum(row.price);
+      if (q !== null && q > 0 && p !== null) {
+        qty += q;
+        notional += q * p;
+        validCount++;
+      }
+    });
+    return {
+      qty: qty,
+      entry: qty > (store.QTY_EPSILON || 1e-9) ? notional / qty : null,
+      count: validCount
+    };
+  }
+
+  function syncEntryAggregate() {
+    const hasEntries = state.tradeEntries.length > 0;
+    const entryEl = $('#tradeEntry');
+    const qtyEl = $('#tradeQty');
+    const entryBadge = $('#tradeEntryAuto');
+    const qtyBadge = $('#tradeQtyAuto');
+    if (entryBadge) entryBadge.classList.toggle('hidden', !hasEntries);
+    if (qtyBadge) qtyBadge.classList.toggle('hidden', !hasEntries);
+    if (entryEl) entryEl.readOnly = hasEntries;
+    if (qtyEl) qtyEl.readOnly = hasEntries;
+    if (hasEntries) {
+      const totals = entryRowsTotals();
+      if (entryEl && totals.entry !== null) entryEl.value = String(totals.entry);
+      if (qtyEl && totals.qty > 0) qtyEl.value = String(totals.qty);
+    }
+    const hint = $('#entriesHint');
+    if (hint) {
+      if (!hasEntries) {
+        hint.textContent = T('Один вход — цена и объём заданы полями выше. Добавьте доборы, чтобы автоматически считать средневзвешенную цену входа.');
+      } else {
+        const totals = entryRowsTotals();
+        hint.textContent = totals.entry !== null
+          ? T('Входов {count}, общий объём {qty}, средневзвешенная цена {entry}.')
+            .replace('{count}', totals.count)
+            .replace('{qty}', U.qty(totals.qty))
+            .replace('{entry}', U.price(totals.entry))
+          : T('Укажите корректную цену и количество хотя бы для одного входа.');
+      }
+    }
+    renderPositionHistory();
+  }
+
+  function renderPositionHistory() {
+    const box = $('#positionHistory');
+    if (!box) return;
+    const validEntries = state.tradeEntries.filter(function (row) {
+      return U.parseNum(row.qty) > 0 && U.parseNum(row.price) !== null;
+    });
+    const validExits = state.tradeExits.filter(function (row) {
+      return U.parseNum(row.qty) > 0 && U.parseNum(row.price) !== null;
+    });
+    if (validEntries.length <= 1 && !validExits.length) {
+      box.hidden = true;
+      box.innerHTML = '';
+      return;
+    }
+    const steps = [];
+    const baseDate = $('#tradeDate') ? $('#tradeDate').value : '';
+    const entriesList = validEntries.length
+      ? validEntries
+      : (U.parseNum($('#tradeQty') && $('#tradeQty').value) > 0 && U.parseNum($('#tradeEntry') && $('#tradeEntry').value) !== null
+        ? [{ qty: $('#tradeQty').value, price: $('#tradeEntry').value, date: baseDate }]
+        : []);
+    entriesList.forEach(function (leg, idx) {
+      steps.push({
+        kind: 'entry',
+        order: 0,
+        idx: idx,
+        date: leg.date || baseDate || '',
+        qty: U.parseNum(leg.qty),
+        price: U.parseNum(leg.price)
+      });
+    });
+    validExits.forEach(function (leg, idx) {
+      steps.push({
+        kind: 'exit',
+        order: 1,
+        idx: idx,
+        date: leg.date || baseDate || '',
+        qty: U.parseNum(leg.qty),
+        price: U.parseNum(leg.price)
+      });
+    });
+    steps.sort(function (a, b) {
+      if (a.date !== b.date) return a.date < b.date ? -1 : 1;
+      if (a.order !== b.order) return a.order - b.order;
+      return a.idx - b.idx;
+    });
+    box.hidden = false;
+    box.innerHTML = '<span class="muted" style="font-size:10px;align-self:center">' + T('История позиции:') + '</span>' + steps.map(function (step) {
+      const label = step.kind === 'entry'
+        ? (step.idx === 0 ? T('Вход') : T('Добор')) + ' +' + U.qty(step.qty)
+        : T('Выход') + ' −' + U.qty(step.qty);
+      const dateTxt = step.date ? ' (' + U.formatDate(step.date, 'short') + ')' : '';
+      return '<span class="history-step is-' + step.kind + '">' + U.escapeHtml(label + ' @ ' + U.price(step.price) + dateTxt) + '</span>';
+    }).join('');
+  }
+
+  function renderEntriesEditor() {
+    const editor = $('#entriesEditor');
+    if (!editor) {
+      syncEntryAggregate();
+      return;
+    }
+    if (!state.tradeEntries.length) {
+      editor.hidden = true;
+      editor.innerHTML = '';
+      syncEntryAggregate();
+      return;
+    }
+    editor.hidden = false;
+    editor.innerHTML = state.tradeEntries.map(function (row, index) {
+      return '<div class="exit-row" data-entry-index="' + index + '">' +
+        '<input type="number" step="any" min="0" inputmode="decimal" data-entry-field="qty" value="' + U.escapeHtml(row.qty) + '" placeholder="' + T('Количество') + '" aria-label="' + T('Количество входа') + ' ' + (index + 1) + '">' +
+        '<input type="number" step="any" inputmode="decimal" data-entry-field="price" value="' + U.escapeHtml(row.price) + '" placeholder="' + T('Цена входа') + '" aria-label="' + T('Цена входа') + ' ' + (index + 1) + '">' +
+        '<input type="date" data-entry-field="date" data-entry-date value="' + U.escapeHtml(row.date) + '" aria-label="' + T('Дата входа') + ' ' + (index + 1) + '">' +
+        '<button type="button" class="icon-btn exit-remove" data-remove-entry="' + index + '" title="' + T('Удалить вход') + '" aria-label="' + T('Удалить вход') + '">×</button>' +
+        '</div>';
+    }).join('');
+    syncEntryAggregate();
+  }
+
+  function addEntryRow(qty, price) {
+    const maxEntries = store.MAX_ENTRIES || 50;
+    if (state.tradeEntries.length >= maxEntries) {
+      toast(T('Слишком много входов: максимум {max}.').replace('{max}', maxEntries), 'warn', null, { skip: true });
+      return;
+    }
+    const baseDate = $('#tradeDate') ? ($('#tradeDate').value || U.todayISO(accountTimeZone())) : U.todayISO(accountTimeZone());
+    if (!state.tradeEntries.length) {
+      const curQty = $('#tradeQty') ? $('#tradeQty').value.trim() : '';
+      const curEntry = $('#tradeEntry') ? $('#tradeEntry').value.trim() : '';
+      if (curQty || curEntry) {
+        state.tradeEntries.push({ id: U.uid(), qty: curQty, price: curEntry, date: baseDate });
+      }
+    }
+    if (state.tradeEntries.length < maxEntries) {
+      state.tradeEntries.push({
+        id: U.uid(),
+        qty: qty === undefined || qty === null ? '' : String(qty),
+        price: price === undefined || price === null ? '' : String(price),
+        date: baseDate
+      });
+    }
+    renderEntriesEditor();
+    const row = $('#entriesEditor .exit-row:last-child');
+    const target = row && row.querySelector('[data-entry-field="qty"]');
+    if (target) target.focus();
+    updateTradePreview();
+    syncTradeDirty();
+  }
+
+  function removeEntryRow(index) {
+    if (index < 0 || index >= state.tradeEntries.length) return;
+    if (state.tradeEntries.length === 1) {
+      const only = state.tradeEntries[0];
+      state.tradeEntries = [];
+      if ($('#tradeQty')) $('#tradeQty').value = only.qty || '';
+      if ($('#tradeEntry')) $('#tradeEntry').value = only.price || '';
+    } else {
+      state.tradeEntries.splice(index, 1);
+    }
+    renderEntriesEditor();
+    updateTradePreview();
+    syncTradeDirty();
+  }
+
+  function formatPresetNumber(val) {
+    const rounded = Math.round(val * 1e6) / 1e6;
+    return Number.isInteger(rounded) ? String(rounded) : String(rounded);
+  }
+
+  function collectFeeSuggestions() {
+    const saved = Array.isArray(store.state.settings.feePresets) ? store.state.settings.feePresets : [];
+    const seen = new Set(saved.map(function (v) { return Math.round(v * 1e6) / 1e6; }));
+    const recent = [];
+    const trades = store.state.trades || [];
+    for (let i = trades.length - 1; i >= 0 && recent.length < 3; i--) {
+      const fee = U.parseNum(trades[i] && trades[i].fees);
+      if (fee === null || fee <= 0) continue;
+      const key = Math.round(fee * 1e6) / 1e6;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      recent.push(key);
+    }
+    return { saved: saved, recent: recent };
+  }
+
+  function renderFeePresets() {
+    const bar = $('#feePresetsBar');
+    if (!bar) return;
+    const feeVal = U.parseNum($('#tradeFees') ? $('#tradeFees').value : null);
+    const data = collectFeeSuggestions();
+    const cur = (store.state.settings && store.state.settings.currency) || '$';
+    const items = [{ value: 0, label: '0', saved: false }].concat(
+      data.saved.map(function (v) {
+        return { value: v, label: cur + formatPresetNumber(v), saved: true };
+      }),
+      data.recent.map(function (v) {
+        return { value: v, label: cur + formatPresetNumber(v), saved: false };
+      })
+    );
+    bar.innerHTML = items.map(function (item) {
+      const active = feeVal !== null && Math.abs(feeVal - item.value) < 1e-8;
+      return '<span class="fee-chip' + (active ? ' active' : '') + '" data-fee-value="' + item.value + '" role="button" tabindex="0">' +
+        '<span data-i18n-skip>' + U.escapeHtml(item.label) + '</span>' +
+        (item.saved ? '<button type="button" class="fee-chip-remove" data-remove-fee-preset="' + item.value + '" aria-label="' + U.escapeHtml(T('Удалить шаблон {fee}').replace('{fee}', item.label)) + '">×</button>' : '') +
+        '</span>';
+    }).join('');
+  }
+
+  function moveStopToBreakeven() {
+    const entry = U.parseNum($('#tradeEntry') ? $('#tradeEntry').value : null);
+    if (entry === null) {
+      toast('Сначала укажите цену входа.', 'warn');
+      if ($('#tradeEntry')) $('#tradeEntry').focus();
+      return;
+    }
+    $('#tradeCurrentStop').value = String(entry);
+    updateTradePreview();
+    syncTradeDirty();
+    toast('Текущий стоп перенесён в безубыток');
+  }
+
+  async function saveFeePreset() {
+    const fee = U.parseNum($('#tradeFees') ? $('#tradeFees').value : null);
+    if (fee === null || fee <= 0) {
+      toast('Укажите комиссию больше нуля для шаблона.', 'warn');
+      return;
+    }
+    const val = Math.round(fee * 1e6) / 1e6;
+    const list = (store.state.settings.feePresets || []).slice();
+    if (!list.some(function (v) { return Math.abs(v - val) < 1e-8; })) {
+      if (list.length >= (store.MAX_FEE_PRESETS || 8)) list.pop();
+      list.unshift(val);
+      store.state.settings.feePresets = list;
+      await persist();
+    }
+    renderFeePresets();
+    toast('Шаблон комиссии сохранён');
+  }
+
+  async function removeFeePreset(val) {
+    const list = (store.state.settings.feePresets || []).filter(function (v) {
+      return Math.abs(v - val) >= 1e-8;
+    });
+    store.state.settings.feePresets = list;
+    await persist();
+    renderFeePresets();
+    toast('Шаблон комиссии удалён');
   }
 
   function renderExitsEditor() {
@@ -3439,6 +4393,7 @@
     if (!state.tradeExits.length) {
       editor.innerHTML = '<div class="exits-empty">' + T('Выходов пока нет — позиция открыта') + '</div>';
       updateExitsSummary();
+      renderPositionHistory();
       return;
     }
     editor.innerHTML = state.tradeExits.map(function (row, index) {
@@ -3450,6 +4405,7 @@
         '</div>';
     }).join('');
     updateExitsSummary();
+    renderPositionHistory();
   }
 
   function exitRowsTotals() {
@@ -3519,15 +4475,20 @@
     $('#tradeEmotion').value = fields.emotion || '';
     $('#tradeTags').value = fields.tags || '';
     $('#tradeNotes').value = fields.notes || '';
-    setTradeExits(exitsFromField(fields.exits));
+    setTradeEntries(legsFromField(fields.entries, store.MAX_ENTRIES));
+    setTradeExits(legsFromField(fields.exits, store.MAX_EXITS));
+    state.tradeChecklist = normalizeChecklistField(fields.checklist);
+    renderEntriesEditor();
     renderExitsEditor();
+    renderTradeChecklist();
     setSide(fields.side);
     setDiscipline(Number(fields.discipline) || 0);
+    renderFeePresets();
   }
 
   function addExitRow(qty, price) {
     if (state.tradeExits.length >= (store.MAX_EXITS || 50)) {
-      toast('Слишком много выходов: максимум ' + (store.MAX_EXITS || 50) + '.', 'warn');
+      toast(T('Слишком много выходов: максимум {max}.').replace('{max}', store.MAX_EXITS || 50), 'warn', null, { skip: true });
       return;
     }
     state.tradeExits.push({
@@ -3575,10 +4536,40 @@
     if (reset) reset.classList.toggle('hidden', !state.tradeDirty);
   }
 
+  const SHOT_LABEL_OPTIONS = ['', 'HTF', 'Вход', 'Выход', 'График', 'Другое'];
+
+  function normalizeDraftScreenshots(list, legacyShot) {
+    const maxShots = store.MAX_SCREENSHOTS || 4;
+    const out = [];
+    const seen = new Set();
+    (Array.isArray(list) ? list : []).forEach(function (item) {
+      if (out.length >= maxShots) return;
+      const src = typeof item === 'string' ? item : (item && typeof item.src === 'string' ? item.src : '');
+      const label = item && typeof item === 'object' ? String(item.label || '').trim().slice(0, 32) : '';
+      if (isScreenshotValue(src) && !seen.has(src)) {
+        seen.add(src);
+        out.push({ src: src, label: label });
+      }
+    });
+    if (!out.length && isScreenshotValue(legacyShot)) {
+      out.push({ src: legacyShot, label: '' });
+    }
+    return out;
+  }
+
+  function screenshotsEqual(a, b) {
+    const left = Array.isArray(a) ? a : [];
+    const right = Array.isArray(b) ? b : [];
+    if (left.length !== right.length) return false;
+    return left.every(function (item, idx) {
+      return item && right[idx] && item.src === right[idx].src && (item.label || '') === (right[idx].label || '');
+    });
+  }
+
   function syncTradeDirty() {
     if (state.tradeInitializing || !state.tradeBaseline) return;
     const dirty = !sameTradeFields(readTradeFields(), state.tradeBaseline)
-      || (state.screenshot || '') !== (state.tradeBaselineScreenshot || '');
+      || !screenshotsEqual(state.screenshots, state.tradeBaselineScreenshots);
     state.tradeDirty = dirty;
     updateDraftUi();
     if (dirty) scheduleTradeDraft();
@@ -3598,25 +4589,32 @@
     }
     const accountId = state.tradeAccountId || store.state.activeAccountId;
     if (!accountId) return;
+    const shots = state.screenshots.map(function (item) {
+      return { src: item.src, label: item.label || '' };
+    });
     const payload = {
       savedAt: new Date().toISOString(),
       accountId: accountId,
       tradeId: state.tradeId || '',
       fields: readTradeFields(),
-      screenshot: state.screenshot || ''
+      screenshots: shots,
+      screenshot: shots[0] ? shots[0].src : ''
     };
 
     let serialized = JSON.stringify(payload);
     state.draftScreenshotOmitted = false;
-    if (serialized.length > DRAFT_MAX_CHARS && payload.screenshot) {
-      payload.screenshot = '';
-      payload.screenshotOmitted = true;
-      state.draftScreenshotOmitted = true;
-      serialized = JSON.stringify(payload);
-      if (!state.draftShotWarned) {
-        state.draftShotWarned = true;
-        toast('Скриншот слишком большой для черновика: если закрыть форму, он не сохранится. Сохраните сделку, чтобы не потерять изображение.', 'warn');
+    for (let i = payload.screenshots.length - 1; i >= 0 && serialized.length > DRAFT_MAX_CHARS; i--) {
+      if (/^data:/i.test(payload.screenshots[i].src)) {
+        payload.screenshots.splice(i, 1);
+        payload.screenshotOmitted = true;
+        state.draftScreenshotOmitted = true;
+        payload.screenshot = payload.screenshots[0] ? payload.screenshots[0].src : '';
+        serialized = JSON.stringify(payload);
       }
+    }
+    if (state.draftScreenshotOmitted && !state.draftShotWarned) {
+      state.draftShotWarned = true;
+      toast('Скриншот слишком большой для черновика: если закрыть форму, он не сохранится. Сохраните сделку, чтобы не потерять изображение.', 'warn');
     }
 
     if (serialized.length > DRAFT_MAX_CHARS) {
@@ -3704,9 +4702,11 @@
     state.tradeId = trade ? trade.id : null;
     state.tradeOriginalId = trade ? trade.id : null;
     state.tradeBaseline = tradeFieldsFromTrade(trade, presetDate);
-    state.tradeBaselineScreenshot = trade && trade.screenshot ? trade.screenshot : '';
-    state.screenshot = state.tradeBaselineScreenshot;
-    state.screenshotPreview = '';
+    state.tradeBaselineScreenshots = store.tradeScreenshots(trade);
+    state.screenshots = state.tradeBaselineScreenshots.map(function (item) {
+      return { src: item.src, label: item.label || '' };
+    });
+    state.screenshotPreviews = {};
     state.tradeDirty = false;
     state.tradeSaving = false;
     state.screenshotBusy = false;
@@ -3720,10 +4720,12 @@
     const draft = readTradeDraft(accountId, trade ? trade.id : null);
     if (draft) {
       const fields = normalizeDraftFields(draft.fields, state.tradeBaseline);
-      const draftShot = isScreenshotValue(draft.screenshot) ? draft.screenshot : state.tradeBaselineScreenshot;
-      if (!sameTradeFields(fields, state.tradeBaseline) || draftShot !== state.tradeBaselineScreenshot) {
+      const draftShots = (Array.isArray(draft.screenshots) || draft.screenshot)
+        ? normalizeDraftScreenshots(draft.screenshots, draft.screenshot)
+        : state.tradeBaselineScreenshots.map(function (item) { return Object.assign({}, item); });
+      if (!sameTradeFields(fields, state.tradeBaseline) || !screenshotsEqual(draftShots, state.tradeBaselineScreenshots)) {
         applyTradeFields(fields);
-        state.screenshot = draftShot;
+        state.screenshots = draftShots;
         restored = true;
       } else {
         clearTradeDraft(trade ? trade.id : null, accountId);
@@ -3736,8 +4738,9 @@
     $('#saveTradeBtn').disabled = false;
     $('#tradeShot').value = '';
     state.tradeInitializing = false;
-    renderShotPreview();
     updateTradePreview();
+    renderFeePresets();
+    renderShotPreview();
     syncTradeDirty();
     openModal('tradeModal', '#tradeSymbol');
     if (restored) {
@@ -3771,15 +4774,28 @@
   let shotPreviewToken = 0;
   let shotLightboxToken = 0;
 
+  function removeShotAt(index) {
+    if (state.screenshotBusy) {
+      toast('Скриншот ещё сохраняется, подождите пару секунд.', 'warn');
+      return;
+    }
+    if (index < 0 || index >= state.screenshots.length) return;
+    state.screenshots.splice(index, 1);
+    renderShotPreview();
+    syncTradeDirty();
+  }
+
   function renderShotPreview() {
     const box = $('#shotPreview');
     const remove = $('#removeShot');
+    const countEl = $('#shotCount');
+    const maxShots = store.MAX_SCREENSHOTS || 4;
+    if (countEl) countEl.textContent = state.screenshots.length + ' / ' + maxShots;
     if (!box || !remove) return;
     const token = ++shotPreviewToken;
     box.innerHTML = '';
-    state.screenshotPreview = '';
 
-    if (!state.screenshot) {
+    if (!state.screenshots.length) {
       box.classList.remove('has');
       remove.classList.add('hidden');
       return;
@@ -3787,78 +4803,149 @@
 
     box.classList.add('has');
     remove.classList.remove('hidden');
-    const loading = document.createElement('span');
-    loading.className = 'shot-loading';
-    loading.textContent = 'Загрузка…';
-    box.appendChild(loading);
 
-    store.screenshotSource(state.screenshot).then(function (source) {
-      if (token !== shotPreviewToken) return;
-      box.innerHTML = '';
-      if (!source) {
-        const missing = document.createElement('span');
-        missing.className = 'shot-loading';
-        missing.textContent = 'Файл скриншота не найден';
-        box.appendChild(missing);
-        return;
-      }
-      state.screenshotPreview = source;
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.className = 'shot-open';
-      button.title = 'Открыть скриншот на весь экран';
-      button.setAttribute('aria-label', 'Открыть скриншот в полном размере');
-      button.addEventListener('click', openShotLightbox);
-      const image = document.createElement('img');
-      image.src = source;
-      image.alt = 'Скриншот сделки';
-      button.appendChild(image);
-      box.appendChild(button);
-    }).catch(function () {
-      if (token !== shotPreviewToken) return;
-      box.innerHTML = '<span class="shot-loading">Не удалось загрузить скриншот</span>';
+    state.screenshots.forEach(function (item, index) {
+      const card = document.createElement('div');
+      card.className = 'shot-card';
+
+      const delBtn = document.createElement('button');
+      delBtn.type = 'button';
+      delBtn.className = 'shot-del';
+      delBtn.title = T('Удалить скриншот');
+      delBtn.setAttribute('aria-label', T('Удалить скриншот'));
+      delBtn.textContent = '×';
+      delBtn.addEventListener('click', function () { removeShotAt(index); });
+      card.appendChild(delBtn);
+
+      const loading = document.createElement('span');
+      loading.className = 'shot-loading';
+      loading.textContent = T('Загрузка…');
+      card.appendChild(loading);
+
+      const select = document.createElement('select');
+      select.className = 'shot-label-select';
+      select.setAttribute('aria-label', T('Метка скриншота'));
+      const currentLabel = item.label || '';
+      const optionsList = SHOT_LABEL_OPTIONS.slice();
+      if (currentLabel && optionsList.indexOf(currentLabel) === -1) optionsList.push(currentLabel);
+      optionsList.forEach(function (optVal) {
+        const opt = document.createElement('option');
+        opt.value = optVal;
+        opt.textContent = optVal ? T(optVal) : T('Без метки');
+        select.appendChild(opt);
+      });
+      select.value = currentLabel;
+      select.addEventListener('change', function () {
+        if (!state.screenshots[index]) return;
+        state.screenshots[index].label = select.value;
+        syncTradeDirty();
+      });
+      card.appendChild(select);
+      box.appendChild(card);
+
+      store.screenshotSource(item.src).then(function (source) {
+        if (token !== shotPreviewToken || !document.contains(card)) return;
+        card.removeChild(loading);
+        if (!source) {
+          const missing = document.createElement('span');
+          missing.className = 'shot-loading';
+          missing.textContent = T('Файл скриншота не найден');
+          card.insertBefore(missing, select);
+          return;
+        }
+        state.screenshotPreviews[item.src] = source;
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'shot-open';
+        button.title = T('Открыть скриншот на весь экран');
+        button.setAttribute('aria-label', T('Открыть скриншот в полном размере'));
+        button.addEventListener('click', function () { openShotLightbox(index); });
+        const image = document.createElement('img');
+        image.src = source;
+        image.alt = item.label || T('Скриншот сделки');
+        button.appendChild(image);
+        card.insertBefore(button, select);
+      }).catch(function () {
+        if (token !== shotPreviewToken || !document.contains(card)) return;
+        loading.textContent = T('Не удалось загрузить скриншот');
+      });
     });
   }
 
-  function openScreenshotLightbox(value, focusElement) {
-    if (!value) return;
+  function renderLightboxCurrent() {
+    const lightbox = $('#shotLightbox');
+    const image = $('#shotLightboxImage');
+    if (!lightbox || !image || !state.lightboxItems.length) return;
+    const item = state.lightboxItems[state.lightboxIndex] || state.lightboxItems[0];
+    const total = state.lightboxItems.length;
+    const prevBtn = $('#shotLightboxPrev');
+    const nextBtn = $('#shotLightboxNext');
+    const bar = $('#shotLightboxBar');
+    const captionEl = $('#shotLightboxCaption');
+    const counterEl = $('#shotLightboxCounter');
+    if (prevBtn) prevBtn.hidden = total <= 1;
+    if (nextBtn) nextBtn.hidden = total <= 1;
+    if (bar) bar.hidden = total <= 1 && !item.label;
+    if (captionEl) captionEl.textContent = item.label ? T(item.label) : '';
+    if (counterEl) counterEl.textContent = total > 1 ? (state.lightboxIndex + 1) + ' / ' + total : '';
+
+    const token = ++shotLightboxToken;
+    const cached = state.screenshotPreviews[item.src];
+    if (cached) {
+      image.src = cached;
+      image.alt = item.label ? T(item.label) : T('Скриншот сделки');
+      return;
+    }
+    image.removeAttribute('src');
+    image.alt = T('Загрузка скриншота');
+    store.screenshotSource(item.src).then(function (source) {
+      if (token !== shotLightboxToken || lightbox.hidden || !source) return;
+      image.src = source;
+      image.alt = item.label ? T(item.label) : T('Скриншот сделки');
+    });
+  }
+
+  function stepLightbox(delta) {
+    if (state.lightboxItems.length <= 1) return;
+    const len = state.lightboxItems.length;
+    state.lightboxIndex = (state.lightboxIndex + delta + len) % len;
+    renderLightboxCurrent();
+  }
+
+  function openScreenshotLightbox(itemsOrValue, startIndexOrFocus, maybeFocusElement) {
+    let items = [];
+    let startIndex = 0;
+    let focusElement = maybeFocusElement;
+    if (Array.isArray(itemsOrValue)) {
+      items = itemsOrValue.filter(function (item) { return item && item.src; });
+      if (typeof startIndexOrFocus === 'number') startIndex = startIndexOrFocus;
+      else focusElement = startIndexOrFocus;
+    } else if (typeof itemsOrValue === 'string' && itemsOrValue) {
+      items = [{ src: itemsOrValue, label: '' }];
+      focusElement = startIndexOrFocus;
+    }
+    if (!items.length) return;
     const lightbox = $('#shotLightbox');
     const image = $('#shotLightboxImage');
     if (!lightbox || !image) return;
     state.shotFocus = focusElement || document.activeElement;
-    const token = ++shotLightboxToken;
-    image.removeAttribute('src');
-    image.alt = 'Загрузка скриншота';
+    state.lightboxItems = items;
+    state.lightboxIndex = Math.max(0, Math.min(items.length - 1, startIndex || 0));
     lightbox.hidden = false;
     $('#shotLightboxClose').focus();
-    store.screenshotSource(value).then(function (source) {
-      if (token !== shotLightboxToken || lightbox.hidden || !source) return;
-      image.src = source;
-      image.alt = 'Скриншот сделки';
-    });
+    renderLightboxCurrent();
   }
 
-  function openShotLightbox() {
-    if (!state.screenshot) return;
-    if (state.screenshotPreview) {
-      const lightbox = $('#shotLightbox');
-      const image = $('#shotLightboxImage');
-      if (!lightbox || !image) return;
-      state.shotFocus = document.activeElement;
-      shotLightboxToken++;
-      image.src = state.screenshotPreview;
-      image.alt = 'Скриншот сделки';
-      lightbox.hidden = false;
-      $('#shotLightboxClose').focus();
-      return;
-    }
-    openScreenshotLightbox(state.screenshot, document.activeElement);
+  function openShotLightbox(startIndex) {
+    if (!state.screenshots.length) return;
+    openScreenshotLightbox(state.screenshots, typeof startIndex === 'number' ? startIndex : 0, document.activeElement);
   }
 
   function openTradeScreenshot(tradeId, focusElement) {
     const trade = store.state.trades.find(function (item) { return item.id === tradeId; });
-    if (!trade || !trade.screenshot) return;
-    openScreenshotLightbox(trade.screenshot, focusElement);
+    const shots = store.tradeScreenshots(trade);
+    if (!shots.length) return;
+    openScreenshotLightbox(shots, 0, focusElement);
   }
 
   function closeShotLightbox() {
@@ -3866,6 +4953,8 @@
     const lightbox = $('#shotLightbox');
     if (!lightbox || lightbox.hidden) return;
     lightbox.hidden = true;
+    state.lightboxItems = [];
+    state.lightboxIndex = 0;
     $('#shotLightboxImage').removeAttribute('src');
     let focus = state.shotFocus;
     state.shotFocus = null;
@@ -3877,21 +4966,34 @@
     }
   }
 
-  async function applyScreenshot(dataUrl) {
-    if (state.screenshotBusy) return;
-    state.screenshotBusy = true;
+  function setScreenshotBusy(busy) {
+    state.screenshotBusy = !!busy;
     const saveButton = $('#saveTradeBtn');
-    if (saveButton) saveButton.disabled = true;
+    if (saveButton && !state.tradeSaving) saveButton.disabled = state.screenshotBusy;
+  }
+
+  async function applyScreenshot(dataUrl, options) {
+    const busyHeld = !!(options && options.busyHeld);
+    const maxShots = store.MAX_SCREENSHOTS || 4;
+    if (state.screenshots.length >= maxShots) {
+      if (busyHeld) setScreenshotBusy(false);
+      toast(T('Максимум {max} скриншота на сделку.').replace('{max}', maxShots), 'warn', null, { skip: true });
+      return;
+    }
+    if (!busyHeld && state.screenshotBusy) return;
+    setScreenshotBusy(true);
     try {
-      state.screenshot = await store.saveScreenshot(dataUrl);
+      const ref = await store.saveScreenshot(dataUrl);
+      if (state.screenshots.length < maxShots) {
+        state.screenshots.push({ src: ref, label: '' });
+      }
       renderShotPreview();
       syncTradeDirty();
       toast('Скриншот добавлен');
     } catch (err) {
       toast(err && err.message ? err.message : 'Не удалось сохранить скриншот.', 'error');
     } finally {
-      state.screenshotBusy = false;
-      if (saveButton && !state.tradeSaving) saveButton.disabled = false;
+      setScreenshotBusy(false);
     }
   }
 
@@ -3927,39 +5029,77 @@
   }
 
   function compressScreenshot(file) {
-    if (!file) return;
+    if (!file) return Promise.resolve();
+    const maxShots = store.MAX_SCREENSHOTS || 4;
+    if (state.screenshots.length >= maxShots) {
+      toast(T('Максимум {max} скриншота на сделку.').replace('{max}', maxShots), 'warn', null, { skip: true });
+      return Promise.resolve();
+    }
+    if (state.screenshotBusy) {
+      toast('Дождитесь окончания сохранения скриншота.', 'warn');
+      return Promise.resolve();
+    }
+    if (!/^image\//.test(file.type)) {
+      toast('Можно прикрепить только изображение.', 'error');
+      return Promise.resolve();
+    }
+    setScreenshotBusy(true);
+    return new Promise(function (resolve) {
+      const reader = new FileReader();
+      reader.onload = function () {
+        const image = new Image();
+        image.onload = function () {
+          const maxSide = desktop ? SHOT_MAX_SIDE_DESKTOP : SHOT_MAX_SIDE_WEB;
+          const scale = Math.min(1, maxSide / Math.max(image.width, image.height));
+          const canvas = document.createElement('canvas');
+          canvas.width = Math.max(1, Math.round(image.width * scale));
+          canvas.height = Math.max(1, Math.round(image.height * scale));
+          const ctx = canvas.getContext('2d');
+          ctx.imageSmoothingEnabled = true;
+          ctx.imageSmoothingQuality = 'high';
+          ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+          let dataUrl;
+          try {
+            dataUrl = encodeScreenshot(canvas);
+          } catch (err) {
+            setScreenshotBusy(false);
+            toast('Не удалось обработать изображение.', 'error');
+            resolve();
+            return;
+          }
+          Promise.resolve(applyScreenshot(dataUrl, { busyHeld: true })).then(resolve, resolve);
+        };
+        image.onerror = function () {
+          setScreenshotBusy(false);
+          toast('Не удалось открыть изображение.', 'error');
+          resolve();
+        };
+        image.src = String(reader.result);
+      };
+      reader.onerror = function () {
+        setScreenshotBusy(false);
+        toast('Не удалось прочитать файл.', 'error');
+        resolve();
+      };
+      reader.readAsDataURL(file);
+    });
+  }
+
+  async function compressScreenshots(fileList) {
+    const files = Array.prototype.slice.call(fileList || []);
+    if (!files.length) return;
     if (state.screenshotBusy) {
       toast('Дождитесь окончания сохранения скриншота.', 'warn');
       return;
     }
-    if (!/^image\//.test(file.type)) {
-      toast('Можно прикрепить только изображение.', 'error');
-      return;
+    const maxShots = store.MAX_SCREENSHOTS || 4;
+    for (const file of files) {
+      if (state.screenshots.length >= maxShots) {
+        toast(T('Максимум {max} скриншота на сделку.').replace('{max}', maxShots), 'warn', null, { skip: true });
+        break;
+      }
+      await compressScreenshot(file);
     }
-    const reader = new FileReader();
-    reader.onload = function () {
-      const image = new Image();
-      image.onload = function () {
-        const maxSide = desktop ? SHOT_MAX_SIDE_DESKTOP : SHOT_MAX_SIDE_WEB;
-        const scale = Math.min(1, maxSide / Math.max(image.width, image.height));
-        const canvas = document.createElement('canvas');
-        canvas.width = Math.max(1, Math.round(image.width * scale));
-        canvas.height = Math.max(1, Math.round(image.height * scale));
-        const ctx = canvas.getContext('2d');
-        ctx.imageSmoothingEnabled = true;
-        ctx.imageSmoothingQuality = 'high';
-        ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
-        try {
-          applyScreenshot(encodeScreenshot(canvas));
-        } catch (err) {
-          toast('Не удалось обработать изображение.', 'error');
-        }
-      };
-      image.onerror = function () { toast('Не удалось открыть изображение.', 'error'); };
-      image.src = String(reader.result);
-    };
-    reader.onerror = function () { toast('Не удалось прочитать файл.', 'error'); };
-    reader.readAsDataURL(file);
   }
 
   async function pasteScreenshotFromClipboard() {
@@ -4066,33 +5206,52 @@
     if (remainingEl) {
       const epsilon = store.QTY_EPSILON || 1e-9;
       if (qty === null || qty <= 0) remainingEl.textContent = '—';
-      else if (!exits.length) remainingEl.textContent = U.qty(qty) + ' открыто';
-      else if (remaining <= epsilon) remainingEl.textContent = 'Закрыта';
-      else remainingEl.textContent = U.qty(remaining) + ' остаток';
+      else if (!exits.length) remainingEl.textContent = U.qty(qty) + ' ' + T('открыто');
+      else if (remaining <= epsilon) remainingEl.textContent = T('Закрыта');
+      else remainingEl.textContent = U.qty(remaining) + ' ' + T('остаток');
       remainingEl.className = remaining !== null && remaining > epsilon && exits.length ? 'neutral' : '';
     }
     updateExitsSummary();
+    renderPositionHistory();
+    renderFeePresets();
   }
 
-  function collectExitRows(tradeDate) {
-    const exits = [];
-    for (let i = 0; i < state.tradeExits.length; i++) {
-      const row = state.tradeExits[i];
+  function collectLegRows(rows, tradeDate, kind) {
+    const isEntry = kind === 'entry';
+    const items = [];
+    for (let i = 0; i < (rows || []).length; i++) {
+      const row = rows[i];
       const qtyRaw = String(row.qty === undefined || row.qty === null ? '' : row.qty).trim();
       const priceRaw = String(row.price === undefined || row.price === null ? '' : row.price).trim();
-      if (!qtyRaw && !priceRaw && !row.date) continue;
+      if (!qtyRaw && !priceRaw) continue;
       const qty = U.parseNum(qtyRaw);
       const price = U.parseNum(priceRaw);
-      if (qty === null || qty <= 0) return { error: 'Выход ' + (i + 1) + ': количество должно быть больше нуля.' };
-      if (price === null) return { error: 'Выход ' + (i + 1) + ': укажите цену выхода.' };
-      exits.push({
+      if (qty === null || qty <= 0) {
+        return {
+          error: T(isEntry ? 'Вход {index}: количество должно быть больше нуля.' : 'Выход {index}: количество должно быть больше нуля.').replace('{index}', i + 1)
+        };
+      }
+      if (price === null) {
+        return {
+          error: T(isEntry ? 'Вход {index}: укажите цену входа.' : 'Выход {index}: укажите цену выхода.').replace('{index}', i + 1)
+        };
+      }
+      items.push({
         id: row.id,
         qty: qty,
         price: price,
         date: row.date || tradeDate
       });
     }
-    return { exits: exits };
+    return isEntry ? { entries: items } : { exits: items };
+  }
+
+  function collectEntryRows(tradeDate) {
+    return collectLegRows(state.tradeEntries, tradeDate, 'entry');
+  }
+
+  function collectExitRows(tradeDate) {
+    return collectLegRows(state.tradeExits, tradeDate, 'exit');
   }
 
   async function saveTrade(event) {
@@ -4105,8 +5264,15 @@
 
     const date = $('#tradeDate').value;
     const symbol = $('#tradeSymbol').value.trim().toUpperCase();
-    const entry = U.parseNum($('#tradeEntry').value);
-    const qty = U.parseNum($('#tradeQty').value);
+    const collectedEntries = collectEntryRows(date);
+    const entries = collectedEntries.entries || [];
+    let entry = U.parseNum($('#tradeEntry').value);
+    let qty = U.parseNum($('#tradeQty').value);
+    if (entries.length) {
+      const entryTotals = entryRowsTotals();
+      entry = entryTotals.entry;
+      qty = entryTotals.qty;
+    }
     const multiplierRaw = $('#tradeMultiplier').value.trim();
     const multiplier = multiplierRaw === '' ? 1 : U.parseNum(multiplierRaw);
     const stopRaw = $('#tradeStop').value.trim();
@@ -4120,7 +5286,7 @@
     const collected = collectExitRows(date);
     const exits = collected.exits || [];
 
-    let error = collected.error || '';
+    let error = collectedEntries.error || collected.error || '';
     if (!error && !date) error = 'Укажите дату сделки.';
     else if (!error && !symbol) error = 'Укажите инструмент (например, EURUSD).';
     else if (!error && entry === null) error = 'Укажите цену входа.';
@@ -4138,7 +5304,7 @@
 
     if (error) {
       $('#tradeError').hidden = false;
-      $('#tradeError').textContent = error;
+      $('#tradeError').textContent = T(error);
       return;
     }
 
@@ -4149,6 +5315,7 @@
     state.tradeSaving = true;
     if (saveButton) saveButton.disabled = true;
 
+    let rollbackTrade = null;
     try {
       if (!existing) {
         const limitWarning = dailyLimitWarning(date);
@@ -4163,12 +5330,23 @@
         }
       }
 
-      let screenshot = state.screenshot || '';
-      if (desktop && screenshot && !/^file:screenshots\//i.test(screenshot)) {
-        screenshot = await store.saveScreenshot(screenshot);
-        state.screenshot = screenshot;
-        renderShotPreview();
+      const screenshots = state.screenshots.map(function (item) {
+        return { src: item.src, label: item.label || '' };
+      });
+      if (desktop && screenshots.length) {
+        let converted = false;
+        for (const item of screenshots) {
+          if (item.src && !/^file:screenshots\//i.test(item.src)) {
+            item.src = await store.saveScreenshot(item.src);
+            converted = true;
+          }
+        }
+        if (converted) {
+          state.screenshots = screenshots.map(function (item) { return Object.assign({}, item); });
+          renderShotPreview();
+        }
       }
+      const screenshot = screenshots[0] ? screenshots[0].src : '';
 
       const trade = store.normalizeTrade({
         id: existing ? existing.id : U.uid(),
@@ -4184,34 +5362,65 @@
         qty: qty,
         multiplier: multiplier,
         fees: fees,
+        entries: entries,
         exits: exits,
         setup: $('#tradeSetup').value.trim(),
         emotion: $('#tradeEmotion').value,
         discipline: Number($('#tradeDiscipline').value) || 0,
         tags: splitTags($('#tradeTags').value),
         notes: $('#tradeNotes').value.trim(),
-        screenshot: screenshot
+        checklist: state.tradeChecklist.map(function (item) {
+          return { text: item.text, done: !!item.done };
+        }),
+        screenshot: screenshot,
+        screenshots: screenshots
       }, { timeZone: accountTimeZone() });
       if (!trade) throw new Error('Не удалось подготовить сделку к сохранению.');
 
+      const prevDemo = store.state.demo;
+      let existingIndex = -1;
+      let previousTrade = null;
+      let mutated = false;
+      rollbackTrade = function () {
+        if (!mutated) return;
+        mutated = false;
+        if (existing) {
+          if (existingIndex !== -1 && previousTrade) store.state.trades[existingIndex] = previousTrade;
+        } else {
+          const addedIndex = store.state.trades.lastIndexOf(trade);
+          if (addedIndex !== -1) store.state.trades.splice(addedIndex, 1);
+        }
+        store.state.demo = prevDemo;
+      };
+
       if (existing) {
-        const index = store.state.trades.findIndex(function (t) { return t.id === existing.id; });
-        if (index !== -1) store.state.trades[index] = trade;
+        existingIndex = store.state.trades.findIndex(function (t) { return t.id === existing.id; });
+        if (existingIndex !== -1) {
+          previousTrade = store.state.trades[existingIndex];
+          store.state.trades[existingIndex] = trade;
+          mutated = true;
+        }
       } else {
         store.state.trades.push(trade);
-        state.tradeId = trade.id;
-        $('#tradeModalTitleText').textContent = 'Редактировать сделку';
-        $('#deleteTradeBtn').classList.remove('hidden');
-        $('#saveTradeBtn').textContent = 'Сохранить изменения';
+        mutated = true;
       }
 
       store.state.demo = false;
       const ok = await persist();
       if (!ok) {
+        rollbackTrade();
         $('#tradeError').hidden = false;
-        $('#tradeError').textContent = 'Сделка добавлена в текущую сессию, но сохранить её не удалось. Проверьте свободное место и папку данных, затем попробуйте ещё раз.';
+        $('#tradeError').textContent = T('Не удалось сохранить сделку. Проверьте свободное место и папку данных, затем попробуйте ещё раз.');
         saveDraftNow();
         return;
+      }
+      mutated = false;
+
+      if (!existing) {
+        state.tradeId = trade.id;
+        $('#tradeModalTitleText').textContent = T('Редактировать сделку');
+        $('#deleteTradeBtn').classList.remove('hidden');
+        $('#saveTradeBtn').textContent = T('Сохранить изменения');
       }
 
       clearTradeDraft(draftTradeId, accountId);
@@ -4219,16 +5428,19 @@
       clearTradeDraft(trade.id, accountId);
       state.tradeDirty = false;
       state.tradeBaseline = tradeFieldsFromTrade(trade);
-      state.tradeBaselineScreenshot = trade.screenshot || '';
-      state.screenshot = trade.screenshot || '';
+      state.tradeBaselineScreenshots = store.tradeScreenshots(trade);
+      state.screenshots = state.tradeBaselineScreenshots.map(function (item) {
+        return { src: item.src, label: item.label || '' };
+      });
       state.tradeId = trade.id;
       updateDraftUi();
       closeModal('tradeModal');
       renderAll();
       toast(existing ? 'Сделка обновлена' : 'Сделка добавлена');
     } catch (err) {
+      if (rollbackTrade) rollbackTrade();
       $('#tradeError').hidden = false;
-      $('#tradeError').textContent = err && err.message ? err.message : 'Не удалось сохранить сделку.';
+      $('#tradeError').textContent = T(err && err.message ? err.message : 'Не удалось сохранить сделку.');
       saveDraftNow();
     } finally {
       state.tradeSaving = false;
@@ -4271,8 +5483,9 @@
     applyTradeFields(state.tradeBaseline || tradeFieldsFromTrade(null));
     state.tradeDirty = false;
     updateDraftUi();
-    renderShotPreview();
     updateTradePreview();
+    renderFeePresets();
+    renderShotPreview();
     toast('Черновик сброшен');
   }
 
@@ -4366,7 +5579,7 @@
     else if (!text) error = 'Запись не может быть пустой.';
     if (error) {
       $('#noteError').hidden = false;
-      $('#noteError').textContent = error;
+      $('#noteError').textContent = T(error);
       return;
     }
 
@@ -4389,14 +5602,14 @@
       state.noteId = note.id;
       $('#noteModalTitle').textContent = T(note ? 'Редактировать запись' : 'Новая запись');
       $('#deleteNoteBtn').classList.remove('hidden');
-      $('#saveNoteBtn').textContent = 'Сохранить изменения';
+      $('#saveNoteBtn').textContent = T('Сохранить изменения');
     }
 
     store.state.demo = false;
     const ok = await persist();
     if (!ok) {
       $('#noteError').hidden = false;
-      $('#noteError').textContent = 'Запись сохранена в текущей сессии, но сохранить её не удалось. Проверьте свободное место и папку данных.';
+      $('#noteError').textContent = T('Запись сохранена в текущей сессии, но сохранить её не удалось. Проверьте свободное место и папку данных.');
       return;
     }
     closeModal('noteModal');
@@ -4455,15 +5668,66 @@
     document.body.classList.toggle('modal-open', anyModalOpen());
   }
 
+  function focusableElements(container) {
+    if (!container || typeof container.querySelectorAll !== 'function') return [];
+    const selector = 'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+    return Array.prototype.slice.call(container.querySelectorAll(selector)).filter(function (el) {
+      if (typeof el.closest === 'function' && (el.closest('[hidden]') || el.closest('.hidden'))) return false;
+      if (typeof window.getComputedStyle === 'function') {
+        const style = window.getComputedStyle(el);
+        if (style && (style.display === 'none' || style.visibility === 'hidden')) return false;
+      }
+      return true;
+    });
+  }
+
+  function trapFocusInContainer(event, container) {
+    if (!container) return;
+    const items = focusableElements(container);
+    if (!items.length) {
+      event.preventDefault();
+      return;
+    }
+    const first = items[0];
+    const last = items[items.length - 1];
+    const active = document.activeElement;
+    if (event.shiftKey) {
+      if (active === first || (typeof container.contains === 'function' && !container.contains(active))) {
+        event.preventDefault();
+        last.focus();
+      }
+    } else if (active === last || (typeof container.contains === 'function' && !container.contains(active))) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
+
+  function topOpenModal() {
+    for (let i = state.focusStack.length - 1; i >= 0; i--) {
+      const candidate = document.getElementById(state.focusStack[i].id);
+      if (candidate && !candidate.hidden) return candidate;
+    }
+    const open = $$('.modal').filter(function (modal) { return !modal.hidden; });
+    return open.length ? open[open.length - 1] : null;
+  }
+
   function openModal(id, focusSelector) {
     const modal = document.getElementById(id);
     if (!modal) return;
-    state.lastFocus = document.activeElement;
+    if (modal.hidden) {
+      state.focusStack.push({ id: id, trigger: document.activeElement });
+    }
     modal.hidden = false;
     syncModalClass();
     setTimeout(function () {
+      if (modal.hidden) return;
       const target = focusSelector ? $(focusSelector, modal) : null;
-      if (target) target.focus();
+      if (target) {
+        target.focus();
+      } else {
+        const items = focusableElements((typeof modal.querySelector === 'function' && modal.querySelector('.modal-panel')) || modal);
+        if (items.length) items[0].focus();
+      }
     }, 40);
   }
 
@@ -4477,8 +5741,18 @@
       resolve(false);
     }
     syncModalClass();
-    if (state.lastFocus && document.contains(state.lastFocus) && !anyModalOpen()) {
-      try { state.lastFocus.focus(); } catch (err) { /* ignore */ }
+    let entry = null;
+    for (let i = state.focusStack.length - 1; i >= 0; i--) {
+      if (state.focusStack[i].id === id) {
+        entry = state.focusStack.splice(i, 1)[0];
+        break;
+      }
+    }
+    const trigger = entry && entry.trigger;
+    const isHiddenModal = trigger && typeof trigger.closest === 'function' && trigger.closest('.modal[hidden]');
+    const inDoc = trigger && (typeof document.contains !== 'function' || document.contains(trigger));
+    if (trigger && trigger !== document.body && inDoc && !isHiddenModal) {
+      try { trigger.focus(); } catch (err) { /* ignore */ }
     }
   }
 
@@ -4495,8 +5769,7 @@
       $('#confirmText').textContent = options.textReady ? (options.text || '') : T(options.text || '');
       $('#confirmOk').textContent = T(options.okLabel || 'Подтвердить');
       $('#confirmOk').className = 'btn ' + (options.danger === false ? 'btn-primary' : 'btn-danger');
-      openModal('confirmModal');
-      setTimeout(function () { $('#confirmCancel').focus(); }, 40);
+      openModal('confirmModal', '#confirmCancel');
     });
   }
 
@@ -4523,7 +5796,8 @@
       if (VIEW_META[view] && view !== state.view) navigate(view, { push: false });
     });
     window.addEventListener('resize', U.debounce(function () {
-      if (state.view === 'dashboard') renderDashboard();
+      if (state.view === 'dashboard') redrawDashboardCharts();
+      else if (state.view === 'analytics') redrawAnalyticsCharts();
     }, 220));
     window.addEventListener('tj:download-error', function (event) {
       toast(event.detail || 'Не удалось сохранить файл.', 'error');
@@ -4547,6 +5821,31 @@
     $('#sidebarAccountSelect').addEventListener('change', function (event) { switchAccount(event.target.value); });
     $('#periodSelect').addEventListener('change', function (event) {
       state.period = event.target.value;
+      if (state.period === 'custom' && !state.periodFrom && !state.periodTo) {
+        const today = todayInAccount();
+        state.periodFrom = today.slice(0, 8) + '01';
+        state.periodTo = today;
+      }
+      renderPeriodControls();
+      renderCurrentView();
+    });
+    $('#periodFrom').addEventListener('change', function (event) {
+      state.periodFrom = event.target.value || '';
+      state.period = 'custom';
+      renderPeriodControls();
+      renderCurrentView();
+    });
+    $('#periodTo').addEventListener('change', function (event) {
+      state.periodTo = event.target.value || '';
+      state.period = 'custom';
+      renderPeriodControls();
+      renderCurrentView();
+    });
+    $('#dateModeSegmented').addEventListener('click', function (event) {
+      const btn = event.target.closest('[data-date-mode]');
+      if (!btn) return;
+      state.dateMode = btn.dataset.dateMode === 'exit' ? 'exit' : 'entry';
+      renderPeriodControls();
       renderCurrentView();
     });
 
@@ -4570,7 +5869,7 @@
           return;
         }
         clearAccountDrafts(store.state.activeAccountId);
-        state.calCursor = monthStart(new Date());
+        state.calCursor = accountMonthStart();
         state.selectedDay = todayInAccount();
         renderAll();
         toast('Демо-данные удалены. Добро пожаловать в собственный журнал!');
@@ -4586,14 +5885,45 @@
     $('#filterResult').addEventListener('change', function (event) { state.filters.result = event.target.value; state.page = 1; renderTrades(); });
     $('#filterSetup').addEventListener('change', function (event) { state.filters.setup = event.target.value; state.page = 1; renderTrades(); });
     $('#clearFilters').addEventListener('click', resetFilters);
-    $('#tradesTable').querySelector('thead').addEventListener('click', function (event) {
-      const th = event.target.closest('th[data-sort]');
+    if ($('#journalSearch')) {
+      $('#journalSearch').addEventListener('input', U.debounce(function (event) {
+        state.journalFilters.search = event.target.value.trim().toLowerCase();
+        renderJournal();
+      }, 160));
+    }
+    if ($('#journalMoodFilter')) {
+      $('#journalMoodFilter').addEventListener('change', function (event) {
+        state.journalFilters.mood = event.target.value;
+        renderJournal();
+      });
+    }
+    if ($('#journalTagFilter')) {
+      $('#journalTagFilter').addEventListener('change', function (event) {
+        state.journalFilters.tag = event.target.value;
+        renderJournal();
+      });
+    }
+    if ($('#clearJournalFilters')) {
+      $('#clearJournalFilters').addEventListener('click', resetJournalFilters);
+    }
+    const tradesHead = $('#tradesTable').querySelector('thead');
+    function toggleTradeSort(th) {
       if (!th) return;
       const key = th.dataset.sort;
       if (state.sort.key === key) state.sort.dir = state.sort.dir === 'desc' ? 'asc' : 'desc';
       else { state.sort.key = key; state.sort.dir = 'desc'; }
       state.page = 1;
       renderTrades();
+    }
+    tradesHead.addEventListener('click', function (event) {
+      toggleTradeSort(event.target.closest('th[data-sort]'));
+    });
+    tradesHead.addEventListener('keydown', function (event) {
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      const th = event.target.closest('th[data-sort]');
+      if (!th) return;
+      event.preventDefault();
+      toggleTradeSort(th);
     });
     $('#tradesFooter').addEventListener('click', function (event) {
       const button = event.target.closest('button[data-page]');
@@ -4603,6 +5933,7 @@
     });
     $('#tradesTbody').addEventListener('keydown', function (event) {
       if (event.key !== 'Enter' && event.key !== ' ') return;
+      if (event.target.closest('button, a, input, select, textarea, [data-open-shot]')) return;
       const row = event.target.closest('tr[data-open-trade]');
       if (row) { event.preventDefault(); openTradeModal(row.dataset.openTrade); }
     });
@@ -4637,7 +5968,7 @@
     $('#calPrev').addEventListener('click', function () { changeMonth(-1); });
     $('#calNext').addEventListener('click', function () { changeMonth(1); });
     $('#calToday').addEventListener('click', function () {
-      state.calCursor = monthStart(new Date());
+      state.calCursor = accountMonthStart();
       state.selectedDay = todayInAccount();
       renderCalendar();
     });
@@ -4648,6 +5979,30 @@
     $('#settingsForm').addEventListener('submit', saveSettings);
     $('#profileForm').addEventListener('submit', saveProfile);
     $('#addSessionBtn').addEventListener('click', addSessionRow);
+    if ($('#addChecklistRuleBtn')) $('#addChecklistRuleBtn').addEventListener('click', function () { addChecklistRuleRow(''); });
+    if ($('#loadStarterChecklistBtn')) $('#loadStarterChecklistBtn').addEventListener('click', loadStarterChecklistRules);
+    if ($('#checklistSettings')) {
+      $('#checklistSettings').addEventListener('click', function (event) {
+        const button = event.target.closest('[data-remove-rule]');
+        if (!button) return;
+        const row = button.closest('.checklist-setting-row');
+        if (row) row.remove();
+        if (!$$('#checklistSettings .checklist-setting-row').length) renderChecklistSettings([]);
+      });
+    }
+    if ($('#tradeChecklistBox')) {
+      $('#tradeChecklistBox').addEventListener('change', function (event) {
+        const input = event.target.closest('[data-check-idx]');
+        if (!input) return;
+        const idx = Number(input.dataset.checkIdx);
+        if (!state.tradeChecklist[idx]) return;
+        state.tradeChecklist[idx].done = !!input.checked;
+        const row = input.closest('.checklist-item');
+        if (row) row.classList.toggle('is-done', !!input.checked);
+        syncTradeChecklistProgress();
+        syncTradeDirty();
+      });
+    }
     $('#settingTimezone').addEventListener('change', renderClockSettings);
     $('#sessionSettings').addEventListener('input', renderClockSettings);
     $('#sessionSettings').addEventListener('click', function (event) {
@@ -4709,6 +6064,9 @@
     $('#profileName').addEventListener('input', function () {
       if (!state.profileAvatarDraft) renderProfileAvatar();
     });
+    $('#uploadAvatarBtn').addEventListener('click', function () {
+      $('#profileAvatarInput').click();
+    });
     $('#profileAvatarInput').addEventListener('change', function (event) {
       const file = event.target.files && event.target.files[0];
       compressAvatar(file);
@@ -4739,6 +6097,62 @@
       if (!button) return;
       setSide(button.dataset.side);
       syncTradeDirty();
+    });
+    $('#stopToBeBtn').addEventListener('click', moveStopToBreakeven);
+    $('#saveFeePresetBtn').addEventListener('click', saveFeePreset);
+    $('#feePresetsBar').addEventListener('click', function (event) {
+      const removeBtn = event.target.closest('[data-remove-fee-preset]');
+      if (removeBtn) {
+        event.stopPropagation();
+        removeFeePreset(Number(removeBtn.dataset.removeFeePreset));
+        return;
+      }
+      const chip = event.target.closest('[data-fee-value]');
+      if (!chip) return;
+      const val = Number(chip.dataset.feeValue);
+      $('#tradeFees').value = val === 0 ? '0' : String(val);
+      renderFeePresets();
+      updateTradePreview();
+      syncTradeDirty();
+    });
+    $('#feePresetsBar').addEventListener('keydown', function (event) {
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      const chip = event.target.closest('[data-fee-value]');
+      if (!chip || event.target.closest('[data-remove-fee-preset]')) return;
+      event.preventDefault();
+      const val = Number(chip.dataset.feeValue);
+      $('#tradeFees').value = val === 0 ? '0' : String(val);
+      renderFeePresets();
+      updateTradePreview();
+      syncTradeDirty();
+    });
+    $('#addEntryBtn').addEventListener('click', function () { addEntryRow(); });
+    $('#entriesEditor').addEventListener('input', function (event) {
+      const row = event.target.closest('[data-entry-index]');
+      const field = event.target.dataset.entryField;
+      if (!row || !field) return;
+      const index = Number(row.dataset.entryIndex);
+      if (!state.tradeEntries[index]) return;
+      state.tradeEntries[index][field] = event.target.value;
+      syncEntryAggregate();
+      updateTradePreview();
+      syncTradeDirty();
+    });
+    $('#entriesEditor').addEventListener('change', function (event) {
+      const row = event.target.closest('[data-entry-index]');
+      const field = event.target.dataset.entryField;
+      if (!row || !field) return;
+      const index = Number(row.dataset.entryIndex);
+      if (!state.tradeEntries[index]) return;
+      state.tradeEntries[index][field] = event.target.value;
+      syncEntryAggregate();
+      updateTradePreview();
+      syncTradeDirty();
+    });
+    $('#entriesEditor').addEventListener('click', function (event) {
+      const button = event.target.closest('[data-remove-entry]');
+      if (!button) return;
+      removeEntryRow(Number(button.dataset.removeEntry));
     });
     $('#addExitBtn').addEventListener('click', function () { addExitRow(); });
     $('#closeRemainingBtn').addEventListener('click', closeRemainingExit);
@@ -4775,10 +6189,15 @@
       setDiscipline(current === value ? 0 : value);
       syncTradeDirty();
     });
+    $('#uploadShotBtn').addEventListener('click', function () {
+      $('#tradeShot').click();
+    });
     $('#tradeShot').addEventListener('change', function (event) {
-      const file = event.target.files && event.target.files[0];
-      compressScreenshot(file);
-      event.target.value = '';
+      const input = event.target;
+      const files = Array.prototype.slice.call(input.files || []);
+      Promise.resolve(compressScreenshots(files)).finally(function () {
+        input.value = '';
+      });
     });
     $('#pasteShot').addEventListener('click', pasteScreenshotFromClipboard);
     $('#removeShot').addEventListener('click', function () {
@@ -4786,13 +6205,15 @@
         toast('Скриншот ещё сохраняется, подождите пару секунд.', 'warn');
         return;
       }
-      state.screenshot = '';
-      state.screenshotPreview = '';
+      state.screenshots = [];
+      state.screenshotPreviews = {};
       renderShotPreview();
       syncTradeDirty();
     });
     $('#shotLightboxClose').addEventListener('click', closeShotLightbox);
     $('#shotLightboxBackdrop').addEventListener('click', closeShotLightbox);
+    $('#shotLightboxPrev').addEventListener('click', function () { stepLightbox(-1); });
+    $('#shotLightboxNext').addEventListener('click', function () { stepLightbox(1); });
 
     const shotField = $('#shotField');
     ['dragenter', 'dragover'].forEach(function (type) {
@@ -4812,8 +6233,9 @@
     shotField.addEventListener('drop', function (event) {
       event.preventDefault();
       shotField.classList.remove('is-dragover');
-      const file = event.dataTransfer && event.dataTransfer.files && event.dataTransfer.files[0];
-      if (file) compressScreenshot(file);
+      if (event.dataTransfer && event.dataTransfer.files && event.dataTransfer.files.length) {
+        compressScreenshots(event.dataTransfer.files);
+      }
     });
     $('#tradeForm').addEventListener('input', handleTradeFormChanged);
     $('#tradeForm').addEventListener('change', handleTradeFormChanged);
@@ -4864,6 +6286,7 @@
       const action = actionEl.dataset.action;
       if (action === 'new-trade') { openTradeModal(null, actionEl.dataset.date); return; }
       if (action === 'new-note') { openNoteModal(null, actionEl.dataset.date); return; }
+      if (action === 'clear-journal-filters') { resetJournalFilters(); return; }
     }
 
     const shotEl = event.target.closest('[data-open-shot]');
@@ -4908,14 +6331,32 @@
     const key = event.key;
     const withModifier = event.ctrlKey || event.metaKey;
     const open = $$('.modal').filter(function (modal) { return !modal.hidden; });
-    const topModal = open.length ? open[open.length - 1].id : '';
+    const topEl = topOpenModal();
+    const topModal = topEl ? topEl.id : '';
     const lightbox = $('#shotLightbox');
     const lightboxOpen = !!(lightbox && !lightbox.hidden);
+
+    if (key === 'Tab' && !withModifier && !event.altKey) {
+      if (lightboxOpen) {
+        trapFocusInContainer(event, $('.shot-lightbox-panel', lightbox) || lightbox);
+        return;
+      }
+      if (topEl) {
+        trapFocusInContainer(event, $('.modal-panel', topEl) || topEl);
+        return;
+      }
+    }
 
     if (!lightboxOpen && topModal === 'tradeModal' && withModifier
       && (key === 'Enter' || key.toLowerCase() === 's')) {
       event.preventDefault();
       $('#tradeForm').requestSubmit();
+      return;
+    }
+
+    if (lightboxOpen && (key === 'ArrowLeft' || key === 'ArrowRight')) {
+      event.preventDefault();
+      stepLightbox(key === 'ArrowLeft' ? -1 : 1);
       return;
     }
 
@@ -4937,6 +6378,7 @@
     }
 
     if (isTyping(event.target) || open.length) return;
+    if (withModifier || event.altKey) return;
 
     if (key === 'n' || key === 'N' || key === 'т' || key === 'Т') {
       event.preventDefault();
@@ -4971,9 +6413,47 @@
   function start() {
     init().catch(function (err) {
       console.error('TradeJournal: не удалось запустить приложение', err);
-      toast('Не удалось запустить приложение: ' + (err && err.message ? err.message : err), 'error');
+      toast(T('Не удалось запустить приложение: {error}').replace('{error}', err && err.message ? err.message : err), 'error', null, { skip: true });
     });
   }
+
+  NS.app = {
+    state: state,
+    buildInsights: buildInsights,
+    disciplineSnapshot: disciplineSnapshot,
+    renderDiscipline: renderDiscipline,
+    getFilteredTrades: getFilteredTrades,
+    collectExitRows: collectExitRows,
+    collectEntryRows: collectEntryRows,
+    moveStopToBreakeven: moveStopToBreakeven,
+    calcUpdate: calcUpdate,
+    openModal: openModal,
+    closeModal: closeModal,
+    handleKeydown: handleKeydown,
+    exportJSON: exportJSON,
+    exportCSV: exportCSV,
+    exportZIP: exportZIP,
+    saveTrade: saveTrade,
+    renderCalendar: renderCalendar,
+    renderDayPanel: renderDayPanel,
+    renderJournal: renderJournal,
+    getFilteredNotes: getFilteredNotes,
+    resetJournalFilters: resetJournalFilters,
+    renderChecklistSettings: renderChecklistSettings,
+    readChecklistSettings: readChecklistSettings,
+    renderTradeChecklist: renderTradeChecklist,
+    changeMonth: changeMonth,
+    redrawDashboardCharts: redrawDashboardCharts,
+    redrawAnalyticsCharts: redrawAnalyticsCharts,
+    renderAnalytics: renderAnalytics,
+    fillTimezoneOptions: fillTimezoneOptions,
+    buildPeriodMetrics: buildPeriodMetrics,
+    renderKpis: renderKpis,
+    renderQuality: renderQuality,
+    tradeRowHtml: tradeRowHtml,
+    openTradeScreenshot: openTradeScreenshot,
+    stepLightbox: stepLightbox
+  };
 
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', start);

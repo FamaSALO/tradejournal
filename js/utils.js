@@ -94,6 +94,12 @@
     ? ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
     : ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
 
+  function weekdayLabels() {
+    return isEnglish()
+      ? ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+      : ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
+  }
+
   // Session boundaries are stored as start times in the account's timezone.
   // The last session wraps around midnight and lasts until the first one.
   const DEFAULT_SESSIONS = [
@@ -391,9 +397,10 @@
     if (num === null) return '—';
     const abs = Math.abs(num);
     let digits = 2;
-    if (abs > 0 && abs < 1) digits = 6;
-    else if (abs < 10) digits = 4;
-    else if (abs < 1000) digits = 2;
+    if (abs === 0) digits = 2;
+    else if (abs < 0.01) digits = 8;
+    else if (abs < 1) digits = 6;
+    else if (abs < 10) digits = 5;
     const rounded = Number(num.toFixed(digits));
     return new Intl.NumberFormat(locale(), { minimumFractionDigits: 2, maximumFractionDigits: digits }).format(rounded);
   }
@@ -401,7 +408,9 @@
   function qty(value) {
     const num = parseNum(value);
     if (num === null) return '—';
-    return new Intl.NumberFormat(locale(), { maximumFractionDigits: 4 }).format(num);
+    const abs = Math.abs(num);
+    const maxDigits = abs > 0 && abs < 1 ? 8 : 4;
+    return new Intl.NumberFormat(locale(), { maximumFractionDigits: maxDigits }).format(num);
   }
 
   function pad(n) { return n < 10 ? '0' + n : String(n); }
@@ -426,10 +435,11 @@
   }
 
   function addDaysISO(iso, days) {
-    const d = parseISO(iso);
-    if (!d) return iso;
-    d.setDate(d.getDate() + days);
-    return isoOf(d);
+    if (!iso || typeof iso !== 'string') return iso;
+    const parts = iso.slice(0, 10).split('-').map(Number);
+    if (parts.length !== 3 || parts.some(isNaN)) return iso;
+    const utc = new Date(Date.UTC(parts[0], parts[1] - 1, parts[2] + (Number(days) || 0)));
+    return utc.getUTCFullYear() + '-' + pad(utc.getUTCMonth() + 1) + '-' + pad(utc.getUTCDate());
   }
 
   function formatDate(iso, mode) {
@@ -552,14 +562,23 @@
   function download(filename, content, mime) {
     const desktop = window.tradeJournalDesktop;
     if (desktop && typeof desktop.saveDownload === 'function') {
-      desktop.saveDownload(filename, String(content), mime || '').catch(function (err) {
-        const message = err && err.message ? err.message : String(err || 'Не удалось сохранить файл.');
+      return Promise.resolve().then(function () {
+        return desktop.saveDownload(filename, String(content), mime || '');
+      }).then(function (result) {
+        return {
+          ok: !!(result && result.ok !== false),
+          canceled: !!(result && result.canceled),
+          path: result && result.path ? result.path : null
+        };
+      }, function (err) {
+        const message = err && err.message ? tr(err.message) : tr('Не удалось сохранить файл.');
         window.dispatchEvent(new CustomEvent('tj:download-error', { detail: message }));
+        return { ok: false, canceled: false, error: message };
       });
-      return;
     }
 
     saveWebBlob(filename, new Blob([content], { type: mime || 'text/plain;charset=utf-8' }));
+    return Promise.resolve({ ok: true, canceled: false });
   }
 
   function bytesToBase64(bytes) {
@@ -575,21 +594,46 @@
   function downloadBytes(filename, bytes, mime) {
     const data = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
     const desktop = window.tradeJournalDesktop;
+    if (desktop && typeof desktop.saveDownloadBytesStream === 'function') {
+      return Promise.resolve().then(function () {
+        return desktop.saveDownloadBytesStream(filename, data);
+      }).then(function (result) {
+        return {
+          ok: !!(result && result.ok !== false),
+          canceled: !!(result && result.canceled),
+          path: result && result.path ? result.path : null
+        };
+      }, function (err) {
+        const message = err && err.message ? tr(err.message) : tr('Не удалось сохранить файл.');
+        window.dispatchEvent(new CustomEvent('tj:download-error', { detail: message }));
+        return { ok: false, canceled: false, error: message };
+      });
+    }
     if (desktop && typeof desktop.saveDownloadBytes === 'function') {
       let encoded;
       try {
         encoded = bytesToBase64(data);
       } catch (err) {
-        window.dispatchEvent(new CustomEvent('tj:download-error', { detail: 'Не удалось подготовить файл для сохранения.' }));
-        return;
-      }
-      desktop.saveDownloadBytes(filename, encoded, mime || '').catch(function (err) {
-        const message = err && err.message ? err.message : String(err || 'Не удалось сохранить файл.');
+        const message = tr('Не удалось подготовить файл для сохранения.');
         window.dispatchEvent(new CustomEvent('tj:download-error', { detail: message }));
+        return Promise.resolve({ ok: false, canceled: false, error: message });
+      }
+      return Promise.resolve().then(function () {
+        return desktop.saveDownloadBytes(filename, encoded, mime || '');
+      }).then(function (result) {
+        return {
+          ok: !!(result && result.ok !== false),
+          canceled: !!(result && result.canceled),
+          path: result && result.path ? result.path : null
+        };
+      }, function (err) {
+        const message = err && err.message ? tr(err.message) : tr('Не удалось сохранить файл.');
+        window.dispatchEvent(new CustomEvent('tj:download-error', { detail: message }));
+        return { ok: false, canceled: false, error: message };
       });
-      return;
     }
     saveWebBlob(filename, new Blob([data], { type: mime || 'application/octet-stream' }));
+    return Promise.resolve({ ok: true, canceled: false });
   }
 
   function bytes(value) {
@@ -639,6 +683,7 @@
     addDaysISO: addDaysISO,
     formatDate: formatDate,
     weekdayIndex: weekdayIndex,
+    weekdayLabels: weekdayLabels,
     monthTitle: monthTitle,
     capitalize: capitalize,
     nowTime: nowTime,

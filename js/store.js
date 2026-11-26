@@ -11,6 +11,10 @@
   const SCHEMA_VERSION = 4;
   const DEFAULT_ACCOUNT_NAME = 'Основной счёт';
   const MAX_EXITS = 50;
+  const MAX_ENTRIES = 50;
+  const MAX_FEE_PRESETS = 8;
+  const MAX_CHECKLIST = 20;
+  const MAX_SCREENSHOTS = 4;
   const MULTIPLIER_MIN = 0.000000001;
   const MULTIPLIER_MAX = 1000000000;
   const QTY_EPSILON = 1e-9;
@@ -33,12 +37,34 @@
     dailyLossLimit: 3,
     maxTradesPerDay: 3,
     timezone: U.systemTimeZone(),
-    sessions: U.normalizeSessions()
+    sessions: U.normalizeSessions(),
+    feePresets: [],
+    checklist: []
   };
 
   let root = blankRoot();
   let loadError = null;
   let pendingMigration = false;
+  let idbJournalActive = false;
+  let cacheRevision = 0;
+  let dayPnlCache = null;
+  let pnlEventsCache = null;
+  let balanceCache = null;
+
+  function invalidateCache() {
+    cacheRevision++;
+    dayPnlCache = null;
+    pnlEventsCache = null;
+    balanceCache = null;
+  }
+
+  function sameTradeList(entry, trades) {
+    if (!entry || entry.rev !== cacheRevision || entry.trades !== trades || !Array.isArray(trades)) return false;
+    const len = trades.length;
+    if (entry.len !== len) return false;
+    if (len > 0 && (entry.first !== trades[0] || entry.last !== trades[len - 1])) return false;
+    return true;
+  }
 
   const state = {};
   Object.defineProperties(state, {
@@ -127,6 +153,19 @@
     };
   }
 
+  function getJournalStore() {
+    if (desktop || !NS.blobStore || typeof NS.blobStore.getJournalStore !== 'function') return null;
+    return NS.blobStore.getJournalStore();
+  }
+
+  function readLocalJournalRaw() {
+    try { return localStorage.getItem(KEY); } catch (err) { return null; }
+  }
+
+  function removeLocalJournalRaw() {
+    try { localStorage.removeItem(KEY); } catch (err) { /* ignore */ }
+  }
+
   function hasStored() {
     if (desktop) {
       return Promise.resolve().then(function () {
@@ -138,7 +177,17 @@
         return true;
       });
     }
-    try { return Promise.resolve(localStorage.getItem(KEY) !== null); } catch (err) { return Promise.resolve(false); }
+    if (readLocalJournalRaw() !== null) return Promise.resolve(true);
+    const journalStore = getJournalStore();
+    if (!journalStore || typeof journalStore.get !== 'function') return Promise.resolve(false);
+    return Promise.resolve().then(function () {
+      return journalStore.get(KEY);
+    }).then(function (raw) {
+      return raw !== null && raw !== undefined && raw !== '';
+    }).catch(function (err) {
+      console.warn('TradeJournal: не удалось проверить IndexedDB журнала', err);
+      return false;
+    });
   }
 
   function parseTags(value) {
@@ -204,25 +253,61 @@
     });
   }
 
-  function sumExitQty(exits) {
-    return (exits || []).reduce(function (sum, exit) {
-      const qty = U.parseNum(exit && exit.qty);
+  function sumLegQty(legs) {
+    return (legs || []).reduce(function (sum, leg) {
+      const qty = U.parseNum(leg && leg.qty);
       return sum + (qty !== null && qty > 0 ? qty : 0);
     }, 0);
   }
 
-  function weightedExitFromExits(exits) {
-    const list = exits || [];
+  function sumExitQty(exits) {
+    return sumLegQty(exits);
+  }
+
+  function weightedPriceFromLegs(legs) {
+    const list = legs || [];
     let qtySum = 0;
     let value = 0;
-    list.forEach(function (exit) {
-      const qty = U.parseNum(exit && exit.qty);
-      const price = U.parseNum(exit && exit.price);
+    list.forEach(function (leg) {
+      const qty = U.parseNum(leg && leg.qty);
+      const price = U.parseNum(leg && leg.price);
       if (qty === null || qty <= 0 || price === null) return;
       qtySum += qty;
       value += qty * price;
     });
     return qtySum > QTY_EPSILON ? value / qtySum : null;
+  }
+
+  function weightedExitFromExits(exits) {
+    return weightedPriceFromLegs(exits);
+  }
+
+  function normalizeEntry(raw, fallbackDate) {
+    if (!raw || typeof raw !== 'object') return null;
+    const qty = U.parseNum(raw.qty);
+    let price = U.parseNum(raw.price);
+    if (price === null && raw.price === undefined) price = U.parseNum(raw.entry);
+    if (qty === null || qty <= 0 || price === null) return null;
+    return {
+      id: raw.id ? String(raw.id) : U.uid(),
+      qty: qty,
+      price: price,
+      date: normalizeExitDate(raw.date, fallbackDate)
+    };
+  }
+
+  function normalizeEntries(raw, trade) {
+    const entries = [];
+    const seenIds = new Set();
+    const source = Array.isArray(raw && raw.entries) ? raw.entries.slice(0, MAX_ENTRIES) : [];
+    source.forEach(function (item) {
+      const leg = normalizeEntry(item, trade.date);
+      if (!leg) return;
+      if (seenIds.has(leg.id)) leg.id = U.uid();
+      seenIds.add(leg.id);
+      entries.push(leg);
+    });
+    return entries;
   }
 
   function normalizeExits(raw, trade) {
@@ -237,7 +322,7 @@
       exits.push(exit);
     });
 
-    const quantity = U.parseNum(raw.qty);
+    const quantity = U.parseNum(trade && trade.qty !== undefined ? trade.qty : raw.qty);
     if (!exits.length && quantity !== null && quantity > 0) {
       const legacyPrice = U.parseNum(raw.exit);
       if (legacyPrice !== null) {
@@ -287,17 +372,11 @@
     if (!symbol) return null;
     const side = raw.side === 'short' ? 'short' : 'long';
     const discipline = U.clamp(Math.round(U.parseNum(raw.discipline) || 0), 0, 5);
-    let shot = '';
-    if (typeof raw.screenshot === 'string') {
-      if (SAFE_SCREENSHOT_FILE_RE.test(raw.screenshot)) {
-        shot = raw.screenshot;
-      } else if (!desktop && IDB_SCREENSHOT_RE.test(raw.screenshot)) {
-        shot = raw.screenshot;
-      } else if (raw.screenshot.length <= MAX_SCREENSHOT_LENGTH && SAFE_SCREENSHOT_RE.test(raw.screenshot)) {
-        shot = raw.screenshot;
-      }
-    }
-    const qty = U.parseNum(raw.qty);
+    const screenshots = normalizeScreenshots(raw);
+    const shot = screenshots.length ? screenshots[0].src : '';
+    const entries = normalizeEntries(raw, { date: date });
+    const entryPrice = entries.length ? weightedPriceFromLegs(entries) : U.parseNum(raw.entry);
+    const qty = entries.length ? sumLegQty(entries) : U.parseNum(raw.qty);
     let fees = U.parseNum(raw.fees);
     if (fees === null) {
       fees = (Array.isArray(raw.exits) ? raw.exits : []).reduce(function (sum, exit) {
@@ -319,7 +398,7 @@
       timeUtc: timeUtc,
       symbol: symbol,
       side: side,
-      entry: U.parseNum(raw.entry),
+      entry: entryPrice,
       exit: fullyClosed ? weightedExitFromExits(exits) : (keepLegacyExit ? legacyExit : null),
       stop: U.parseNum(raw.stop),
       currentStop: U.parseNum(raw.currentStop),
@@ -327,14 +406,99 @@
       qty: qty,
       multiplier: multiplier,
       fees: fees,
+      entries: entries,
       exits: exits,
       setup: String(raw.setup || '').trim(),
       emotion: String(raw.emotion || '').trim(),
       discipline: discipline,
       tags: parseTags(raw.tags),
       notes: String(raw.notes || ''),
-      screenshot: shot
+      checklist: normalizeTradeChecklist(raw.checklist),
+      screenshot: shot,
+      screenshots: screenshots
     };
+  }
+
+  function normalizeTradeChecklist(raw) {
+    const out = [];
+    (Array.isArray(raw) ? raw : []).forEach(function (item) {
+      if (out.length >= MAX_CHECKLIST) return;
+      if (typeof item === 'string') {
+        const text = item.trim().slice(0, 120);
+        if (text) out.push({ text: text, done: false });
+        return;
+      }
+      if (item && typeof item === 'object') {
+        const text = String(item.text || '').trim().slice(0, 120);
+        if (text) out.push({ text: text, done: !!item.done });
+      }
+    });
+    return out;
+  }
+
+  function normalizeChecklistRules(raw) {
+    const out = [];
+    const seen = new Set();
+    (Array.isArray(raw) ? raw : []).forEach(function (item) {
+      if (out.length >= MAX_CHECKLIST) return;
+      const text = String(item || '').trim().slice(0, 120);
+      if (!text) return;
+      const key = text.toLowerCase();
+      if (seen.has(key)) return;
+      seen.add(key);
+      out.push(text);
+    });
+    return out;
+  }
+
+  function isAllowedScreenshotRef(value) {
+    if (typeof value !== 'string' || !value) return false;
+    if (SAFE_SCREENSHOT_FILE_RE.test(value)) return true;
+    if (!desktop && IDB_SCREENSHOT_RE.test(value)) return true;
+    return value.length <= MAX_SCREENSHOT_LENGTH && SAFE_SCREENSHOT_RE.test(value);
+  }
+
+  function rawScreenshotList(rawTrade) {
+    const seen = new Set();
+    const list = [];
+    const items = Array.isArray(rawTrade && rawTrade.screenshots) ? rawTrade.screenshots : [];
+    items.forEach(function (item) {
+      if (typeof item === 'string') {
+        if (item && !seen.has(item)) {
+          seen.add(item);
+          list.push({ src: item, label: '' });
+        }
+        return;
+      }
+      if (item && typeof item === 'object') {
+        const src = typeof item.src === 'string' ? item.src : '';
+        if (src && !seen.has(src)) {
+          seen.add(src);
+          list.push({ src: src, label: String(item.label || '').trim().slice(0, 32) });
+        }
+      }
+    });
+    const legacy = rawTrade && typeof rawTrade.screenshot === 'string' ? rawTrade.screenshot : '';
+    if (legacy && !items.length && !seen.has(legacy)) {
+      list.push({ src: legacy, label: '' });
+    }
+    return list;
+  }
+
+  function normalizeScreenshots(rawTrade) {
+    const out = [];
+    rawScreenshotList(rawTrade).forEach(function (item) {
+      if (out.length >= MAX_SCREENSHOTS) return;
+      if (isAllowedScreenshotRef(item.src)) {
+        out.push({ src: item.src, label: item.label });
+      }
+    });
+    return out;
+  }
+
+  function tradeScreenshots(trade) {
+    if (!trade || typeof trade !== 'object') return [];
+    return normalizeScreenshots(trade);
   }
 
   function normalizeNote(raw) {
@@ -368,6 +532,21 @@
     });
   }
 
+  function normalizeFeePresets(rawList) {
+    const out = [];
+    const seen = new Set();
+    (Array.isArray(rawList) ? rawList : []).forEach(function (val) {
+      if (out.length >= MAX_FEE_PRESETS) return;
+      const num = U.parseNum(val);
+      if (num === null || !isFinite(num) || num <= 0) return;
+      const key = String(Math.round(num * 1e6) / 1e6);
+      if (seen.has(key)) return;
+      seen.add(key);
+      out.push(Math.round(num * 1e6) / 1e6);
+    });
+    return out;
+  }
+
   function normalizeSettings(raw) {
     raw = raw || {};
     const currency = String(raw.currency || '$').slice(0, 3);
@@ -382,7 +561,9 @@
       dailyLossLimit: daily !== null && daily >= 0 ? U.clamp(daily, 0, 100) : 3,
       maxTradesPerDay: maxTrades !== null && maxTrades >= 0 ? U.clamp(Math.round(maxTrades), 0, 100) : 3,
       timezone: U.validTimeZone(raw.timezone) ? raw.timezone : U.systemTimeZone(),
-      sessions: U.normalizeSessions(raw.sessions)
+      sessions: U.normalizeSessions(raw.sessions),
+      feePresets: normalizeFeePresets(raw.feePresets),
+      checklist: normalizeChecklistRules(raw.checklist)
     };
   }
 
@@ -504,22 +685,30 @@
           stats.invalidExits += Math.max(0, rawExits.length - validExits);
         }
 
-        const shot = typeof trade.screenshot === 'string' ? trade.screenshot : '';
-        if (!shot) return;
-        stats.screenshots++;
-        if (SAFE_SCREENSHOT_FILE_RE.test(shot)) {
-          stats.fileScreenshots++;
-          stats.screenshotsAccepted++;
-        } else if (!desktop && IDB_SCREENSHOT_RE.test(shot)) {
-          stats.idbScreenshots++;
-          stats.screenshotsAccepted++;
-        } else if (shot.length <= MAX_SCREENSHOT_LENGTH && SAFE_SCREENSHOT_RE.test(shot)) {
-          stats.screenshotsAccepted++;
-        } else {
-          stats.screenshotsDropped++;
-          if (shot.length > MAX_SCREENSHOT_LENGTH) stats.screenshotsTooLarge++;
-          else stats.screenshotsInvalid++;
+        const rawShots = rawScreenshotList(trade);
+        const limitedShots = rawShots.slice(0, MAX_SCREENSHOTS);
+        const excessShots = Math.max(0, rawShots.length - limitedShots.length);
+        if (excessShots) {
+          stats.screenshots += excessShots;
+          stats.screenshotsDropped += excessShots;
         }
+        limitedShots.forEach(function (item) {
+          const shot = item.src;
+          stats.screenshots++;
+          if (SAFE_SCREENSHOT_FILE_RE.test(shot)) {
+            stats.fileScreenshots++;
+            stats.screenshotsAccepted++;
+          } else if (!desktop && IDB_SCREENSHOT_RE.test(shot)) {
+            stats.idbScreenshots++;
+            stats.screenshotsAccepted++;
+          } else if (shot.length <= MAX_SCREENSHOT_LENGTH && SAFE_SCREENSHOT_RE.test(shot)) {
+            stats.screenshotsAccepted++;
+          } else {
+            stats.screenshotsDropped++;
+            if (shot.length > MAX_SCREENSHOT_LENGTH) stats.screenshotsTooLarge++;
+            else stats.screenshotsInvalid++;
+          }
+        });
       });
 
       const notes = account && Array.isArray(account.notes) ? account.notes : [];
@@ -577,75 +766,156 @@
     };
   }
 
-  function load() {
-    const read = desktop
-      ? Promise.resolve().then(function () { return desktop.load(); })
-      : Promise.resolve().then(function () { return localStorage.getItem(KEY); });
+  async function load() {
+    if (desktop) {
+      try {
+        const raw = await desktop.load();
+        if (raw === null || raw === undefined) return false;
+        const parsed = JSON.parse(raw);
+        if (!isJournalData(parsed)) throw new Error('Неожиданная структура журнала');
+        root = normalizeData(parsed);
+        invalidateCache();
+        pendingMigration = !(parsed.version === SCHEMA_VERSION && Array.isArray(parsed.accounts));
+        loadError = null;
+        return true;
+      } catch (err) {
+        loadError = err;
+        console.warn('TradeJournal: не удалось прочитать данные', err);
+        return false;
+      }
+    }
 
-    return read.then(function (raw) {
-      if (raw === null || raw === undefined) return false;
+    const journalStore = getJournalStore();
+    let raw = null;
+    let fromLocal = false;
+    if (journalStore && typeof journalStore.get === 'function') {
+      try {
+        const idbRaw = await journalStore.get(KEY);
+        if (idbRaw !== null && idbRaw !== undefined && idbRaw !== '') {
+          raw = idbRaw;
+          idbJournalActive = true;
+        }
+      } catch (err) {
+        console.warn('TradeJournal: не удалось прочитать журнал из IndexedDB', err);
+      }
+    }
+    if (raw === null || raw === undefined) {
+      raw = readLocalJournalRaw();
+      fromLocal = raw !== null && raw !== undefined;
+      idbJournalActive = false;
+    }
+    if (raw === null || raw === undefined) return false;
+
+    try {
       const parsed = JSON.parse(raw);
       if (!isJournalData(parsed)) throw new Error('Неожиданная структура журнала');
       root = normalizeData(parsed);
+      invalidateCache();
       pendingMigration = !(parsed.version === SCHEMA_VERSION && Array.isArray(parsed.accounts));
       loadError = null;
+
+      if (fromLocal && journalStore && typeof journalStore.put === 'function') {
+        try {
+          await journalStore.put(KEY, raw);
+          const verified = await journalStore.get(KEY);
+          if (verified === raw) {
+            removeLocalJournalRaw();
+            idbJournalActive = true;
+            requestPersistentStorageOnce();
+          }
+        } catch (err) {
+          console.warn('TradeJournal: не удалось перенести журнал в IndexedDB', err);
+        }
+      }
       return true;
-    }).catch(function (err) {
+    } catch (err) {
       loadError = err;
       console.warn('TradeJournal: не удалось прочитать данные', err);
       return false;
-    });
-  }
-
-  function getRaw() {
-    if (desktop) {
-      return Promise.resolve().then(function () { return desktop.load(); }).catch(function () { return null; });
     }
-    try { return Promise.resolve(localStorage.getItem(KEY)); } catch (err) { return Promise.resolve(null); }
   }
 
-  function clearRaw() {
+  async function getRaw() {
     if (desktop) {
-      return Promise.resolve().then(function () { return desktop.clear(); }).then(function () {
+      try { return await desktop.load(); } catch (err) { return null; }
+    }
+    const journalStore = getJournalStore();
+    if (journalStore && typeof journalStore.get === 'function') {
+      try {
+        const raw = await journalStore.get(KEY);
+        if (raw !== null && raw !== undefined && raw !== '') return raw;
+      } catch (err) { /* ignore */ }
+    }
+    return readLocalJournalRaw();
+  }
+
+  async function clearRaw() {
+    if (desktop) {
+      try {
+        await desktop.clear();
         return true;
-      }).catch(function () {
+      } catch (err) {
         return false;
-      });
+      }
     }
-    try { localStorage.removeItem(KEY); return Promise.resolve(true); } catch (err) { return Promise.resolve(false); }
+    let cleared = true;
+    const journalStore = getJournalStore();
+    if (journalStore && typeof journalStore.remove === 'function') {
+      try { await journalStore.remove(KEY); } catch (err) { cleared = false; }
+    }
+    try { localStorage.removeItem(KEY); } catch (err) { cleared = false; }
+    idbJournalActive = false;
+    return cleared;
   }
 
-  function save() {
+  async function save() {
+    invalidateCache();
     const raw = JSON.stringify(root);
     if (desktop) {
-      return Promise.resolve().then(function () { return desktop.save(raw); }).then(function () {
+      try {
+        await desktop.save(raw);
         pendingMigration = false;
         return true;
-      }).catch(function (err) {
+      } catch (err) {
         console.warn('TradeJournal: не удалось сохранить данные', err);
         return false;
-      });
+      }
+    }
+    const journalStore = getJournalStore();
+    if (journalStore && typeof journalStore.put === 'function' && typeof journalStore.get === 'function') {
+      try {
+        await journalStore.put(KEY, raw);
+        const verified = await journalStore.get(KEY);
+        if (verified !== raw) throw new Error('Round-trip check failed');
+        removeLocalJournalRaw();
+        idbJournalActive = true;
+        pendingMigration = false;
+        requestPersistentStorageOnce();
+        try { await gcScreenshots(); } catch (err) { /* ignore */ }
+        return true;
+      } catch (err) {
+        console.warn('TradeJournal: не удалось сохранить журнал в IndexedDB, пробуем localStorage', err);
+      }
     }
     try {
       localStorage.setItem(KEY, raw);
+      idbJournalActive = false;
       pendingMigration = false;
-      return gcScreenshots().then(function () {
-        return true;
-      }, function () {
-        return true;
-      });
+      try { await gcScreenshots(); } catch (err) { /* ignore */ }
+      return true;
     } catch (err) {
       console.warn('TradeJournal: не удалось сохранить данные', err);
-      return Promise.resolve(false);
+      return false;
     }
   }
 
   async function replaceData(raw, options) {
     if (!isJournalData(raw)) return false;
     root = normalizeData(raw, options);
+    invalidateCache();
     // Move embedded screenshots out of the journal before the first save so a
-    // large import does not hit the localStorage quota.
-    if (!desktop) await migrateScreenshotData();
+    // large import does not exceed localStorage quota or desktop storage limits.
+    await migrateScreenshotData();
     return save();
   }
 
@@ -665,6 +935,7 @@
       .filter(Boolean);
     account.notes = (Array.isArray(source.notes) ? source.notes : []).map(normalizeNote).filter(Boolean);
     account.demo = true;
+    invalidateCache();
     return save();
   }
 
@@ -675,6 +946,7 @@
     account.notes = [];
     account.demo = false;
     if (!keepSettings) account.settings = normalizeSettings(DEFAULT_SETTINGS);
+    invalidateCache();
     return save();
   }
 
@@ -682,6 +954,7 @@
     const next = String(id || '');
     if (!root.accounts.some(function (account) { return account.id === next; })) return false;
     root.activeAccountId = next;
+    invalidateCache();
     return true;
   }
 
@@ -695,6 +968,7 @@
     const account = createAccount(name, settings, root.accounts.length);
     root.accounts.push(account);
     root.activeAccountId = account.id;
+    invalidateCache();
     return account;
   }
 
@@ -715,6 +989,7 @@
       const next = root.accounts[Math.min(index, root.accounts.length - 1)];
       root.activeAccountId = next.id;
     }
+    invalidateCache();
     return true;
   }
 
@@ -723,16 +998,20 @@
     return NS.blobStore.getDefault();
   }
 
+  function tr(value) {
+    return NS.i18n && typeof NS.i18n.t === 'function' ? NS.i18n.t(value) : value;
+  }
+
   function saveScreenshotData(dataUrl) {
     const value = String(dataUrl || '');
     if (!SAFE_SCREENSHOT_RE.test(value)) {
-      return Promise.reject(new Error('Некорректное изображение скриншота.'));
+      return Promise.reject(new Error(tr('Некорректное изображение скриншота.')));
     }
     if (desktop) {
       return desktop.saveScreenshot(U.uid(), value).then(function (result) {
         if (result && result.reference) return result.reference;
         if (typeof result === 'string') return result;
-        throw new Error('Не удалось сохранить скриншот.');
+        throw new Error(tr('Не удалось сохранить скриншот.'));
       });
     }
     const blobs = getBlobStore();
@@ -771,20 +1050,33 @@
 
   async function migrateScreenshotData() {
     let changed = 0;
+    const ensureList = function (trade) {
+      if (!Array.isArray(trade.screenshots) || !trade.screenshots.length) {
+        trade.screenshots = trade.screenshot ? [{ src: trade.screenshot, label: '' }] : [];
+      }
+      return trade.screenshots;
+    };
     if (desktop) {
+      if (typeof desktop.saveScreenshot !== 'function') return 0;
       for (const account of root.accounts) {
         for (const trade of account.trades) {
-          if (!SAFE_SCREENSHOT_RE.test(trade.screenshot || '')) continue;
-          try {
-            const result = await desktop.saveScreenshot(U.uid(), trade.screenshot);
-            const reference = result && result.reference ? result.reference : '';
-            if (reference) {
-              trade.screenshot = reference;
-              changed++;
+          const shots = ensureList(trade);
+          for (const item of shots) {
+            if (!SAFE_SCREENSHOT_RE.test(item && item.src ? item.src : '')) continue;
+            try {
+              const result = await desktop.saveScreenshot(U.uid(), item.src);
+              const reference = result && result.reference
+                ? result.reference
+                : (typeof result === 'string' ? result : '');
+              if (reference) {
+                item.src = reference;
+                changed++;
+              }
+            } catch (err) {
+              console.warn('TradeJournal: не удалось вынести скриншот в файл', err);
             }
-          } catch (err) {
-            console.warn('TradeJournal: не удалось вынести скриншот в файл', err);
           }
+          trade.screenshot = shots[0] ? shots[0].src : '';
         }
       }
       return changed;
@@ -794,19 +1086,23 @@
     if (!blobs) return 0;
     for (const account of root.accounts) {
       for (const trade of account.trades) {
-        if (!SAFE_SCREENSHOT_RE.test(trade.screenshot || '')) continue;
-        try {
-          // Persist to IndexedDB first, verify the value round-trips, and
-          // only then replace the inline reference and save the journal.
-          // Any failure leaves the original inline data URL intact.
-          var ref = await blobs.save(trade.screenshot);
-          var roundtrip = await blobs.load(ref);
-          if (!roundtrip) throw new Error('Round-trip check failed');
-          trade.screenshot = ref;
-          changed++;
-        } catch (err) {
-          console.warn('TradeJournal: не удалось перенести скриншот в IndexedDB', err);
+        const shots = ensureList(trade);
+        for (const item of shots) {
+          if (!SAFE_SCREENSHOT_RE.test(item && item.src ? item.src : '')) continue;
+          try {
+            // Persist to IndexedDB first, verify the value round-trips, and
+            // only then replace the inline reference and save the journal.
+            // Any failure leaves the original inline data URL intact.
+            var ref = await blobs.save(item.src);
+            var roundtrip = await blobs.load(ref);
+            if (!roundtrip) throw new Error('Round-trip check failed');
+            item.src = ref;
+            changed++;
+          } catch (err) {
+            console.warn('TradeJournal: не удалось перенести скриншот в IndexedDB', err);
+          }
         }
+        trade.screenshot = shots[0] ? shots[0].src : '';
       }
     }
     return changed;
@@ -822,7 +1118,9 @@
     const refs = [];
     root.accounts.forEach(function (account) {
       account.trades.forEach(function (trade) {
-        if (trade && IDB_SCREENSHOT_RE.test(trade.screenshot || '')) refs.push(trade.screenshot);
+        tradeScreenshots(trade).forEach(function (item) {
+          if (IDB_SCREENSHOT_RE.test(item.src || '')) refs.push(item.src);
+        });
       });
     });
     return refs;
@@ -902,16 +1200,24 @@
 
   async function exportSnapshot() {
     const snapshot = JSON.parse(JSON.stringify(root));
+    const listFor = function (trade) {
+      if (Array.isArray(trade.screenshots) && trade.screenshots.length) return trade.screenshots;
+      return trade.screenshot ? [{ src: trade.screenshot, label: '' }] : [];
+    };
     if (desktop) {
       for (const account of snapshot.accounts) {
         for (const trade of account.trades) {
-          if (!SAFE_SCREENSHOT_FILE_RE.test(trade.screenshot || '')) continue;
-          try {
-            const dataUrl = await desktop.loadScreenshot(trade.screenshot);
-            if (dataUrl) trade.screenshot = dataUrl;
-          } catch (err) {
-            console.warn('TradeJournal: не удалось вложить скриншот в экспорт', err);
+          const shots = listFor(trade);
+          for (const item of shots) {
+            if (!SAFE_SCREENSHOT_FILE_RE.test(item && item.src ? item.src : '')) continue;
+            try {
+              const dataUrl = await desktop.loadScreenshot(item.src);
+              if (dataUrl) item.src = dataUrl;
+            } catch (err) {
+              console.warn('TradeJournal: не удалось вложить скриншот в экспорт', err);
+            }
           }
+          if (shots.length) trade.screenshot = shots[0].src;
         }
       }
       return snapshot;
@@ -921,12 +1227,34 @@
     if (!blobs) return snapshot;
     for (const account of snapshot.accounts) {
       for (const trade of account.trades) {
-        if (!IDB_SCREENSHOT_RE.test(trade.screenshot || '')) continue;
-        const dataUrl = await blobs.load(trade.screenshot);
-        if (dataUrl) trade.screenshot = dataUrl;
+        const shots = listFor(trade);
+        for (const item of shots) {
+          if (!IDB_SCREENSHOT_RE.test(item && item.src ? item.src : '')) continue;
+          const dataUrl = await blobs.load(item.src);
+          if (dataUrl) item.src = dataUrl;
+        }
+        if (shots.length) trade.screenshot = shots[0].src;
       }
     }
     return snapshot;
+  }
+
+  function tradeEntries(trade) {
+    if (!trade) return [];
+    if (Array.isArray(trade.entries) && trade.entries.length) return trade.entries;
+    const price = U.parseNum(trade.entry);
+    const quantity = U.parseNum(trade.qty);
+    if (price === null || quantity === null || quantity <= 0) return [];
+    return [{
+      id: 'legacy-entry',
+      qty: quantity,
+      price: price,
+      date: trade.date || ''
+    }];
+  }
+
+  function weightedEntry(trade) {
+    return weightedPriceFromLegs(tradeEntries(trade));
   }
 
   function tradeExits(trade) {
@@ -1023,24 +1351,41 @@
 
   // Counts distinct trades that were opened or exited on each day.
   function dayPnlMap(trades) {
+    if (sameTradeList(dayPnlCache, trades)) return dayPnlCache.map;
     const map = new Map();
     (trades || []).forEach(function (trade) {
       if (!trade) return;
       const days = new Set();
+      const realizedDays = new Set();
       if (trade.date) days.add(trade.date);
       tradePnlEvents(trade).forEach(function (event) {
         if (!event.date) return;
         days.add(event.date);
+        realizedDays.add(event.date);
         let item = map.get(event.date);
-        if (!item) { item = { pnl: 0, count: 0 }; map.set(event.date, item); }
+        if (!item) { item = { pnl: 0, count: 0, realizedCount: 0 }; map.set(event.date, item); }
         item.pnl += event.pnl;
       });
       days.forEach(function (day) {
         let item = map.get(day);
-        if (!item) { item = { pnl: 0, count: 0 }; map.set(day, item); }
+        if (!item) { item = { pnl: 0, count: 0, realizedCount: 0 }; map.set(day, item); }
         item.count++;
       });
+      realizedDays.forEach(function (day) {
+        const item = map.get(day);
+        if (item) item.realizedCount++;
+      });
     });
+    if (Array.isArray(trades)) {
+      dayPnlCache = {
+        rev: cacheRevision,
+        trades: trades,
+        len: trades.length,
+        first: trades[0],
+        last: trades[trades.length - 1],
+        map: map
+      };
+    }
     return map;
   }
 
@@ -1064,6 +1409,7 @@
 
   // Stable exit-event order used by the equity curve and drawdown.
   function pnlEventRows(trades) {
+    if (sameTradeList(pnlEventsCache, trades)) return pnlEventsCache.rows;
     const rows = [];
     (trades || []).forEach(function (trade) {
       tradePnlEvents(trade).forEach(function (event, index) {
@@ -1073,7 +1419,8 @@
           tradeId: trade.id || '',
           exitId: event.exitId || '',
           index: index,
-          pnl: event.pnl
+          pnl: event.pnl,
+          trade: trade
         });
       });
     });
@@ -1084,6 +1431,16 @@
         (a.exitId || '').localeCompare(b.exitId || '') ||
         a.index - b.index;
     });
+    if (Array.isArray(trades)) {
+      pnlEventsCache = {
+        rev: cacheRevision,
+        trades: trades,
+        len: trades.length,
+        first: trades[0],
+        last: trades[trades.length - 1],
+        rows: rows
+      };
+    }
     return rows;
   }
 
@@ -1118,8 +1475,39 @@
     const initialStop = U.parseNum(trade.stop);
     const stop = currentStop !== null ? currentStop : initialStop;
     if (entry === null || stop === null) return null;
-    const risk = Math.abs(entry - stop) * remaining * normalizeMultiplier(trade.multiplier);
-    return risk > 0 ? risk : null;
+    const dir = trade.side === 'short' ? -1 : 1;
+    const diff = (entry - stop) * dir;
+    if (diff <= 0) return 0;
+    const risk = diff * remaining * normalizeMultiplier(trade.multiplier);
+    return risk > 0 ? risk : 0;
+  }
+
+  function openPortfolioRisk(trades, currentBalance) {
+    let openCount = 0;
+    let protectedCount = 0;
+    let unprotectedCount = 0;
+    let totalRisk = 0;
+    (trades || []).forEach(function (trade) {
+      if (!trade) return;
+      const rem = remainingQty(trade);
+      if (rem === null || rem <= QTY_EPSILON) return;
+      openCount++;
+      const risk = openRisk(trade);
+      if (risk === null) {
+        unprotectedCount++;
+        return;
+      }
+      protectedCount++;
+      totalRisk += risk;
+    });
+    const balance = U.parseNum(currentBalance) || 0;
+    return {
+      openCount: openCount,
+      protectedCount: protectedCount,
+      unprotectedCount: unprotectedCount,
+      totalRisk: totalRisk,
+      riskPct: balance > 0 ? (totalRisk / balance) * 100 : 0
+    };
   }
 
   function tradeStatus(trade) {
@@ -1141,9 +1529,11 @@
     const stop = U.parseNum(trade.stop);
     const target = U.parseNum(trade.target);
     if (entry === null || stop === null || target === null) return null;
-    const risk = Math.abs(entry - stop);
-    if (risk <= 0) return null;
-    return Math.abs(target - entry) / risk;
+    const dir = trade.side === 'short' ? -1 : 1;
+    const risk = (entry - stop) * dir;
+    const reward = (target - entry) * dir;
+    if (risk <= 0 || reward <= 0) return null;
+    return reward / risk;
   }
 
   function sortKey(trade) {
@@ -1170,18 +1560,33 @@
     });
 
     let wins = 0, losses = 0, be = 0;
-    let grossProfit = 0, grossLoss = 0, fees = 0;
+    let net = 0, grossProfit = 0, grossLoss = 0, fees = 0;
     let rSum = 0, rCount = 0;
+    let winRSum = 0, winRCount = 0, lossRSum = 0, lossRCount = 0;
+    let closedRisk = 0, closedRiskNet = 0;
     let discSum = 0, discCount = 0;
     let best = null, worst = null;
 
     rows.forEach(function (row) {
       const pnl = row.pnl;
-      if (pnl > 0.004) { wins++; grossProfit += pnl; }
-      else if (pnl < -0.004) { losses++; grossLoss += pnl; }
+      net += pnl;
+      if (pnl > 0) grossProfit += pnl;
+      else if (pnl < 0) grossLoss += pnl;
+      if (pnl > 0.004) wins++;
+      else if (pnl < -0.004) losses++;
       else be++;
       fees += tradeFees(row.trade);
-      if (row.r !== null) { rSum += row.r; rCount++; }
+      const riskAmt = tradeRisk(row.trade);
+      if (riskAmt !== null && riskAmt > 0) {
+        closedRisk += riskAmt;
+        closedRiskNet += pnl;
+      }
+      if (row.r !== null) {
+        rSum += row.r;
+        rCount++;
+        if (pnl > 0.004 && row.r > 0) { winRSum += row.r; winRCount++; }
+        else if (pnl < -0.004 && row.r < 0) { lossRSum += Math.abs(row.r); lossRCount++; }
+      }
       const disc = U.parseNum(row.trade.discipline);
       if (disc !== null && disc > 0) { discSum += disc; discCount++; }
       if (!best || pnl > best.pnl) best = row;
@@ -1189,8 +1594,21 @@
     });
 
     const count = rows.length;
-    const net = grossProfit + grossLoss;
     const base = U.parseNum(startBalance) || 0;
+    const avgWin = wins ? grossProfit / wins : 0;
+    const avgLoss = losses ? Math.abs(grossLoss) / losses : 0;
+    const avgWinR = winRCount ? winRSum / winRCount : 0;
+    const avgLossR = lossRCount ? lossRSum / lossRCount : 0;
+    let payoffRatio = null;
+    let beWinRate = null;
+    if (winRCount > 0 && lossRCount > 0 && avgLossR > 0) {
+      payoffRatio = avgWinR / avgLossR;
+      beWinRate = (avgLossR / (avgWinR + avgLossR)) * 100;
+    } else if (wins > 0 && losses > 0 && avgLoss > 0) {
+      payoffRatio = avgWin / avgLoss;
+      beWinRate = (avgLoss / (avgWin + avgLoss)) * 100;
+    }
+    const returnOnClosedRisk = closedRisk > 0 ? (closedRiskNet / closedRisk) * 100 : null;
 
     let equity = 0, peak = 0, maxDD = 0, maxDDPct = 0;
     pnlEventRows(realized).forEach(function (event) {
@@ -1226,8 +1644,12 @@
       net: net,
       grossProfit: grossProfit,
       grossLoss: grossLoss,
-      avgWin: wins ? grossProfit / wins : 0,
-      avgLoss: losses ? Math.abs(grossLoss) / losses : 0,
+      avgWin: avgWin,
+      avgLoss: avgLoss,
+      payoffRatio: payoffRatio,
+      beWinRate: beWinRate,
+      closedRisk: closedRisk,
+      returnOnClosedRisk: returnOnClosedRisk,
       profitFactor: grossLoss < -0.0001 ? grossProfit / Math.abs(grossLoss) : (grossProfit > 0.0001 ? Infinity : 0),
       expectancy: count ? net / count : 0,
       avgR: rCount ? rSum / rCount : 0,
@@ -1251,18 +1673,26 @@
     const map = new Map();
     rows.forEach(function (row) {
       const rawKey = keyFn(row.trade);
-      const key = (rawKey === null || rawKey === undefined || rawKey === '') ? '—' : String(rawKey);
-      let group = map.get(key);
-      if (!group) {
-        group = { key: key, count: 0, pnl: 0, wins: 0, losses: 0, be: 0, grossProfit: 0, grossLoss: 0, rSum: 0, rCount: 0 };
-        map.set(key, group);
-      }
-      group.count++;
-      group.pnl += row.pnl;
-      if (row.pnl > 0.004) { group.wins++; group.grossProfit += row.pnl; }
-      else if (row.pnl < -0.004) { group.losses++; group.grossLoss += row.pnl; }
-      else group.be++;
-      if (row.r !== null) { group.rSum += row.r; group.rCount++; }
+      const list = Array.isArray(rawKey) ? rawKey : [rawKey];
+      const seen = new Set();
+      list.forEach(function (rawItem) {
+        const key = (rawItem === null || rawItem === undefined || rawItem === '') ? '—' : String(rawItem);
+        if (seen.has(key)) return;
+        seen.add(key);
+        let group = map.get(key);
+        if (!group) {
+          group = { key: key, count: 0, pnl: 0, wins: 0, losses: 0, be: 0, grossProfit: 0, grossLoss: 0, rSum: 0, rCount: 0 };
+          map.set(key, group);
+        }
+        group.count++;
+        group.pnl += row.pnl;
+        if (row.pnl > 0) group.grossProfit += row.pnl;
+        else if (row.pnl < 0) group.grossLoss += row.pnl;
+        if (row.pnl > 0.004) group.wins++;
+        else if (row.pnl < -0.004) group.losses++;
+        else group.be++;
+        if (row.r !== null) { group.rSum += row.r; group.rCount++; }
+      });
     });
     return Array.from(map.values()).map(function (group) {
       return {
@@ -1282,13 +1712,111 @@
     });
   }
 
+  function dayDiffISO(fromIso, toIso) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(fromIso || '') || !/^\d{4}-\d{2}-\d{2}$/.test(toIso || '')) return 0;
+    const a = fromIso.split('-').map(Number);
+    const b = toIso.split('-').map(Number);
+    return Math.round((Date.UTC(b[0], b[1] - 1, b[2]) - Date.UTC(a[0], a[1] - 1, a[2])) / 86400000);
+  }
+
+  function drawdownSeries(trades, startBalance) {
+    const realized = sortTrades((trades || []).filter(hasRealized), 'asc');
+    const events = pnlEventRows(realized);
+    const base = U.parseNum(startBalance) || 0;
+    if (!events.length) {
+      return {
+        points: [],
+        maxDD: 0,
+        maxDDPct: 0,
+        maxDurationDays: 0,
+        maxDurationTrades: 0,
+        currentDD: 0,
+        currentDDPct: 0
+      };
+    }
+    let equity = 0;
+    let peak = 0;
+    let peakDate = events[0].date || '';
+    let maxDD = 0;
+    let maxDDPct = 0;
+    let maxDurationDays = 0;
+    let maxDurationTrades = 0;
+    let ddTrades = 0;
+    const points = [{
+      label: events[0].date || '',
+      value: 0,
+      dd: 0,
+      ddPct: 0,
+      equity: base,
+      peak: base,
+      durationDays: 0,
+      durationTrades: 0,
+      symbol: ''
+    }];
+
+    events.forEach(function (ev) {
+      equity += ev.pnl;
+      if (equity >= peak - 1e-9) {
+        peak = equity;
+        peakDate = ev.date || peakDate;
+        ddTrades = 0;
+      } else {
+        ddTrades++;
+      }
+      const peakBalance = base + peak;
+      const curBalance = base + equity;
+      const dd = Math.max(0, peak - equity);
+      const ddPct = peakBalance > 0 ? (dd / peakBalance) * 100 : 0;
+      const durDays = (dd > 0.004 && peakDate && ev.date) ? Math.max(0, dayDiffISO(peakDate, ev.date)) : 0;
+      if (dd > maxDD) maxDD = dd;
+      if (ddPct > maxDDPct) maxDDPct = ddPct;
+      if (durDays > maxDurationDays) maxDurationDays = durDays;
+      if (ddTrades > maxDurationTrades) maxDurationTrades = ddTrades;
+      points.push({
+        label: ev.date || '',
+        value: -ddPct,
+        dd: dd,
+        ddPct: ddPct,
+        equity: curBalance,
+        peak: peakBalance,
+        durationDays: durDays,
+        durationTrades: ddTrades,
+        symbol: ev.trade ? ev.trade.symbol : ''
+      });
+    });
+
+    const last = points[points.length - 1];
+    return {
+      points: points,
+      maxDD: maxDD,
+      maxDDPct: maxDDPct,
+      maxDurationDays: maxDurationDays,
+      maxDurationTrades: maxDurationTrades,
+      currentDD: last ? last.dd : 0,
+      currentDDPct: last ? last.ddPct : 0
+    };
+  }
+
   function balanceAll() {
+    const base = U.parseNum(state.settings.startBalance) || 0;
+    const trades = state.trades;
+    if (sameTradeList(balanceCache, trades) && balanceCache.base === base) return balanceCache.value;
     let net = 0;
-    state.trades.forEach(function (trade) {
+    trades.forEach(function (trade) {
       const pnl = tradePnl(trade);
       if (pnl !== null) net += pnl;
     });
-    return (U.parseNum(state.settings.startBalance) || 0) + net;
+    const value = base + net;
+    balanceCache = {
+      rev: cacheRevision,
+      trades: trades,
+      len: trades.length,
+      first: trades[0],
+      last: trades[trades.length - 1],
+      base: base,
+      value: value
+    };
+    return value;
   }
 
   function storageSize() {
@@ -1302,12 +1830,17 @@
     DEFAULT_ACCOUNT_NAME: DEFAULT_ACCOUNT_NAME,
     DEFAULT_SETTINGS: DEFAULT_SETTINGS,
     MAX_EXITS: MAX_EXITS,
+    MAX_ENTRIES: MAX_ENTRIES,
+    MAX_FEE_PRESETS: MAX_FEE_PRESETS,
+    MAX_CHECKLIST: MAX_CHECKLIST,
+    MAX_SCREENSHOTS: MAX_SCREENSHOTS,
     MULTIPLIER_MIN: MULTIPLIER_MIN,
     MULTIPLIER_MAX: MULTIPLIER_MAX,
     QTY_EPSILON: QTY_EPSILON,
     get state() { return state; },
     get loadError() { return loadError; },
     get needsMigration() { return pendingMigration; },
+    get usesIdbJournal() { return idbJournalActive; },
     hasStored: hasStored,
     isJournalData: isJournalData,
     analyzeImport: analyzeImport,
@@ -1326,6 +1859,7 @@
     deleteAccount: deleteAccount,
     saveScreenshot: saveScreenshotData,
     screenshotSource: screenshotSource,
+    tradeScreenshots: tradeScreenshots,
     migrateScreenshots: migrateScreenshots,
     gcScreenshots: gcScreenshots,
     requestPersistentStorage: requestPersistentStorage,
@@ -1334,6 +1868,8 @@
     isStoragePersisted: isStoragePersisted,
     storageEstimate: storageEstimate,
     exportSnapshot: exportSnapshot,
+    tradeEntries: tradeEntries,
+    weightedEntry: weightedEntry,
     tradeExits: tradeExits,
     exitedQty: exitedQty,
     remainingQty: remainingQty,
@@ -1346,15 +1882,19 @@
     tradePnlEvents: tradePnlEvents,
     dayPnlMap: dayPnlMap,
     dayEventPnlMap: dayEventPnlMap,
+    pnlEventRows: pnlEventRows,
+    invalidateCache: invalidateCache,
     tradeFees: tradeFees,
     tradeRisk: tradeRisk,
     openRisk: openRisk,
+    openPortfolioRisk: openPortfolioRisk,
     tradeStatus: tradeStatus,
     tradeR: tradeR,
     normalizeMultiplier: normalizeMultiplier,
     plannedRR: plannedRR,
     sortTrades: sortTrades,
     metrics: metrics,
+    drawdownSeries: drawdownSeries,
     groupRows: groupRows,
     balanceAll: balanceAll,
     storageSize: storageSize,

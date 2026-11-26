@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="color-scheme" content="dark">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self' blob: data:; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
   <title>TradeJournal — дневник трейдера</title>
   <meta name="description" content="Личный дневник трейдера: сделки, статистика, календарь прибыли, аналитика и риск-менеджмент.">
   <link rel="canonical" href="https://famasalo.github.io/tradejournal/">
@@ -110,15 +110,27 @@
         <p id="pageSubtitle">Статистика счёта и последние результаты</p>
       </div>
       <div class="topbar-actions">
-        <label class="select-wrap period-wrap" id="periodWrap">
-          <select id="periodSelect" aria-label="Период статистики">
-            <option value="all">Всё время</option>
-            <option value="30">30 дней</option>
-            <option value="90">90 дней</option>
-            <option value="month">Этот месяц</option>
-            <option value="year">Этот год</option>
-          </select>
-        </label>
+        <div class="period-controls" id="periodWrap">
+          <div class="segmented period-mode" id="dateModeSegmented" role="group" aria-label="Учёт сделок по дате">
+            <button type="button" data-date-mode="entry" class="active" title="Фильтровать сделки по дате входа">По входу</button>
+            <button type="button" data-date-mode="exit" title="Фильтровать закрытый результат по дате выхода">По выходу</button>
+          </div>
+          <label class="select-wrap period-wrap">
+            <select id="periodSelect" aria-label="Период статистики">
+              <option value="all">Всё время</option>
+              <option value="30">30 дней</option>
+              <option value="90">90 дней</option>
+              <option value="month">Этот месяц</option>
+              <option value="year">Этот год</option>
+              <option value="custom">Свой период</option>
+            </select>
+          </label>
+          <div class="period-custom" id="customPeriodRange" hidden>
+            <input type="date" id="periodFrom" aria-label="Дата начала периода">
+            <span aria-hidden="true">—</span>
+            <input type="date" id="periodTo" aria-label="Дата окончания периода">
+          </div>
+        </div>
         <button class="avatar" id="avatarBtn" title="Профиль и настройки">
           <img id="avatarImage" alt="" hidden>
           <span id="avatarInitials">TJ</span>
@@ -267,14 +279,14 @@
             <table class="data-table" id="tradesTable">
               <thead>
                 <tr>
-                  <th data-sort="date">Дата</th>
-                  <th data-sort="session">Сессия</th>
-                  <th data-sort="symbol">Инструмент</th>
-                  <th class="num" data-sort="entry">Вход</th>
-                  <th class="num" data-sort="exit">Выход</th>
-                  <th class="num" data-sort="pnl">P&L</th>
-                  <th class="num" data-sort="r">R</th>
-                  <th data-sort="setup">Сетап</th>
+                  <th tabindex="0" role="button" aria-sort="none" data-sort="date">Дата</th>
+                  <th tabindex="0" role="button" aria-sort="none" data-sort="session">Сессия</th>
+                  <th tabindex="0" role="button" aria-sort="none" data-sort="symbol">Инструмент</th>
+                  <th class="num" tabindex="0" role="button" aria-sort="none" data-sort="entry">Вход</th>
+                  <th class="num" tabindex="0" role="button" aria-sort="none" data-sort="exit">Выход</th>
+                  <th class="num" tabindex="0" role="button" aria-sort="none" data-sort="pnl">P&L</th>
+                  <th class="num" tabindex="0" role="button" aria-sort="none" data-sort="r">R</th>
+                  <th tabindex="0" role="button" aria-sort="none" data-sort="setup">Сетап</th>
                   <th>Эмоция</th>
                   <th class="th-end"></th>
                 </tr>
@@ -332,6 +344,20 @@
         <div class="kpi-grid kpi-small" id="analyticsKpis"></div>
 
         <div class="grid">
+          <article class="card span-12">
+            <header class="card-head">
+              <div class="card-title">
+                <h2>Просадка (Underwater)</h2>
+                <p>Глубина и длительность просадок от пика капитала</p>
+              </div>
+              <span class="chip" id="drawdownChip">—</span>
+            </header>
+            <div class="chart-wrap chart-220">
+              <canvas id="drawdownChart"></canvas>
+              <div class="chart-tooltip" id="drawdownTip"></div>
+            </div>
+          </article>
+
           <article class="card span-8">
             <header class="card-head">
               <div class="card-title">
@@ -393,6 +419,30 @@
               </table>
             </div>
           </article>
+
+          <article class="card span-6">
+            <header class="card-head">
+              <div class="card-title"><h2>Статистика по месяцам</h2><p>Динамика результата по месяцам</p></div>
+            </header>
+            <div class="table-wrap">
+              <table class="data-table compact-table">
+                <thead><tr><th>Месяц</th><th class="num">Сделок</th><th class="num">Винрейт</th><th class="num">Средний R</th><th class="num">P&L</th><th class="num">Профит-фактор</th></tr></thead>
+                <tbody id="monthTableBody"></tbody>
+              </table>
+            </div>
+          </article>
+
+          <article class="card span-6">
+            <header class="card-head">
+              <div class="card-title"><h2>Статистика по тегам</h2><p>Результативность по тегам сделок</p></div>
+            </header>
+            <div class="table-wrap">
+              <table class="data-table compact-table">
+                <thead><tr><th>Тег</th><th class="num">Сделок</th><th class="num">Винрейт</th><th class="num">Средний R</th><th class="num">P&L</th><th class="num">Профит-фактор</th></tr></thead>
+                <tbody id="tagTableBody"></tbody>
+              </table>
+            </div>
+          </article>
         </div>
       </section>
 
@@ -407,6 +457,18 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
             <span>Новая запись</span>
           </button>
+        </div>
+
+        <div class="trades-toolbar journal-toolbar card">
+          <label class="search">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.2-3.2"/></svg>
+            <input type="search" id="journalSearch" placeholder="Поиск: заголовок, текст, тег…" autocomplete="off">
+          </label>
+          <label class="select-wrap"><select id="journalMoodFilter" aria-label="Фильтр по настроению"><option value="all">Все настроения</option></select></label>
+          <label class="select-wrap"><select id="journalTagFilter" aria-label="Фильтр по тегу"><option value="all">Все теги</option></select></label>
+          <button class="btn btn-ghost btn-sm" id="clearJournalFilters">Сбросить</button>
+          <div class="toolbar-spacer"></div>
+          <span class="muted" id="journalCountLabel"></span>
         </div>
 
         <div class="journal-stats" id="journalStats"></div>
@@ -448,7 +510,7 @@
               <label class="field">
                 <span>Стоимость 1 пункта</span>
                 <input type="number" id="calcPointValue" step="any" min="0" inputmode="decimal" value="1">
-                <small class="field-hint">Для акций обычно 1, для фьючерсов — стоимость тика</small>
+                <small class="field-hint">Для акций обычно 1, для фьючерсов — стоимость 1 пункта цены</small>
               </label>
             </form>
           </article>
@@ -498,7 +560,7 @@
                 <div class="profile-avatar-wrap">
                   <div class="profile-avatar" id="profileAvatarPreview"><span>TJ</span></div>
                   <div class="profile-avatar-actions">
-                    <label class="btn btn-ghost btn-sm" for="profileAvatarInput">Загрузить фото</label>
+                    <button type="button" class="btn btn-ghost btn-sm" id="uploadAvatarBtn">Загрузить фото</button>
                     <input type="file" id="profileAvatarInput" accept="image/*" hidden>
                     <button type="button" class="btn btn-ghost btn-sm" id="removeAvatarBtn">Удалить</button>
                   </div>
@@ -642,6 +704,17 @@
                 <button type="button" class="btn btn-ghost btn-sm session-add" id="addSessionBtn">Добавить сессию</button>
                 <small class="field-hint">Время начала сессий в выбранном часовом поясе. Сессия длится до начала следующей, последняя — до первой. Удаление сессии не меняет сделки — они распределятся по оставшимся сессиям.</small>
               </div>
+              <div class="field span-2">
+                <div class="exits-head">
+                  <span>Чек-лист перед сделкой <em>проверяется в форме сделки</em></span>
+                  <div class="exits-actions">
+                    <button type="button" class="btn btn-ghost btn-sm" id="loadStarterChecklistBtn">Базовые правила</button>
+                    <button type="button" class="btn btn-ghost btn-sm" id="addChecklistRuleBtn">+ Добавить правило</button>
+                  </div>
+                </div>
+                <div class="checklist-settings" id="checklistSettings"></div>
+                <small class="field-hint">Укажите торговые правила, которые стоит отмечать перед открытием сделки.</small>
+              </div>
               <div class="form-actions span-2">
                 <button type="submit" class="btn btn-primary">Сохранить настройки</button>
                 <span class="muted" id="settingsSavedAt"></span>
@@ -686,7 +759,7 @@
               <div class="storage-head"><span>Использование хранилища</span><strong id="storageText">—</strong></div>
               <div class="storage-meter"><i id="storageBar"></i></div>
               <p class="muted small storage-estimate" id="storageEstimate" hidden></p>
-              <p class="muted small">В веб-версии журнал лежит в localStorage, а скриншоты — в IndexedDB браузера; в Windows-приложении данные хранятся в локальных файлах, скриншоты — в папке <b>screenshots</b>. Очистка данных сайта удалит журнал — держите резервную копию. Глубокая проверка неиспользуемых скриншотов доступна в Windows-приложении.</p>
+              <p class="muted small">В веб-версии журнал и скриншоты хранятся в IndexedDB браузера (при наличии поддержки, иначе в localStorage); в Windows-приложении данные хранятся в локальных файлах, скриншоты — в папке <b>screenshots</b>. Очистка данных сайта удалит журнал — держите резервную копию. Глубокая проверка неиспользуемых скриншотов доступна в Windows-приложении.</p>
             </div>
 
             <div class="danger-zone">
@@ -788,7 +861,7 @@
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17.5 8.5 12l4 3L21 6"/><path d="M15 6h6v6"/></svg>
             </div>
             <div>
-              <h3>TradeJournal <span class="version" id="appVersion">v2.5.2</span></h3>
+              <h3>TradeJournal <span class="version" id="appVersion">v2.6.0</span></h3>
               <p>Локальный дневник трейдера без серверов и регистрации. Сделки, календарь P&L, аналитика по сетапам и эмоциям, журнал наблюдений и калькулятор риска — всё в одном приложении. <span class="kbd">N</span> — новая сделка, <span class="kbd">Esc</span> — закрыть окно.</p>
             </div>
           </article>
@@ -837,23 +910,26 @@
             <input type="hidden" id="tradeSide" value="long">
           </div>
           <label class="field">
-            <span>Цена входа *</span>
+            <span>Цена входа * <em class="field-auto hidden" id="tradeEntryAuto">средневзвеш.</em></span>
             <input type="number" id="tradeEntry" step="any" inputmode="decimal" placeholder="0.00000" required>
           </label>
           <label class="field">
             <span>Стоп при входе</span>
             <input type="number" id="tradeStop" step="any" inputmode="decimal" placeholder="От него считается R">
           </label>
-          <label class="field">
-            <span>Текущий стоп</span>
+          <div class="field">
+            <div class="field-head">
+              <label for="tradeCurrentStop">Текущий стоп</label>
+              <button type="button" class="link-btn field-action-btn" id="stopToBeBtn" title="Перенести текущий стоп на цену входа">В безубыток</button>
+            </div>
             <input type="number" id="tradeCurrentStop" step="any" inputmode="decimal" placeholder="Если передвинули">
-          </label>
+          </div>
           <label class="field">
             <span>Тейк-профит</span>
             <input type="number" id="tradeTarget" step="any" inputmode="decimal" placeholder="Для планового R:R">
           </label>
           <label class="field">
-            <span>Количество *</span>
+            <span>Количество * <em class="field-auto hidden" id="tradeQtyAuto">сумма</em></span>
             <input type="number" id="tradeQty" step="any" min="0" inputmode="decimal" placeholder="100" required>
           </label>
           <label class="field">
@@ -861,10 +937,14 @@
             <input type="number" id="tradeMultiplier" step="any" min="0" inputmode="decimal" placeholder="1">
             <small class="field-hint">Для фьючерсов и опционов: сколько единиц актива в одном контракте</small>
           </label>
-          <label class="field">
-            <span>Комиссия</span>
+          <div class="field">
+            <div class="field-head">
+              <label for="tradeFees">Комиссия</label>
+              <button type="button" class="link-btn field-action-btn" id="saveFeePresetBtn" title="Сохранить текущую ставку в шаблоны">+ Шаблон</button>
+            </div>
             <input type="number" id="tradeFees" step="any" min="0" inputmode="decimal" placeholder="0">
-          </label>
+            <div class="fee-presets" id="feePresetsBar"></div>
+          </div>
           <label class="field">
             <span>Сетап</span>
             <input type="text" id="tradeSetup" list="setupList" placeholder="Пробой уровня" autocomplete="off">
@@ -874,6 +954,17 @@
             <span>Эмоция</span>
             <select id="tradeEmotion"></select>
           </label>
+          <div class="field span-2 entries-field" id="entriesField">
+            <div class="exits-head">
+              <span>Входы и доборы <em>средневзвешенная цена позиции</em></span>
+              <div class="exits-actions">
+                <button type="button" class="btn btn-ghost btn-sm" id="addEntryBtn">+ Добавить вход / добор</button>
+              </div>
+            </div>
+            <div class="exits-editor" id="entriesEditor" hidden></div>
+            <p class="field-hint" id="entriesHint">Один вход — цена и объём заданы полями выше. Добавьте доборы, чтобы автоматически считать средневзвешенную цену входа.</p>
+            <div class="position-history" id="positionHistory" hidden></div>
+          </div>
           <div class="field span-2 exits-field">
             <div class="exits-head">
               <span>Выходы <em>частичные или полный</em></span>
@@ -884,6 +975,14 @@
             </div>
             <div class="exits-editor" id="exitsEditor"></div>
             <p class="field-hint" id="exitsHint">Выходов нет — позиция открыта. Добавьте один или несколько частичных выходов; комиссия распределится по объёму выходов.</p>
+          </div>
+          <div class="field span-2 checklist-field" id="tradeChecklistField" hidden>
+            <div class="exits-head">
+              <span>Чек-лист перед сделкой</span>
+              <span class="checklist-progress" id="tradeChecklistProgress">0 / 0</span>
+            </div>
+            <div class="checklist-box" id="tradeChecklistBox"></div>
+            <p class="checklist-warn" id="tradeChecklistWarn" hidden>Не все правила отмечены — проверьте условия входа перед сохранением.</p>
           </div>
           <div class="field span-2">
             <span>Дисциплина</span>
@@ -909,16 +1008,17 @@
 
         <div class="shot-field" id="shotField">
           <div class="shot-head">
-            <span>Скриншот графика</span>
+            <span>Скриншоты графика</span>
+            <span class="shot-count" id="shotCount">0 / 4</span>
             <div class="shot-actions">
               <button type="button" class="btn btn-ghost btn-sm" id="pasteShot">Вставить</button>
-              <label class="btn btn-ghost btn-sm" for="tradeShot">Загрузить</label>
-              <button type="button" class="link-btn hidden" id="removeShot">Удалить</button>
+              <button type="button" class="btn btn-ghost btn-sm" id="uploadShotBtn">Загрузить</button>
+              <button type="button" class="link-btn hidden" id="removeShot">Удалить все</button>
             </div>
           </div>
-          <input type="file" id="tradeShot" accept="image/*" hidden>
+          <input type="file" id="tradeShot" accept="image/*" multiple hidden>
           <div class="shot-preview" id="shotPreview"></div>
-          <p class="shot-hint">Ctrl+V, перетащите файл или загрузите с ПК. Нажмите на скриншот, чтобы увеличить.</p>
+          <p class="shot-hint">Ctrl+V, перетащите файлы или загрузите с ПК (до 4 шт.). Нажмите на скриншот, чтобы увеличить.</p>
         </div>
 
         <div class="calc-strip">
@@ -1076,7 +1176,17 @@
 <div class="shot-lightbox" id="shotLightbox" hidden>
   <button type="button" class="shot-lightbox-backdrop" id="shotLightboxBackdrop" tabindex="-1" aria-label="Закрыть просмотр"></button>
   <figure class="shot-lightbox-panel" role="dialog" aria-modal="true" aria-label="Скриншот сделки">
+    <button type="button" class="icon-btn shot-lightbox-nav shot-lightbox-prev" id="shotLightboxPrev" aria-label="Предыдущий скриншот" hidden>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m15 18-6-6 6-6"/></svg>
+    </button>
     <img id="shotLightboxImage" alt="Скриншот сделки">
+    <button type="button" class="icon-btn shot-lightbox-nav shot-lightbox-next" id="shotLightboxNext" aria-label="Следующий скриншот" hidden>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m9 18 6-6-6-6"/></svg>
+    </button>
+    <div class="shot-lightbox-bar" id="shotLightboxBar" hidden>
+      <span class="shot-lightbox-caption" id="shotLightboxCaption"></span>
+      <span class="shot-lightbox-counter" id="shotLightboxCounter"></span>
+    </div>
     <button type="button" class="icon-btn shot-lightbox-close" id="shotLightboxClose" aria-label="Закрыть">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>
     </button>

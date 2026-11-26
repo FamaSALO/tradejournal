@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { loadTradeJournal } from './helpers/load-tj.mjs';
+import { fakeDocument } from './helpers/fake-dom.mjs';
 
 const { TJ } = loadTradeJournal();
 const U = TJ.utils;
@@ -131,4 +132,34 @@ test('Moscow and Almaty do not observe DST', function () {
   assert.equal(almatySummer.utc, '2026-07-15T07:00:00.000Z');
   assert.equal(almatyWinter.back.time, '12:00');
   assert.equal(almatySummer.back.time, '12:00');
+});
+
+test('addDaysISO crosses DST transitions without shifting calendar days (FIN-02)', function () {
+  assert.equal(U.addDaysISO('2026-03-07', 2), '2026-03-09');
+  assert.equal(U.addDaysISO('2026-10-31', 3), '2026-11-03');
+  assert.equal(U.addDaysISO('2026-03-01', -1), '2026-02-28');
+  assert.equal(U.addDaysISO('2024-03-01', -1), '2024-02-29');
+});
+
+test('price and qty preserve precision for FX pipettes and micro-cap crypto (FIN-04)', function () {
+  const en = loadTradeJournal(
+    ['js/preferences.js', 'js/i18n-en.js', 'js/i18n.js', 'js/utils.js'],
+    {
+      globals: {
+        document: fakeDocument(),
+        NodeFilter: { SHOW_TEXT: 4, SHOW_ELEMENT: 1 }
+      },
+      storage: {
+        values: new Map([['tradejournal.preferences.v1', JSON.stringify({ lang: 'en' })]]),
+        getItem: function (k) { return this.values.has(k) ? this.values.get(k) : null; },
+        setItem: function () {}
+      }
+    }
+  ).TJ.utils;
+
+  assert.equal(en.price(0.00001234), '0.00001234');
+  assert.equal(en.price(1.08532), '1.08532');
+  assert.equal(en.price(245.5), '245.50');
+  assert.equal(en.qty(0.000125), '0.000125');
+  assert.equal(en.qty(1.23456), '1.2346');
 });

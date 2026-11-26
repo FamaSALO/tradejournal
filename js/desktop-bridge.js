@@ -6,13 +6,60 @@
 
   const invoke = tauri.invoke;
   const userAgent = typeof navigator !== 'undefined' ? navigator.userAgent : '';
-  const platform = /Mac/i.test(userAgent) ? 'darwin' : /Win/i.test(userAgent) ? 'win32' : 'linux';
+  let platform = /Mac/i.test(userAgent) ? 'darwin' : /Win/i.test(userAgent) ? 'win32' : 'linux';
   let saveChain = Promise.resolve();
+
+  function syncPlatform(rawPlatform) {
+    if (rawPlatform === 'macos' || rawPlatform === 'darwin') platform = 'darwin';
+    else if (rawPlatform === 'windows' || rawPlatform === 'win32') platform = 'win32';
+    else if (rawPlatform === 'linux') platform = 'linux';
+  }
+
+  function tr(text) {
+    const i18n = window.TJ && window.TJ.i18n;
+    return i18n && typeof i18n.t === 'function' ? i18n.t(text) : text;
+  }
+
+  function translateDesktopMessage(message) {
+    const text = String(message || tr('Ошибка Tauri'));
+    const i18n = window.TJ && window.TJ.i18n;
+    if (!i18n || typeof i18n.lang !== 'function' || i18n.lang() !== 'en') return text;
+
+    const cleanupSuffix = ' Очистка отменена, чтобы не удалить нужные скриншоты.';
+    let suffix = '';
+    let core = text;
+    if (core.endsWith(cleanupSuffix)) {
+      suffix = ' ' + tr(cleanupSuffix.trim());
+      core = core.slice(0, -cleanupSuffix.length).trim();
+    }
+
+    const corruptFile = /^Файл (.+) повреждён\.$/.exec(core);
+    if (corruptFile) {
+      return tr('Файл {name} повреждён.').replace('{name}', corruptFile[1]) + suffix;
+    }
+
+    const readNamed = /^Не удалось прочитать ([^:]+): ([\s\S]+)$/.exec(core);
+    if (readNamed) {
+      const target = readNamed[1];
+      if (!/^(список копий|папку резервных копий|папку скриншотов|файл журнала)$/.test(target)) {
+        return tr('Не удалось прочитать {name}: {error}').replace('{name}', target).replace('{error}', readNamed[2]) + suffix;
+      }
+    }
+
+    const colonIndex = core.indexOf(': ');
+    if (colonIndex > 0) {
+      const prefix = core.slice(0, colonIndex + 1);
+      const rest = core.slice(colonIndex + 2);
+      const translatedPrefix = tr(prefix);
+      if (translatedPrefix !== prefix) return translatedPrefix + ' ' + rest + suffix;
+    }
+    return tr(core) + suffix;
+  }
 
   function call(command, args) {
     return invoke(command, args || {}).catch(function (err) {
-      const message = err && err.message ? err.message : String(err || 'Ошибка Tauri');
-      throw new Error(message);
+      const raw = err && err.message ? err.message : String(err || 'Ошибка Tauri');
+      throw new Error(translateDesktopMessage(raw));
     });
   }
 
@@ -30,7 +77,8 @@
 
   window.tradeJournalDesktop = {
     isDesktop: true,
-    platform: platform,
+    get platform() { return platform; },
+    translateMessage: translateDesktopMessage,
 
     hasData: function () {
       return waitForSaves().then(function () {
@@ -97,7 +145,10 @@
     },
 
     getDataInfo: function () {
-      return call('data_info');
+      return call('data_info').then(function (info) {
+        if (info && info.platform) syncPlatform(info.platform);
+        return info;
+      });
     },
 
     storageHealth: function () {
@@ -122,6 +173,36 @@
 
     saveDownloadBytes: function (filename, base64Content) {
       return call('save_download_bytes', { filename: filename, content: base64Content });
+    },
+
+    saveDownloadBytesStream: async function (filename, bytes) {
+      const data = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes || 0);
+      const began = await call('save_download_begin', { filename: filename });
+      if (!began || began.canceled || !began.token) {
+        return { ok: true, canceled: true, path: null };
+      }
+      const token = began.token;
+      const chunkSize = 512 * 1024;
+      const encode = (window.TJ && window.TJ.utils && window.TJ.utils.bytesToBase64)
+        ? window.TJ.utils.bytesToBase64
+        : function (slice) {
+          let binary = '';
+          const step = 0x8000;
+          for (let i = 0; i < slice.length; i += step) {
+            binary += String.fromCharCode.apply(null, slice.subarray(i, i + step));
+          }
+          return btoa(binary);
+        };
+      try {
+        for (let offset = 0; offset < data.length; offset += chunkSize) {
+          const slice = data.subarray(offset, Math.min(data.length, offset + chunkSize));
+          await call('save_download_chunk', { token: token, chunk: encode(slice) });
+        }
+        return await call('save_download_finish', { token: token });
+      } catch (err) {
+        await call('save_download_abort', { token: token }).catch(function () { /* ignore */ });
+        throw err;
+      }
     },
 
     checkUpdate: function () {

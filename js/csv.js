@@ -3,6 +3,10 @@
   const NS = (window.TJ = window.TJ || {});
   const U = NS.utils;
 
+  function tr(value) {
+    return NS.i18n && typeof NS.i18n.t === 'function' ? NS.i18n.t(value) : value;
+  }
+
   // Header aliases are deliberately permissive: journals are often exported
   // from brokers and spreadsheet apps with Russian or English column names.
   const HEADER_ALIASES = {
@@ -12,7 +16,7 @@
     side: ['направление', 'side', 'direction', 'тип', 'позиция', 'long/short'],
     entry: ['вход', 'entry', 'цена входа', 'entry price', 'open price', 'цена открытия'],
     exit: ['выход', 'exit', 'цена выхода', 'exit price', 'close price', 'цена закрытия'],
-    stop: ['стоп', 'stop', 'stop loss', 'стоп лосс', 'стоп при входе', 'stop price'],
+    stop: ['стоп', 'stop', 'stop loss', 'стоп лосс', 'стоп при входе', 'stop price', 'initial stop'],
     currentStop: ['текущий стоп', 'current stop', 'trailing stop', 'стоп текущий'],
     target: ['тейк', 'take profit', 'target', 'tp', 'тейк профит', 'take-profit'],
     qty: ['количество', 'qty', 'quantity', 'объем', 'объём', 'size', 'volume', 'кол-во', 'колво'],
@@ -23,22 +27,31 @@
     discipline: ['дисциплина', 'discipline', 'оценка'],
     tags: ['теги', 'tags', 'tag'],
     notes: ['заметка', 'заметки', 'notes', 'note', 'комментарий', 'comment'],
+    entries: ['входы', 'entries', 'доборы', 'усреднения', 'scale in', 'entry legs'],
     exits: ['выходы', 'exits', 'частичные выходы', 'partial exits', 'exit legs', 'закрытия']
   };
 
   const EMOTION_ALIASES = {
     'спокоен': 'calm',
     'спокойно': 'calm',
+    'calm': 'calm',
     'уверен': 'confident',
     'уверенно': 'confident',
+    'confident': 'confident',
     'нейтрально': 'neutral',
     'нейтрален': 'neutral',
+    'neutral': 'neutral',
     'fomo': 'fomo',
     'страх': 'fear',
+    'fear': 'fear',
     'жадность': 'greed',
+    'greed': 'greed',
     'месть': 'revenge',
+    'revenge': 'revenge',
     'скука': 'boredom',
-    'эйфория': 'euphoria'
+    'boredom': 'boredom',
+    'эйфория': 'euphoria',
+    'euphoria': 'euphoria'
   };
 
   function todayISO(timeZone) {
@@ -159,6 +172,7 @@
     let negative = false;
     if (/^\(.*\)$/.test(text)) { negative = true; text = text.slice(1, -1); }
     text = text
+      .replace(/[\u2212\u2013]/g, '-')
       .replace(/[\s']/g, '')
       .replace(/[€$£¥₽₸]/g, '')
       .replace(/%$/, '');
@@ -174,7 +188,8 @@
     }
     const parsed = Number(text);
     if (!Number.isFinite(parsed)) return null;
-    return negative ? -parsed : parsed;
+    if (parsed === 0) return 0;
+    return negative ? (parsed < 0 ? parsed : -parsed) : parsed;
   }
 
   function isoDate(year, month, day) {
@@ -244,31 +259,42 @@
       .slice(0, 12);
   }
 
-  function parseExits(value, fallbackDate) {
+  function parseLegs(value, fallbackDate, kind) {
     const text = String(value === null || value === undefined ? '' : value).trim();
-    if (!text) return { exits: [], errors: [] };
-    const exits = [];
+    if (!text) return { legs: [], errors: [] };
+    const isEntry = kind === 'entry';
+    const legs = [];
     const errors = [];
     text.split(/\s*[|;]\s*/).filter(Boolean).forEach(function (part, index) {
       const match = part.match(/^([^@]+)@([^@]+)(?:@(.+))?$/);
       if (!match) {
-        errors.push('выход ' + (index + 1) + ': ожидается формат «количество@цена»');
+        errors.push(tr(isEntry ? 'вход {index}: ожидается формат «количество@цена»' : 'выход {index}: ожидается формат «количество@цена»').replace('{index}', index + 1));
         return;
       }
       const qty = number(match[1]);
       const price = number(match[2]);
       if (qty === null || qty <= 0) {
-        errors.push('выход ' + (index + 1) + ': некорректное количество');
+        errors.push(tr(isEntry ? 'вход {index}: некорректное количество' : 'выход {index}: некорректное количество').replace('{index}', index + 1));
         return;
       }
       if (price === null) {
-        errors.push('выход ' + (index + 1) + ': некорректная цена');
+        errors.push(tr(isEntry ? 'вход {index}: некорректная цена' : 'выход {index}: некорректная цена').replace('{index}', index + 1));
         return;
       }
-      const exitDate = date(match[3]) || fallbackDate;
-      exits.push({ qty: qty, price: price, date: exitDate });
+      const legDate = date(match[3]) || fallbackDate;
+      legs.push({ qty: qty, price: price, date: legDate });
     });
-    return { exits: exits, errors: errors };
+    return { legs: legs, errors: errors };
+  }
+
+  function parseExits(value, fallbackDate) {
+    const res = parseLegs(value, fallbackDate, 'exit');
+    return { exits: res.legs, errors: res.errors };
+  }
+
+  function parseEntries(value, fallbackDate) {
+    const res = parseLegs(value, fallbackDate, 'entry');
+    return { entries: res.legs, errors: res.errors };
   }
 
   function roundKey(value) {
@@ -284,12 +310,20 @@
     return [];
   }
 
+  function entriesOf(trade) {
+    if (trade && Array.isArray(trade.entries) && trade.entries.length > 1) return trade.entries;
+    return [];
+  }
+
   function fingerprint(trade) {
     if (!trade) return '';
     const exits = exitsOf(trade).map(function (exit) {
       return roundKey(exit.qty) + '@' + roundKey(exit.price);
     }).join('|');
-    return [
+    const entries = entriesOf(trade).map(function (leg) {
+      return roundKey(leg.qty) + '@' + roundKey(leg.price);
+    }).join('|');
+    const parts = [
       String(trade.date || ''),
       String(trade.time || ''),
       String(trade.symbol || '').trim().toUpperCase(),
@@ -298,7 +332,9 @@
       roundKey(trade.qty),
       roundKey(trade.multiplier === undefined ? 1 : trade.multiplier),
       exits
-    ].join('~');
+    ];
+    if (entries) parts.push(entries);
+    return parts.join('~');
   }
 
   function analyze(text, existingTrades, options) {
@@ -315,18 +351,22 @@
       stats: { rows: 0, valid: 0, duplicates: 0, errors: 0, warnings: 0, exits: 0 }
     };
     if (!parsed.rows.length) {
-      result.errors.push('Файл пуст.');
+      result.errors.push(tr('Файл пуст.'));
       result.stats.errors = 1;
       return result;
     }
 
     result.headers = parsed.rows[0].map(function (header) { return String(header).trim(); });
     result.mapping = mapHeaders(result.headers);
-    const required = ['symbol', 'entry', 'qty'];
+    const hasEntriesCol = result.mapping.entries !== undefined;
+    const required = hasEntriesCol ? ['symbol'] : ['symbol', 'entry', 'qty'];
     const missing = required.filter(function (field) { return result.mapping[field] === undefined; });
     if (missing.length) {
-      const labels = { symbol: 'Инструмент', entry: 'Вход', qty: 'Количество' };
-      result.errors.push('Не найдены обязательные колонки: ' + missing.map(function (field) { return labels[field]; }).join(', ') + '.');
+      const labels = { symbol: tr('Инструмент'), entry: tr('Вход'), qty: tr('Количество') };
+      result.errors.push(
+        tr('Не найдены обязательные колонки: {cols}.')
+          .replace('{cols}', missing.map(function (field) { return labels[field]; }).join(', '))
+      );
       result.stats.errors = 1;
       return result;
     }
@@ -341,31 +381,78 @@
 
       const symbol = String(cell(row, result.mapping, 'symbol')).trim().toUpperCase();
       if (!symbol) {
-        result.errors.push('Строка ' + line + ': не указан инструмент.');
-        return;
-      }
-      const entry = number(cell(row, result.mapping, 'entry'));
-      if (entry === null) {
-        result.errors.push('Строка ' + line + ': некорректная цена входа.');
-        return;
-      }
-      const qty = number(cell(row, result.mapping, 'qty'));
-      if (qty === null || qty <= 0) {
-        result.errors.push('Строка ' + line + ': количество должно быть больше нуля.');
+        result.errors.push(tr('Строка {line}: не указан инструмент.').replace('{line}', line));
         return;
       }
 
       const rawDate = cell(row, result.mapping, 'date');
+      const rawDateText = String(rawDate === null || rawDate === undefined ? '' : rawDate).trim();
       let tradeDate = date(rawDate);
+      let tradeTime = time(cell(row, result.mapping, 'time'));
       if (rawDate && !tradeDate) {
-        result.warnings.push('Строка ' + line + ': дата «' + rawDate + '» не распознана, использована сегодняшняя.');
+        result.warnings.push(
+          tr('Строка {line}: дата «{date}» не распознана, использована сегодняшняя.')
+            .replace('{line}', line)
+            .replace('{date}', rawDate)
+        );
+      } else if (tradeDate && !tradeTime && rawDateText) {
+        const tzMatch = rawDateText.match(/^(\d{4})-(\d{1,2})-(\d{1,2})[T\s](\d{1,2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?\s*(Z|[+-]\d{2}:?\d{2})$/i);
+        if (tzMatch) {
+          const offset = tzMatch[7].toUpperCase() === 'Z'
+            ? 'Z'
+            : (tzMatch[7].length === 5 ? tzMatch[7].slice(0, 3) + ':' + tzMatch[7].slice(3) : tzMatch[7]);
+          const normalizedIso =
+            tzMatch[1] + '-' + String(Number(tzMatch[2])).padStart(2, '0') + '-' + String(Number(tzMatch[3])).padStart(2, '0') +
+            'T' + String(Number(tzMatch[4])).padStart(2, '0') + ':' + tzMatch[5] + ':' + (tzMatch[6] || '00') + offset;
+          const hours = Number(tzMatch[4]);
+          const minutes = Number(tzMatch[5]);
+          const seconds = Number(tzMatch[6] || 0);
+          if (hours <= 23 && minutes <= 59 && seconds <= 59 && U && typeof U.utcToZoned === 'function') {
+            const zoned = U.utcToZoned(normalizedIso, options.timeZone);
+            if (zoned && zoned.date && zoned.time) {
+              tradeDate = zoned.date;
+              tradeTime = zoned.time;
+            }
+          }
+        } else {
+          const localMatch = rawDateText.match(/(?:T|\s)(\d{1,2}:\d{2})(?::\d{2}(?:\.\d+)?)?\s*$/);
+          if (localMatch) tradeTime = time(localMatch[1]);
+        }
       }
       if (!tradeDate) tradeDate = todayISO(options.timeZone);
 
-      const tradeTime = time(cell(row, result.mapping, 'time'));
+      const parsedEntries = parseEntries(cell(row, result.mapping, 'entries'), tradeDate);
+      if (parsedEntries.errors.length) {
+        result.errors.push(
+          tr('Строка {line}: {details}.')
+            .replace('{line}', line)
+            .replace('{details}', parsedEntries.errors.join('; '))
+        );
+        return;
+      }
+      const entries = parsedEntries.entries;
+      let entry = number(cell(row, result.mapping, 'entry'));
+      let qty = number(cell(row, result.mapping, 'qty'));
+      if (entries.length) {
+        const eQty = entries.reduce(function (sum, leg) { return sum + leg.qty; }, 0);
+        const eVal = entries.reduce(function (sum, leg) { return sum + leg.qty * leg.price; }, 0);
+        if (eQty > 0) {
+          qty = eQty;
+          entry = eVal / eQty;
+        }
+      }
+      if (entry === null) {
+        result.errors.push(tr('Строка {line}: некорректная цена входа.').replace('{line}', line));
+        return;
+      }
+      if (qty === null || qty <= 0) {
+        result.errors.push(tr('Строка {line}: количество должно быть больше нуля.').replace('{line}', line));
+        return;
+      }
+
       const tradeSide = side(cell(row, result.mapping, 'side'));
       if (!tradeSide) {
-        result.errors.push('Строка ' + line + ': направление должно быть Long/Short (или покупка/продажа).');
+        result.errors.push(tr('Строка {line}: направление должно быть Long/Short (или покупка/продажа).').replace('{line}', line));
         return;
       }
 
@@ -375,17 +462,21 @@
       const multiplierRaw = number(cell(row, result.mapping, 'multiplier'));
       const multiplier = multiplierRaw !== null && multiplierRaw > 0 ? multiplierRaw : 1;
       if (multiplierRaw !== null && multiplierRaw <= 0) {
-        result.warnings.push('Строка ' + line + ': множитель должен быть больше нуля, использован 1.');
+        result.warnings.push(tr('Строка {line}: множитель должен быть больше нуля, использован 1.').replace('{line}', line));
       }
       let fees = number(cell(row, result.mapping, 'fees'));
       if (fees === null || fees < 0) {
-        if (fees !== null) result.warnings.push('Строка ' + line + ': комиссия не может быть отрицательной, использован 0.');
+        if (fees !== null) result.warnings.push(tr('Строка {line}: комиссия не может быть отрицательной, использован 0.').replace('{line}', line));
         fees = 0;
       }
 
       const parsedExits = parseExits(cell(row, result.mapping, 'exits'), tradeDate);
       if (parsedExits.errors.length) {
-        result.errors.push('Строка ' + line + ': ' + parsedExits.errors.join('; ') + '.');
+        result.errors.push(
+          tr('Строка {line}: {details}.')
+            .replace('{line}', line)
+            .replace('{details}', parsedExits.errors.join('; '))
+        );
         return;
       }
       let exits = parsedExits.exits;
@@ -395,7 +486,12 @@
       }
       const exitQty = exits.reduce(function (sum, exit) { return sum + exit.qty; }, 0);
       if (exitQty > qty + 1e-9) {
-        result.errors.push('Строка ' + line + ': сумма частичных выходов больше количества (' + exitQty + ' > ' + qty + ').');
+        result.errors.push(
+          tr('Строка {line}: сумма частичных выходов больше количества ({closed} > {qty}).')
+            .replace('{line}', line)
+            .replace('{closed}', exitQty)
+            .replace('{qty}', qty)
+        );
         return;
       }
 
@@ -411,6 +507,7 @@
         qty: qty,
         multiplier: multiplier,
         fees: fees,
+        entries: entries,
         exits: exits,
         setup: String(cell(row, result.mapping, 'setup')).trim(),
         emotion: emotion(cell(row, result.mapping, 'emotion')),
