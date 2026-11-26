@@ -1,6 +1,6 @@
 [package]
 name = "tradejournal"
-version = "2.5.2"
+version = "2.6.0"
 description = "TradeJournal — локальный дневник трейдера для Windows и macOS"
 authors = ["FamaSALO"]
 edition = "2021"

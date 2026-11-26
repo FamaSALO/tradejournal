@@ -105,6 +105,14 @@ The screenshots use generated demo data; no real journal is shown.
 | ![Settings](assets/screenshots/settings.png) | ![Trade editor](assets/screenshots/trade-editor.png) |
 | Accounts, risk management, data, and updates | Partial exits, R/RR, screenshots, and notes |
 
+## What's new in 2.6.0
+
+- **IndexedDB journal storage & multi-screenshots** — the web version now stores the journal in IndexedDB with automatic `localStorage` migration, and trades support up to 4 labeled screenshots with a carousel lightbox.
+- **Scale-in entries, breakeven stop & fee presets** — partial entry legs (`entries[]`) calculate weighted entry price and position history; the trade form adds a "Stop to breakeven" button and saved commission templates.
+- **Exit-date analytics, Underwater Drawdown & risk metrics** — adds an entry/exit date-mode toggle, custom date range, Canvas 2D drawdown chart, monthly/tag performance tables, open portfolio risk, and breakeven win rate.
+- **Pre-trade checklist, Journal search & Deflate ZIP** — configurable checklist rules before trade entry, text/mood/tag search in Journal, Deflate-compressed ZIP archives, and chunked desktop export streaming.
+- **Storage, calculation & security hardening** — safer desktop backup recovery, stricter ZIP/CSV/DOM validation, DST-safe calendar dates, and desktop export reliability fixes.
+
 ## What's new in 2.5.2
 
 - **Day panel P&L** — the selected day's result and per-trade P&L are shown again. Trades opened and closed on the same day, including partial exits, are no longer skipped.
@@ -128,9 +136,9 @@ The screenshots use generated demo data; no real journal is shown.
 
 The GitHub Release contains:
 
-- `TradeJournal_2.5.2_x64-setup.exe` — an NSIS installer for the current user, without administrator rights.
-- `TradeJournal_2.5.2_x64-setup.exe.sig` — the installer signature for auto-update.
-- `TradeJournal-portable-2.5.2-x64.zip` — a portable version that runs without installation.
+- `TradeJournal_2.6.0_x64-setup.exe` — an NSIS installer for the current user, without administrator rights.
+- `TradeJournal_2.6.0_x64-setup.exe.sig` — the installer signature for auto-update.
+- `TradeJournal-portable-2.6.0-x64.zip` — a portable version that runs without installation.
 - `latest.json` — the update manifest read by the Windows app.
 - `SHA256SUMS.txt` — file checksums.
 
@@ -215,7 +223,7 @@ The finished installer and executable appear here:
 
 ```text
 src-tauri\target\release\TradeJournal.exe
-src-tauri\target\release\bundle\nsis\TradeJournal_2.5.2_x64-setup.exe
+src-tauri\target\release\bundle\nsis\TradeJournal_2.6.0_x64-setup.exe
 ```
 
 The portable build is produced by packing `TradeJournal.exe` into a ZIP. This is what the CI build in `.github/workflows/tauri.yml` does.
@@ -239,25 +247,25 @@ If MSVC Build Tools are not installed locally, use the ready CI build: push chan
 A release is published automatically from a tag:
 
 ```powershell
-git tag v2.5.2
-git push origin v2.5.2
+git tag v2.6.0
+git push origin v2.6.0
 ```
 
-The tag must match the version in `package.json`: version `2.5.2` requires tag `v2.5.2`. If they differ, the workflow fails. A tag build runs the **Build Tauri app** workflow, builds the installer and all artifacts, and then creates a draft GitHub Release with the installer, `.sig` signature, portable ZIP, `latest.json`, and `SHA256SUMS.txt`. A regular push to `main` builds artifacts but does not create a draft. If a draft or published release already exists for the tag, the workflow does not overwrite it and fails.
+The tag must match the version in `package.json`: version `2.6.0` requires tag `v2.6.0`. If they differ, the workflow fails. A tag build runs the **Build Tauri app** workflow, builds the installer and all artifacts, and then creates a draft GitHub Release with the installer, `.sig` signature, portable ZIP, `latest.json`, and `SHA256SUMS.txt`. A regular push to `main` builds artifacts but does not create a draft. If a draft or published release already exists for the tag, the workflow does not overwrite it and fails.
 
-Until the draft is published with **Publish**, the links in `latest.json` are not visible to users and auto-update to 2.5.2 is unaffected. After checking the files on Windows, publish the draft on the release page; users will receive the notification and can download and install the update. To roll back after publication, delete the release or publish a fixed version.
+Until the draft is published with **Publish**, the links in `latest.json` are not visible to users and auto-update to 2.6.0 is unaffected. After checking the files on Windows, publish the draft on the release page; users will receive the notification and can download and install the update. To roll back after publication, delete the release or publish a fixed version.
 
 Before publishing, follow the [manual release checklist](docs/RELEASE-CHECKLIST.md) (in Russian).
 
 ## macOS app
 
-Version 2.5.2 is built as a universal app for Apple Silicon (arm64) and Intel (x86_64). The minimum system version is macOS 10.15 Catalina.
+Version 2.6.0 is built as a universal app for Apple Silicon (arm64) and Intel (x86_64). The minimum system version is macOS 10.15 Catalina.
 
 ### Installation
 
 The `TradeJournal-macos-<sha>` CI artifact contains:
 
-- `TradeJournal_2.5.2_universal.dmg` — the app image;
+- `TradeJournal_2.6.0_universal.dmg` — the app image;
 - `SHA256SUMS.txt` — the DMG checksum.
 
 1. Open the DMG and drag `TradeJournal.app` into the **Applications** folder.
@@ -287,7 +295,7 @@ The path and the **Open data folder**, **Create backup**, and **Restore** button
 
 ### Updates
 
-Automatic updates are available in the Windows version only. On macOS, a new version is installed manually: download the new `TradeJournal_2.5.2_universal.dmg` from the **Build macOS app** CI artifact (`TradeJournal-macos-<sha>`, or from the releases page when attached), replace the app in **Applications**, and confirm the launch in **Privacy & Security** again if needed. The journal and settings are preserved.
+Automatic updates are available in the Windows version only. On macOS, a new version is installed manually: download the new `TradeJournal_2.6.0_universal.dmg` from the **Build macOS app** CI artifact (`TradeJournal-macos-<sha>`, or from the releases page when attached), replace the app in **Applications**, and confirm the launch in **Privacy & Security** again if needed. The journal and settings are preserved.
 
 ### Building the universal DMG
 
@@ -297,7 +305,7 @@ The build runs in the **Build macOS app** GitHub Actions workflow (`.github/work
 gh workflow run macos.yml --ref main
 ```
 
-When it finishes, download the `TradeJournal-macos-<sha>` artifact — it contains `TradeJournal_2.5.2_universal.dmg` and `SHA256SUMS.txt`.
+When it finishes, download the `TradeJournal-macos-<sha>` artifact — it contains `TradeJournal_2.6.0_universal.dmg` and `SHA256SUMS.txt`.
 
 Locally on a Mac:
 
