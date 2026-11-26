@@ -1537,11 +1537,42 @@
      Analytics
      ============================================================ */
 
+  let lastAnalyticsDrawdown = null;
+
+  function redrawAnalyticsCharts() {
+    const canvas = $('#drawdownChart');
+    if (!canvas || !NS.charts) return;
+    if (!lastAnalyticsDrawdown) {
+      renderAnalytics();
+      return;
+    }
+    NS.charts.drawdown(canvas, lastAnalyticsDrawdown.points, { emptyText: T('Нет данных о просадках за период') });
+  }
+
   function renderAnalytics() {
     const data = buildPeriodMetrics();
     const m = data.m;
     const rows = m.rows;
     const hasR = m.rCount > 0;
+
+    const ddSeries = store.drawdownSeries(data.filtered, data.base);
+    lastAnalyticsDrawdown = ddSeries;
+    if (NS.charts && $('#drawdownChart')) {
+      NS.charts.drawdown($('#drawdownChart'), ddSeries.points, { emptyText: T('Нет данных о просадках за период') });
+    }
+    const ddChip = $('#drawdownChip');
+    if (ddChip) {
+      if (!ddSeries.points.length || ddSeries.maxDD <= 0.004) {
+        ddChip.textContent = m.count ? T('Без просадок') : '—';
+        ddChip.className = 'chip ' + (m.count ? 'pos' : '');
+      } else {
+        ddChip.textContent = T('-{pct} · макс. {days} дн. ({trades} сд.)')
+          .replace('{pct}', U.percent(ddSeries.maxDDPct, 1))
+          .replace('{days}', ddSeries.maxDurationDays)
+          .replace('{trades}', ddSeries.maxDurationTrades);
+        ddChip.className = 'chip neg';
+      }
+    }
 
     $('#insights').innerHTML = buildInsights(m).map(function (insight) {
       return '<div class="insight ' + (insight.tone || '') + '"><span class="insight-ico">' + insight.icon + '</span><span>' + insight.text + '</span></div>';
@@ -1636,6 +1667,8 @@
 
     renderQuality(m);
     renderSetupTable(rows);
+    renderMonthTable(rows);
+    renderTagTable(rows);
   }
 
   function buildInsights(m) {
@@ -1875,25 +1908,63 @@
       '<div class="quality-row"><span>Серия поражений</span><b>' + m.maxLossStreak + '</b></div>';
   }
 
-  function renderSetupTable(rows) {
-    const groups = store.groupRows(rows, function (t) { return t.setup || '__EMPTY__'; })
-      .sort(function (a, b) { return b.pnl - a.pnl; });
-    const tbody = $('#setupTableBody');
+  function renderStatsTable(tbody, groups, emptyMessage, labelOpts) {
+    if (!tbody) return;
+    labelOpts = labelOpts || {};
     if (!groups.length) {
-      tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--muted-2);padding:24px">Нет данных за период</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--muted-2);padding:24px">' + U.escapeHtml(T(emptyMessage || 'Нет данных за период')) + '</td></tr>';
       return;
     }
     tbody.innerHTML = groups.map(function (group) {
       const pf = group.profitFactor === Infinity ? '∞' : decimal(group.profitFactor, 2);
       const hasR = group.rCount > 0;
-      const empty = group.key === '__EMPTY__';
-      return '<tr><td' + (empty ? '' : ' data-i18n-skip') + '>' + U.escapeHtml(empty ? T('Без сетапа') : group.key) + '</td>' +
+      const isEmpty = group.key === '__EMPTY__';
+      const label = labelOpts.format
+        ? labelOpts.format(group.key, isEmpty)
+        : (isEmpty ? T(labelOpts.emptyKeyLabel || 'Без категории') : group.key);
+      const skip = typeof labelOpts.skip === 'function' ? labelOpts.skip(group.key, isEmpty) : !isEmpty;
+      return '<tr><td' + (skip ? ' data-i18n-skip' : '') + '>' + U.escapeHtml(label) + '</td>' +
         '<td class="num">' + group.count + '</td>' +
         '<td class="num">' + U.percent(group.winRate, 0) + '</td>' +
         '<td class="num ' + (hasR ? toneClass(group.avgR) : '') + '">' + (hasR ? U.escapeHtml(U.rfmt(group.avgR, { sign: true })) : '—') + '</td>' +
         '<td class="num ' + toneClass(group.pnl) + '">' + U.escapeHtml(U.money(group.pnl, { sign: true })) + '</td>' +
         '<td class="num">' + pf + '</td></tr>';
     }).join('');
+  }
+
+  function formatMonthKey(key) {
+    if (!/^\d{4}-\d{2}$/.test(key || '')) return key || '—';
+    const parts = key.split('-').map(Number);
+    const dt = new Date(Date.UTC(parts[0], parts[1] - 1, 1));
+    const locale = NS.i18n && NS.i18n.locale ? NS.i18n.locale() : 'ru-RU';
+    try {
+      return U.capitalize(new Intl.DateTimeFormat(locale, { month: 'long', year: 'numeric', timeZone: 'UTC' }).format(dt));
+    } catch (err) {
+      return key;
+    }
+  }
+
+  function renderSetupTable(rows) {
+    const groups = store.groupRows(rows, function (t) { return t.setup || '__EMPTY__'; })
+      .sort(function (a, b) { return b.pnl - a.pnl; });
+    renderStatsTable($('#setupTableBody'), groups, 'Нет данных за период', { emptyKeyLabel: 'Без сетапа' });
+  }
+
+  function renderMonthTable(rows) {
+    const groups = store.groupRows(rows, function (t) { return (t.date || '').slice(0, 7) || '__EMPTY__'; })
+      .sort(function (a, b) { return b.key.localeCompare(a.key); });
+    renderStatsTable($('#monthTableBody'), groups, 'Нет данных за период', {
+      emptyKeyLabel: 'Без даты',
+      format: function (key, isEmpty) { return isEmpty ? T('Без даты') : formatMonthKey(key); },
+      skip: function (key, isEmpty) { return !isEmpty; }
+    });
+  }
+
+  function renderTagTable(rows) {
+    const groups = store.groupRows(rows, function (t) {
+      return t.tags && t.tags.length ? t.tags : ['__EMPTY__'];
+    }).sort(function (a, b) { return b.pnl - a.pnl; });
+    renderStatsTable($('#tagTableBody'), groups, 'Нет данных за период', { emptyKeyLabel: 'Без тега' });
   }
 
   /* ============================================================
@@ -5485,6 +5556,7 @@
     });
     window.addEventListener('resize', U.debounce(function () {
       if (state.view === 'dashboard') redrawDashboardCharts();
+      else if (state.view === 'analytics') redrawAnalyticsCharts();
     }, 220));
     window.addEventListener('tj:download-error', function (event) {
       toast(event.detail || 'Не удалось сохранить файл.', 'error');
@@ -6076,6 +6148,8 @@
     renderDayPanel: renderDayPanel,
     changeMonth: changeMonth,
     redrawDashboardCharts: redrawDashboardCharts,
+    redrawAnalyticsCharts: redrawAnalyticsCharts,
+    renderAnalytics: renderAnalytics,
     fillTimezoneOptions: fillTimezoneOptions,
     buildPeriodMetrics: buildPeriodMetrics,
     renderKpis: renderKpis,

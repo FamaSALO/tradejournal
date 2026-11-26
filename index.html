@@ -344,6 +344,20 @@
         <div class="kpi-grid kpi-small" id="analyticsKpis"></div>
 
         <div class="grid">
+          <article class="card span-12">
+            <header class="card-head">
+              <div class="card-title">
+                <h2>Просадка (Underwater)</h2>
+                <p>Глубина и длительность просадок от пика капитала</p>
+              </div>
+              <span class="chip" id="drawdownChip">—</span>
+            </header>
+            <div class="chart-wrap chart-220">
+              <canvas id="drawdownChart"></canvas>
+              <div class="chart-tooltip" id="drawdownTip"></div>
+            </div>
+          </article>
+
           <article class="card span-8">
             <header class="card-head">
               <div class="card-title">
@@ -402,6 +416,30 @@
               <table class="data-table setup-table">
                 <thead><tr><th>Сетап</th><th class="num">Сделок</th><th class="num">Винрейт</th><th class="num">Средний R</th><th class="num">P&L</th><th class="num">Профит-фактор</th></tr></thead>
                 <tbody id="setupTableBody"></tbody>
+              </table>
+            </div>
+          </article>
+
+          <article class="card span-6">
+            <header class="card-head">
+              <div class="card-title"><h2>Статистика по месяцам</h2><p>Динамика результата по месяцам</p></div>
+            </header>
+            <div class="table-wrap">
+              <table class="data-table compact-table">
+                <thead><tr><th>Месяц</th><th class="num">Сделок</th><th class="num">Винрейт</th><th class="num">Средний R</th><th class="num">P&L</th><th class="num">Профит-фактор</th></tr></thead>
+                <tbody id="monthTableBody"></tbody>
+              </table>
+            </div>
+          </article>
+
+          <article class="card span-6">
+            <header class="card-head">
+              <div class="card-title"><h2>Статистика по тегам</h2><p>Результативность по тегам сделок</p></div>
+            </header>
+            <div class="table-wrap">
+              <table class="data-table compact-table">
+                <thead><tr><th>Тег</th><th class="num">Сделок</th><th class="num">Винрейт</th><th class="num">Средний R</th><th class="num">P&L</th><th class="num">Профит-фактор</th></tr></thead>
+                <tbody id="tagTableBody"></tbody>
               </table>
             </div>
           </article>

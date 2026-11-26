@@ -772,3 +772,40 @@ test('computes directional openRisk, openPortfolioRisk, breakeven winrate and re
   assert.equal(portfolio.totalRisk, 15);
   assert.equal(portfolio.riskPct, 1);
 });
+
+test('drawdownSeries computes depth, duration and groupRows supports multi-tag arrays (FEAT-03)', function () {
+  const s = store;
+  const t1 = s.normalizeTrade({
+    id: 'd1', date: '2026-01-01', symbol: 'BTCUSD', side: 'long', entry: 100, qty: 1,
+    tags: ['breakout', 'trend'], exits: [{ id: 'e1', qty: 1, price: 200, date: '2026-01-01' }] // equity +100, peak 1100
+  });
+  const t2 = s.normalizeTrade({
+    id: 'd2', date: '2026-01-02', symbol: 'BTCUSD', side: 'long', entry: 100, qty: 1,
+    tags: ['breakout'], exits: [{ id: 'e2', qty: 1, price: 45, date: '2026-01-04' }] // equity +45, dd 55 (5%), duration 3 days, 1 trade
+  });
+  const t3 = s.normalizeTrade({
+    id: 'd3', date: '2026-01-05', symbol: 'ETHUSD', side: 'long', entry: 100, qty: 1,
+    tags: ['trend'], exits: [{ id: 'e3', qty: 1, price: 80, date: '2026-01-11' }] // equity +25, dd 75, duration 10 days, 2 trades
+  });
+  const t4 = s.normalizeTrade({
+    id: 'd4', date: '2026-01-12', symbol: 'SOLUSD', side: 'long', entry: 100, qty: 1,
+    tags: [], exits: [{ id: 'e4', qty: 1, price: 200, date: '2026-01-12' }] // equity +125, new peak, dd 0
+  });
+
+  const dd = s.drawdownSeries([t1, t2, t3, t4], 1000);
+  assert.equal(dd.points.length, 5);
+  assert.equal(dd.maxDD, 75);
+  assert.equal(Math.round((dd.maxDDPct) * 100) / 100, Math.round((75 / 1100) * 10000) / 100);
+  assert.equal(dd.maxDurationDays, 10);
+  assert.equal(dd.maxDurationTrades, 2);
+  assert.equal(dd.currentDD, 0);
+
+  const m = s.metrics([t1, t2, t3, t4], 1000);
+  const byTags = s.groupRows(m.rows, function (t) { return t.tags && t.tags.length ? t.tags : ['__EMPTY__']; });
+  const breakout = byTags.find(function (g) { return g.key === 'breakout'; });
+  const trend = byTags.find(function (g) { return g.key === 'trend'; });
+  assert.equal(breakout.count, 2);
+  assert.equal(breakout.pnl, 45);
+  assert.equal(trend.count, 2);
+  assert.equal(trend.pnl, 80);
+});

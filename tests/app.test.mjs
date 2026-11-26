@@ -762,3 +762,41 @@ test('dateMode exit and custom range split swing exits accurately and render 8 K
   TJ.app.renderQuality(byExit.m);
   assert.match(qualityBlock.innerHTML, /Доходность на закрытый риск/);
 });
+
+test('renderAnalytics populates drawdown chip, monthly table, and tag table (FEAT-03)', function () {
+  const els = {
+    '#insights': { innerHTML: '' },
+    '#analyticsKpis': { innerHTML: '' },
+    '#drawdownChart': null,
+    '#drawdownChip': { textContent: '', className: '' },
+    '#rHistogram': { innerHTML: '' },
+    '#sideBreakdown': { innerHTML: '' },
+    '#symbolBreakdown': { innerHTML: '' },
+    '#setupBreakdown': { innerHTML: '' },
+    '#weekdayBreakdown': { innerHTML: '' },
+    '#emotionBreakdown': { innerHTML: '' },
+    '#sessionBreakdown': { innerHTML: '' },
+    '#qualityBlock': { innerHTML: '' },
+    '#setupTableBody': { innerHTML: '' },
+    '#monthTableBody': { innerHTML: '' },
+    '#tagTableBody': { innerHTML: '' }
+  };
+  const { TJ } = loadApp(els);
+  const s = TJ.store;
+  s.state.trades = [
+    s.normalizeTrade({
+      id: 'm1', date: '2026-01-10', symbol: 'BTCUSD', side: 'long', entry: 100, stop: 95, qty: 2,
+      tags: ['momentum'], exits: [{ id: 'e1', qty: 2, price: 110, date: '2026-01-10' }]
+    }),
+    s.normalizeTrade({
+      id: 'm2', date: '2026-02-05', symbol: 'ETHUSD', side: 'long', entry: 100, stop: 95, qty: 2,
+      tags: ['momentum', 'plan'], exits: [{ id: 'e2', qty: 2, price: 90, date: '2026-02-05' }]
+    })
+  ];
+  TJ.app.renderAnalytics();
+  assert.match(els['#drawdownChip'].textContent, /%/);
+  assert.equal(els['#drawdownChip'].className, 'chip neg');
+  assert.match(els['#monthTableBody'].innerHTML, /2026/);
+  assert.match(els['#tagTableBody'].innerHTML, /momentum/);
+  assert.match(els['#tagTableBody'].innerHTML, /plan/);
+});

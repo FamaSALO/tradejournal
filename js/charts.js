@@ -167,6 +167,154 @@
     ctx.fill();
   }
 
+  /* ============================ Drawdown (Underwater) ============================ */
+  charts.drawdown = function (canvas, points, opts) {
+    opts = opts || {};
+    if (!canvas) return;
+    if (!points || points.length < 2) {
+      drawEmpty(canvas, opts.emptyText || 'Нет данных о просадках за период');
+      hideTooltip(tooltipFor(canvas));
+      return;
+    }
+
+    const env = prepare(canvas);
+    if (!env) return;
+    const ctx = env.ctx;
+    const w = env.w;
+    const h = env.h;
+    const tooltip = tooltipFor(canvas);
+    const pad = { l: 48, r: 12, t: 12, b: 24 };
+    const plotW = w - pad.l - pad.r;
+    const plotH = h - pad.t - pad.b;
+
+    const values = points.map(function (p) { return Math.min(0, p.value || 0); });
+    const worst = Math.min.apply(null, values);
+    const max = 0;
+    const rawSpan = Math.abs(worst) < 0.1 ? 1 : Math.abs(worst);
+    const step = niceStep(rawSpan / 4);
+    const min = -Math.max(step, Math.ceil(rawSpan / step) * step);
+    const gridLevels = Math.max(1, Math.round((max - min) / step));
+
+    const xAt = function (index) {
+      return pad.l + (points.length === 1 ? plotW / 2 : (index / (points.length - 1)) * plotW);
+    };
+    const yAt = function (value) {
+      return pad.t + ((max - value) / (max - min)) * plotH;
+    };
+    const zeroY = yAt(0);
+    const color = NEG;
+    const areaGradient = ctx.createLinearGradient(0, zeroY, 0, h - pad.b);
+    areaGradient.addColorStop(0, hexToRgba(color, 0.04));
+    areaGradient.addColorStop(1, hexToRgba(color, 0.3));
+    const labelCount = w < 420 ? 3 : 5;
+
+    const draw = function (hoverIndex) {
+      ctx.clearRect(0, 0, w, h);
+
+      for (let i = 0; i <= gridLevels; i++) {
+        const value = max - ((max - min) * i) / gridLevels;
+        const y = yAt(value);
+        ctx.strokeStyle = value === 0 ? AXIS : GRID;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(pad.l, Math.round(y) + 0.5);
+        ctx.lineTo(w - pad.r, Math.round(y) + 0.5);
+        ctx.stroke();
+        ctx.fillStyle = MUTED;
+        ctx.font = '9px ' + FONT;
+        ctx.textAlign = 'right';
+        ctx.textBaseline = 'middle';
+        const pctLabel = Math.abs(value) < 0.01 ? '0%' : (Math.round(value * 10) / 10) + '%';
+        ctx.fillText(pctLabel, pad.l - 8, y);
+      }
+
+      ctx.beginPath();
+      ctx.moveTo(xAt(0), zeroY);
+      points.forEach(function (point, index) {
+        ctx.lineTo(xAt(index), yAt(Math.min(0, point.value || 0)));
+      });
+      ctx.lineTo(xAt(points.length - 1), zeroY);
+      ctx.closePath();
+      ctx.fillStyle = areaGradient;
+      ctx.fill();
+
+      ctx.beginPath();
+      points.forEach(function (point, index) {
+        const x = xAt(index);
+        const y = yAt(Math.min(0, point.value || 0));
+        if (index === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      });
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1.9;
+      ctx.lineJoin = 'round';
+      ctx.lineCap = 'round';
+      ctx.stroke();
+
+      ctx.fillStyle = MUTED;
+      ctx.font = '9px ' + FONT;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'top';
+      const usedLabels = new Set();
+      for (let i = 0; i < labelCount; i++) {
+        const index = Math.round((i / (labelCount - 1)) * (points.length - 1));
+        if (usedLabels.has(index)) continue;
+        usedLabels.add(index);
+        ctx.fillText(axisDate(points[index].label), xAt(index), h - pad.b + 7);
+      }
+
+      if (hoverIndex !== null && hoverIndex !== undefined) {
+        const point = points[hoverIndex];
+        const x = xAt(hoverIndex);
+        const y = yAt(Math.min(0, point.value || 0));
+        ctx.strokeStyle = AXIS;
+        ctx.lineWidth = 1;
+        ctx.setLineDash([3, 3]);
+        ctx.beginPath();
+        ctx.moveTo(x, pad.t);
+        ctx.lineTo(x, h - pad.b);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.beginPath();
+        ctx.arc(x, y, 3.5, 0, Math.PI * 2);
+        ctx.fillStyle = color;
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(x, y, 7, 0, Math.PI * 2);
+        ctx.strokeStyle = hexToRgba(color, 0.5);
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+      }
+    };
+
+    draw(null);
+    bindHover(canvas);
+    canvas._tjMove = function (mx) {
+      const index = Math.max(0, Math.min(points.length - 1, Math.round(((mx - pad.l) / plotW) * (points.length - 1))));
+      draw(index);
+      const point = points[index];
+      const dateLabel = point.label && /^\d{4}-\d{2}-\d{2}$/.test(point.label) ? U.formatDate(point.label, 'long') : (point.label || '');
+      const isZero = (point.dd || 0) <= 0.004;
+      const pctText = isZero ? '0%' : '-' + U.percent(point.ddPct || 0, 1);
+      const moneyText = isZero ? U.money(0) : '-' + U.money(point.dd || 0);
+      const metaParts = [];
+      if (point.symbol) metaParts.push(point.symbol);
+      metaParts.push(isZero
+        ? tr('Пик капитала')
+        : tr('Длительность: {days} дн. · {trades} сд.')
+          .replace('{days}', point.durationDays || 0)
+          .replace('{trades}', point.durationTrades || 0));
+      const html = '<div class="tt-label">' + U.escapeHtml(dateLabel) + '</div>' +
+        '<strong class="' + (isZero ? 'pos' : 'neg') + '">' + U.escapeHtml(pctText + ' (' + moneyText + ')') + '</strong>' +
+        '<div class="tt-meta">' + U.escapeHtml(metaParts.join(' · ')) + '</div>';
+      showTooltip(tooltip, html, xAt(index), yAt(Math.min(0, point.value || 0)), w, h);
+    };
+    canvas._tjLeave = function () {
+      draw(null);
+      hideTooltip(tooltip);
+    };
+  };
+
   /* ============================ Equity ============================ */
   charts.equity = function (canvas, points, opts) {
     opts = opts || {};

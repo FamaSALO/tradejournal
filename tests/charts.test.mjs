@@ -167,3 +167,21 @@ test('equity chart draws points and mouse fallback tooltips when PointerEvent is
   mock.listeners.get('touchend')();
   assert.equal(mock.classes.has('show'), false);
 });
+
+test('drawdown chart renders negative curve and duration tooltip (FEAT-03)', function () {
+  const charts = loadCharts(true);
+  const mock = makeCanvas(500, 220, true);
+
+  charts.drawdown(mock.canvas, [
+    { label: '2026-01-01', value: 0, dd: 0, ddPct: 0, durationDays: 0, durationTrades: 0, symbol: '' },
+    { label: '2026-01-02', value: -4.5, dd: 450, ddPct: 4.5, durationDays: 3, durationTrades: 1, symbol: 'BTCUSD' },
+    { label: '2026-01-05', value: -8.2, dd: 820, ddPct: 8.2, durationDays: 6, durationTrades: 2, symbol: 'ETHUSD' }
+  ]);
+
+  assert.equal(mock.calls.texts.includes('0%'), true);
+  assert.ok(mock.listeners.has('pointerdown'));
+  mock.listeners.get('pointerdown')({ clientX: 480, clientY: 120 });
+  assert.equal(mock.classes.has('show'), true);
+  assert.match(mock.tooltip.innerHTML, /-8[.,]2%/);
+  assert.match(mock.tooltip.innerHTML, /6 дн/);
+});

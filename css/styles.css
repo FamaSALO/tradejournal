@@ -918,6 +918,8 @@ svg { display: block; }
 .quality-row b { color: var(--text-strong); font-weight: 600; font-variant-numeric: tabular-nums; }
 .setup-table { min-width: 600px; }
 .setup-table td:first-child { font-weight: 500; }
+.compact-table { min-width: 460px; }
+.compact-table td:first-child { font-weight: 500; }
 
 /* ============================ Journal ============================ */
 .journal-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 14px; padding: 16px 20px; }

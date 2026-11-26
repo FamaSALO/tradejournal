@@ -1637,20 +1637,26 @@
     const map = new Map();
     rows.forEach(function (row) {
       const rawKey = keyFn(row.trade);
-      const key = (rawKey === null || rawKey === undefined || rawKey === '') ? '—' : String(rawKey);
-      let group = map.get(key);
-      if (!group) {
-        group = { key: key, count: 0, pnl: 0, wins: 0, losses: 0, be: 0, grossProfit: 0, grossLoss: 0, rSum: 0, rCount: 0 };
-        map.set(key, group);
-      }
-      group.count++;
-      group.pnl += row.pnl;
-      if (row.pnl > 0) group.grossProfit += row.pnl;
-      else if (row.pnl < 0) group.grossLoss += row.pnl;
-      if (row.pnl > 0.004) group.wins++;
-      else if (row.pnl < -0.004) group.losses++;
-      else group.be++;
-      if (row.r !== null) { group.rSum += row.r; group.rCount++; }
+      const list = Array.isArray(rawKey) ? rawKey : [rawKey];
+      const seen = new Set();
+      list.forEach(function (rawItem) {
+        const key = (rawItem === null || rawItem === undefined || rawItem === '') ? '—' : String(rawItem);
+        if (seen.has(key)) return;
+        seen.add(key);
+        let group = map.get(key);
+        if (!group) {
+          group = { key: key, count: 0, pnl: 0, wins: 0, losses: 0, be: 0, grossProfit: 0, grossLoss: 0, rSum: 0, rCount: 0 };
+          map.set(key, group);
+        }
+        group.count++;
+        group.pnl += row.pnl;
+        if (row.pnl > 0) group.grossProfit += row.pnl;
+        else if (row.pnl < 0) group.grossLoss += row.pnl;
+        if (row.pnl > 0.004) group.wins++;
+        else if (row.pnl < -0.004) group.losses++;
+        else group.be++;
+        if (row.r !== null) { group.rSum += row.r; group.rCount++; }
+      });
     });
     return Array.from(map.values()).map(function (group) {
       return {
@@ -1668,6 +1674,91 @@
         profitFactor: group.grossLoss < -0.0001 ? group.grossProfit / Math.abs(group.grossLoss) : (group.grossProfit > 0.0001 ? Infinity : 0)
       };
     });
+  }
+
+  function dayDiffISO(fromIso, toIso) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(fromIso || '') || !/^\d{4}-\d{2}-\d{2}$/.test(toIso || '')) return 0;
+    const a = fromIso.split('-').map(Number);
+    const b = toIso.split('-').map(Number);
+    return Math.round((Date.UTC(b[0], b[1] - 1, b[2]) - Date.UTC(a[0], a[1] - 1, a[2])) / 86400000);
+  }
+
+  function drawdownSeries(trades, startBalance) {
+    const realized = sortTrades((trades || []).filter(hasRealized), 'asc');
+    const events = pnlEventRows(realized);
+    const base = U.parseNum(startBalance) || 0;
+    if (!events.length) {
+      return {
+        points: [],
+        maxDD: 0,
+        maxDDPct: 0,
+        maxDurationDays: 0,
+        maxDurationTrades: 0,
+        currentDD: 0,
+        currentDDPct: 0
+      };
+    }
+    let equity = 0;
+    let peak = 0;
+    let peakDate = events[0].date || '';
+    let maxDD = 0;
+    let maxDDPct = 0;
+    let maxDurationDays = 0;
+    let maxDurationTrades = 0;
+    let ddTrades = 0;
+    const points = [{
+      label: events[0].date || '',
+      value: 0,
+      dd: 0,
+      ddPct: 0,
+      equity: base,
+      peak: base,
+      durationDays: 0,
+      durationTrades: 0,
+      symbol: ''
+    }];
+
+    events.forEach(function (ev) {
+      equity += ev.pnl;
+      if (equity >= peak - 1e-9) {
+        peak = equity;
+        peakDate = ev.date || peakDate;
+        ddTrades = 0;
+      } else {
+        ddTrades++;
+      }
+      const peakBalance = base + peak;
+      const curBalance = base + equity;
+      const dd = Math.max(0, peak - equity);
+      const ddPct = peakBalance > 0 ? (dd / peakBalance) * 100 : 0;
+      const durDays = (dd > 0.004 && peakDate && ev.date) ? Math.max(0, dayDiffISO(peakDate, ev.date)) : 0;
+      if (dd > maxDD) maxDD = dd;
+      if (ddPct > maxDDPct) maxDDPct = ddPct;
+      if (durDays > maxDurationDays) maxDurationDays = durDays;
+      if (ddTrades > maxDurationTrades) maxDurationTrades = ddTrades;
+      points.push({
+        label: ev.date || '',
+        value: -ddPct,
+        dd: dd,
+        ddPct: ddPct,
+        equity: curBalance,
+        peak: peakBalance,
+        durationDays: durDays,
+        durationTrades: ddTrades,
+        symbol: ev.trade ? ev.trade.symbol : ''
+      });
+    });
+
+    const last = points[points.length - 1];
+    return {
+      points: points,
+      maxDD: maxDD,
+      maxDDPct: maxDDPct,
+      maxDurationDays: maxDurationDays,
+      maxDurationTrades: maxDurationTrades,
+      currentDD: last ? last.dd : 0,
+      currentDDPct: last ? last.ddPct : 0
+    };
   }
 
   function balanceAll() {
@@ -1766,6 +1857,7 @@
     plannedRR: plannedRR,
     sortTrades: sortTrades,
     metrics: metrics,
+    drawdownSeries: drawdownSeries,
     groupRows: groupRows,
     balanceAll: balanceAll,
     storageSize: storageSize,
