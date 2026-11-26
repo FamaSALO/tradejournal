@@ -11,6 +11,7 @@
   const SCHEMA_VERSION = 4;
   const DEFAULT_ACCOUNT_NAME = 'Основной счёт';
   const MAX_EXITS = 50;
+  const MAX_SCREENSHOTS = 4;
   const MULTIPLIER_MIN = 0.000000001;
   const MULTIPLIER_MAX = 1000000000;
   const QTY_EPSILON = 1e-9;
@@ -330,16 +331,8 @@
     if (!symbol) return null;
     const side = raw.side === 'short' ? 'short' : 'long';
     const discipline = U.clamp(Math.round(U.parseNum(raw.discipline) || 0), 0, 5);
-    let shot = '';
-    if (typeof raw.screenshot === 'string') {
-      if (SAFE_SCREENSHOT_FILE_RE.test(raw.screenshot)) {
-        shot = raw.screenshot;
-      } else if (!desktop && IDB_SCREENSHOT_RE.test(raw.screenshot)) {
-        shot = raw.screenshot;
-      } else if (raw.screenshot.length <= MAX_SCREENSHOT_LENGTH && SAFE_SCREENSHOT_RE.test(raw.screenshot)) {
-        shot = raw.screenshot;
-      }
-    }
+    const screenshots = normalizeScreenshots(raw);
+    const shot = screenshots.length ? screenshots[0].src : '';
     const qty = U.parseNum(raw.qty);
     let fees = U.parseNum(raw.fees);
     if (fees === null) {
@@ -376,8 +369,59 @@
       discipline: discipline,
       tags: parseTags(raw.tags),
       notes: String(raw.notes || ''),
-      screenshot: shot
+      screenshot: shot,
+      screenshots: screenshots
     };
+  }
+
+  function isAllowedScreenshotRef(value) {
+    if (typeof value !== 'string' || !value) return false;
+    if (SAFE_SCREENSHOT_FILE_RE.test(value)) return true;
+    if (!desktop && IDB_SCREENSHOT_RE.test(value)) return true;
+    return value.length <= MAX_SCREENSHOT_LENGTH && SAFE_SCREENSHOT_RE.test(value);
+  }
+
+  function rawScreenshotList(rawTrade) {
+    const seen = new Set();
+    const list = [];
+    const items = Array.isArray(rawTrade && rawTrade.screenshots) ? rawTrade.screenshots : [];
+    items.forEach(function (item) {
+      if (typeof item === 'string') {
+        if (item && !seen.has(item)) {
+          seen.add(item);
+          list.push({ src: item, label: '' });
+        }
+        return;
+      }
+      if (item && typeof item === 'object') {
+        const src = typeof item.src === 'string' ? item.src : '';
+        if (src && !seen.has(src)) {
+          seen.add(src);
+          list.push({ src: src, label: String(item.label || '').trim().slice(0, 32) });
+        }
+      }
+    });
+    const legacy = rawTrade && typeof rawTrade.screenshot === 'string' ? rawTrade.screenshot : '';
+    if (legacy && !items.length && !seen.has(legacy)) {
+      list.push({ src: legacy, label: '' });
+    }
+    return list;
+  }
+
+  function normalizeScreenshots(rawTrade) {
+    const out = [];
+    rawScreenshotList(rawTrade).forEach(function (item) {
+      if (out.length >= MAX_SCREENSHOTS) return;
+      if (isAllowedScreenshotRef(item.src)) {
+        out.push({ src: item.src, label: item.label });
+      }
+    });
+    return out;
+  }
+
+  function tradeScreenshots(trade) {
+    if (!trade || typeof trade !== 'object') return [];
+    return normalizeScreenshots(trade);
   }
 
   function normalizeNote(raw) {
@@ -547,22 +591,30 @@
           stats.invalidExits += Math.max(0, rawExits.length - validExits);
         }
 
-        const shot = typeof trade.screenshot === 'string' ? trade.screenshot : '';
-        if (!shot) return;
-        stats.screenshots++;
-        if (SAFE_SCREENSHOT_FILE_RE.test(shot)) {
-          stats.fileScreenshots++;
-          stats.screenshotsAccepted++;
-        } else if (!desktop && IDB_SCREENSHOT_RE.test(shot)) {
-          stats.idbScreenshots++;
-          stats.screenshotsAccepted++;
-        } else if (shot.length <= MAX_SCREENSHOT_LENGTH && SAFE_SCREENSHOT_RE.test(shot)) {
-          stats.screenshotsAccepted++;
-        } else {
-          stats.screenshotsDropped++;
-          if (shot.length > MAX_SCREENSHOT_LENGTH) stats.screenshotsTooLarge++;
-          else stats.screenshotsInvalid++;
+        const rawShots = rawScreenshotList(trade);
+        const limitedShots = rawShots.slice(0, MAX_SCREENSHOTS);
+        const excessShots = Math.max(0, rawShots.length - limitedShots.length);
+        if (excessShots) {
+          stats.screenshots += excessShots;
+          stats.screenshotsDropped += excessShots;
         }
+        limitedShots.forEach(function (item) {
+          const shot = item.src;
+          stats.screenshots++;
+          if (SAFE_SCREENSHOT_FILE_RE.test(shot)) {
+            stats.fileScreenshots++;
+            stats.screenshotsAccepted++;
+          } else if (!desktop && IDB_SCREENSHOT_RE.test(shot)) {
+            stats.idbScreenshots++;
+            stats.screenshotsAccepted++;
+          } else if (shot.length <= MAX_SCREENSHOT_LENGTH && SAFE_SCREENSHOT_RE.test(shot)) {
+            stats.screenshotsAccepted++;
+          } else {
+            stats.screenshotsDropped++;
+            if (shot.length > MAX_SCREENSHOT_LENGTH) stats.screenshotsTooLarge++;
+            else stats.screenshotsInvalid++;
+          }
+        });
       });
 
       const notes = account && Array.isArray(account.notes) ? account.notes : [];
@@ -904,23 +956,33 @@
 
   async function migrateScreenshotData() {
     let changed = 0;
+    const ensureList = function (trade) {
+      if (!Array.isArray(trade.screenshots) || !trade.screenshots.length) {
+        trade.screenshots = trade.screenshot ? [{ src: trade.screenshot, label: '' }] : [];
+      }
+      return trade.screenshots;
+    };
     if (desktop) {
       if (typeof desktop.saveScreenshot !== 'function') return 0;
       for (const account of root.accounts) {
         for (const trade of account.trades) {
-          if (!SAFE_SCREENSHOT_RE.test(trade.screenshot || '')) continue;
-          try {
-            const result = await desktop.saveScreenshot(U.uid(), trade.screenshot);
-            const reference = result && result.reference
-              ? result.reference
-              : (typeof result === 'string' ? result : '');
-            if (reference) {
-              trade.screenshot = reference;
-              changed++;
+          const shots = ensureList(trade);
+          for (const item of shots) {
+            if (!SAFE_SCREENSHOT_RE.test(item && item.src ? item.src : '')) continue;
+            try {
+              const result = await desktop.saveScreenshot(U.uid(), item.src);
+              const reference = result && result.reference
+                ? result.reference
+                : (typeof result === 'string' ? result : '');
+              if (reference) {
+                item.src = reference;
+                changed++;
+              }
+            } catch (err) {
+              console.warn('TradeJournal: не удалось вынести скриншот в файл', err);
             }
-          } catch (err) {
-            console.warn('TradeJournal: не удалось вынести скриншот в файл', err);
           }
+          trade.screenshot = shots[0] ? shots[0].src : '';
         }
       }
       return changed;
@@ -930,19 +992,23 @@
     if (!blobs) return 0;
     for (const account of root.accounts) {
       for (const trade of account.trades) {
-        if (!SAFE_SCREENSHOT_RE.test(trade.screenshot || '')) continue;
-        try {
-          // Persist to IndexedDB first, verify the value round-trips, and
-          // only then replace the inline reference and save the journal.
-          // Any failure leaves the original inline data URL intact.
-          var ref = await blobs.save(trade.screenshot);
-          var roundtrip = await blobs.load(ref);
-          if (!roundtrip) throw new Error('Round-trip check failed');
-          trade.screenshot = ref;
-          changed++;
-        } catch (err) {
-          console.warn('TradeJournal: не удалось перенести скриншот в IndexedDB', err);
+        const shots = ensureList(trade);
+        for (const item of shots) {
+          if (!SAFE_SCREENSHOT_RE.test(item && item.src ? item.src : '')) continue;
+          try {
+            // Persist to IndexedDB first, verify the value round-trips, and
+            // only then replace the inline reference and save the journal.
+            // Any failure leaves the original inline data URL intact.
+            var ref = await blobs.save(item.src);
+            var roundtrip = await blobs.load(ref);
+            if (!roundtrip) throw new Error('Round-trip check failed');
+            item.src = ref;
+            changed++;
+          } catch (err) {
+            console.warn('TradeJournal: не удалось перенести скриншот в IndexedDB', err);
+          }
         }
+        trade.screenshot = shots[0] ? shots[0].src : '';
       }
     }
     return changed;
@@ -958,7 +1024,9 @@
     const refs = [];
     root.accounts.forEach(function (account) {
       account.trades.forEach(function (trade) {
-        if (trade && IDB_SCREENSHOT_RE.test(trade.screenshot || '')) refs.push(trade.screenshot);
+        tradeScreenshots(trade).forEach(function (item) {
+          if (IDB_SCREENSHOT_RE.test(item.src || '')) refs.push(item.src);
+        });
       });
     });
     return refs;
@@ -1038,16 +1106,24 @@
 
   async function exportSnapshot() {
     const snapshot = JSON.parse(JSON.stringify(root));
+    const listFor = function (trade) {
+      if (Array.isArray(trade.screenshots) && trade.screenshots.length) return trade.screenshots;
+      return trade.screenshot ? [{ src: trade.screenshot, label: '' }] : [];
+    };
     if (desktop) {
       for (const account of snapshot.accounts) {
         for (const trade of account.trades) {
-          if (!SAFE_SCREENSHOT_FILE_RE.test(trade.screenshot || '')) continue;
-          try {
-            const dataUrl = await desktop.loadScreenshot(trade.screenshot);
-            if (dataUrl) trade.screenshot = dataUrl;
-          } catch (err) {
-            console.warn('TradeJournal: не удалось вложить скриншот в экспорт', err);
+          const shots = listFor(trade);
+          for (const item of shots) {
+            if (!SAFE_SCREENSHOT_FILE_RE.test(item && item.src ? item.src : '')) continue;
+            try {
+              const dataUrl = await desktop.loadScreenshot(item.src);
+              if (dataUrl) item.src = dataUrl;
+            } catch (err) {
+              console.warn('TradeJournal: не удалось вложить скриншот в экспорт', err);
+            }
           }
+          if (shots.length) trade.screenshot = shots[0].src;
         }
       }
       return snapshot;
@@ -1057,9 +1133,13 @@
     if (!blobs) return snapshot;
     for (const account of snapshot.accounts) {
       for (const trade of account.trades) {
-        if (!IDB_SCREENSHOT_RE.test(trade.screenshot || '')) continue;
-        const dataUrl = await blobs.load(trade.screenshot);
-        if (dataUrl) trade.screenshot = dataUrl;
+        const shots = listFor(trade);
+        for (const item of shots) {
+          if (!IDB_SCREENSHOT_RE.test(item && item.src ? item.src : '')) continue;
+          const dataUrl = await blobs.load(item.src);
+          if (dataUrl) item.src = dataUrl;
+        }
+        if (shots.length) trade.screenshot = shots[0].src;
       }
     }
     return snapshot;
@@ -1486,6 +1566,7 @@
     DEFAULT_ACCOUNT_NAME: DEFAULT_ACCOUNT_NAME,
     DEFAULT_SETTINGS: DEFAULT_SETTINGS,
     MAX_EXITS: MAX_EXITS,
+    MAX_SCREENSHOTS: MAX_SCREENSHOTS,
     MULTIPLIER_MIN: MULTIPLIER_MIN,
     MULTIPLIER_MAX: MULTIPLIER_MAX,
     QTY_EPSILON: QTY_EPSILON,
@@ -1511,6 +1592,7 @@
     deleteAccount: deleteAccount,
     saveScreenshot: saveScreenshotData,
     screenshotSource: screenshotSource,
+    tradeScreenshots: tradeScreenshots,
     migrateScreenshots: migrateScreenshots,
     gcScreenshots: gcScreenshots,
     requestPersistentStorage: requestPersistentStorage,

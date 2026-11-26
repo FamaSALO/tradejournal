@@ -909,16 +909,17 @@
 
         <div class="shot-field" id="shotField">
           <div class="shot-head">
-            <span>Скриншот графика</span>
+            <span>Скриншоты графика</span>
+            <span class="shot-count" id="shotCount">0 / 4</span>
             <div class="shot-actions">
               <button type="button" class="btn btn-ghost btn-sm" id="pasteShot">Вставить</button>
               <button type="button" class="btn btn-ghost btn-sm" id="uploadShotBtn">Загрузить</button>
-              <button type="button" class="link-btn hidden" id="removeShot">Удалить</button>
+              <button type="button" class="link-btn hidden" id="removeShot">Удалить все</button>
             </div>
           </div>
-          <input type="file" id="tradeShot" accept="image/*" hidden>
+          <input type="file" id="tradeShot" accept="image/*" multiple hidden>
           <div class="shot-preview" id="shotPreview"></div>
-          <p class="shot-hint">Ctrl+V, перетащите файл или загрузите с ПК. Нажмите на скриншот, чтобы увеличить.</p>
+          <p class="shot-hint">Ctrl+V, перетащите файлы или загрузите с ПК (до 4 шт.). Нажмите на скриншот, чтобы увеличить.</p>
         </div>
 
         <div class="calc-strip">
@@ -1076,7 +1077,17 @@
 <div class="shot-lightbox" id="shotLightbox" hidden>
   <button type="button" class="shot-lightbox-backdrop" id="shotLightboxBackdrop" tabindex="-1" aria-label="Закрыть просмотр"></button>
   <figure class="shot-lightbox-panel" role="dialog" aria-modal="true" aria-label="Скриншот сделки">
+    <button type="button" class="icon-btn shot-lightbox-nav shot-lightbox-prev" id="shotLightboxPrev" aria-label="Предыдущий скриншот" hidden>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m15 18-6-6 6-6"/></svg>
+    </button>
     <img id="shotLightboxImage" alt="Скриншот сделки">
+    <button type="button" class="icon-btn shot-lightbox-nav shot-lightbox-next" id="shotLightboxNext" aria-label="Следующий скриншот" hidden>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m9 18 6-6-6-6"/></svg>
+    </button>
+    <div class="shot-lightbox-bar" id="shotLightboxBar" hidden>
+      <span class="shot-lightbox-caption" id="shotLightboxCaption"></span>
+      <span class="shot-lightbox-counter" id="shotLightboxCounter"></span>
+    </div>
     <button type="button" class="icon-btn shot-lightbox-close" id="shotLightboxClose" aria-label="Закрыть">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>
     </button>

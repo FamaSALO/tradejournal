@@ -474,3 +474,53 @@ test('journal falls back to localStorage on IDB write failure and preserves corr
   assert.ok(corruptLoaded.TJ.store.loadError);
   assert.equal(corruptLoaded.storage.getItem(store.KEY), '{broken json');
 });
+
+test('multiple screenshots (up to 4) migrate, protect GC refs, and embed on export with backwards compatibility (FEAT-06)', async function () {
+  const adapter = memoryAdapter();
+  const loaded = createStore(adapter);
+  const store = loaded.TJ.store;
+  const PNG1 = 'data:image/png;base64,AAAA';
+  const PNG2 = 'data:image/png;base64,BBBB';
+  const PNG3 = 'data:image/png;base64,CCCC';
+  const PNG4 = 'data:image/png;base64,DDDD';
+  const PNG5 = 'data:image/png;base64,EEEE';
+
+  const normalized = store.normalizeTrade(Object.assign(trade(), {
+    screenshot: '',
+    screenshots: [
+      { src: PNG1, label: 'HTF' },
+      { src: PNG2, label: 'Вход' },
+      { src: PNG3, label: 'Выход' },
+      { src: PNG4, label: 'График' },
+      { src: PNG5, label: 'Extra' }
+    ]
+  }));
+
+  assert.equal(normalized.screenshots.length, 4);
+  assert.equal(normalized.screenshot, PNG1);
+  assert.equal(normalized.screenshots[1].label, 'Вход');
+
+  store.state.trades = [normalized];
+  const migrated = await store.migrateScreenshots();
+  assert.equal(migrated, 4);
+  assert.equal(store.state.trades[0].screenshots.every(function (s) {
+    return /^idb:screenshots\//.test(s.src);
+  }), true);
+  assert.equal(store.state.trades[0].screenshot, store.state.trades[0].screenshots[0].src);
+
+  await adapter.put('orphan-multi', PNG);
+  await store.save();
+  assert.equal(adapter.data.has('orphan-multi'), false);
+  store.state.trades[0].screenshots.forEach(function (s) {
+    assert.equal(adapter.data.has(loaded.TJ.blobStore.idFromRef(s.src)), true);
+  });
+
+  const exported = await store.exportSnapshot();
+  const exportedTrade = exported.accounts[0].trades[0];
+  assert.deepEqual(Array.from(exportedTrade.screenshots, function (s) { return s.src; }), [PNG1, PNG2, PNG3, PNG4]);
+  assert.equal(exportedTrade.screenshot, PNG1);
+
+  const legacyNormalized = store.normalizeTrade(trade());
+  assert.deepEqual(JSON.parse(JSON.stringify(legacyNormalized.screenshots)), [{ src: PNG, label: '' }]);
+  assert.equal(legacyNormalized.screenshot, PNG);
+});

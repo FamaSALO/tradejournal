@@ -603,3 +603,66 @@ test('getFilteredTrades supports search, side, result buckets and R/symbol/date 
   const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
   assert.match(html, /Content-Security-Policy" content="default-src 'self';/);
 });
+
+test('multi-screenshot badge renders on trade row and lightbox cycles through screenshots (FEAT-06)', async function () {
+  const imgEl = {
+    attrs: {},
+    setAttribute: function (k, v) { this.attrs[k] = v; },
+    removeAttribute: function (k) { delete this.attrs[k]; },
+    src: '',
+    alt: ''
+  };
+  const prevBtn = { hidden: true };
+  const nextBtn = { hidden: true };
+  const bar = { hidden: true };
+  const captionEl = { textContent: '' };
+  const counterEl = { textContent: '' };
+  const closeBtn = { focus: function () {} };
+  const lightbox = { hidden: true };
+  const { TJ } = loadApp({
+    '#shotLightbox': lightbox,
+    '#shotLightboxImage': imgEl,
+    '#shotLightboxPrev': prevBtn,
+    '#shotLightboxNext': nextBtn,
+    '#shotLightboxBar': bar,
+    '#shotLightboxCaption': captionEl,
+    '#shotLightboxCounter': counterEl,
+    '#shotLightboxClose': closeBtn
+  });
+  const t = TJ.store.normalizeTrade({
+    id: 'mshot-1',
+    date: '2026-02-01',
+    time: '10:00',
+    symbol: 'BTCUSD',
+    side: 'long',
+    entry: 100,
+    qty: 1,
+    screenshots: [
+      { src: 'data:image/png;base64,AAAA', label: 'HTF' },
+      { src: 'data:image/png;base64,BBBB', label: 'Вход' }
+    ]
+  });
+  TJ.store.state.trades = [t];
+
+  const html = TJ.app.tradeRowHtml(t);
+  assert.match(html, /class="thumb-count">2<\/span>/);
+
+  TJ.app.openTradeScreenshot('mshot-1');
+  await new Promise(function (resolve) { setTimeout(resolve, 10); });
+  assert.equal(lightbox.hidden, false);
+  assert.equal(prevBtn.hidden, false);
+  assert.equal(nextBtn.hidden, false);
+  assert.equal(captionEl.textContent, 'HTF');
+  assert.equal(counterEl.textContent, '1 / 2');
+  assert.equal(imgEl.src, 'data:image/png;base64,AAAA');
+
+  TJ.app.stepLightbox(1);
+  await new Promise(function (resolve) { setTimeout(resolve, 10); });
+  assert.equal(captionEl.textContent, 'Вход');
+  assert.equal(counterEl.textContent, '2 / 2');
+  assert.equal(imgEl.src, 'data:image/png;base64,BBBB');
+
+  TJ.app.stepLightbox(1);
+  await new Promise(function (resolve) { setTimeout(resolve, 10); });
+  assert.equal(counterEl.textContent, '1 / 2');
+});

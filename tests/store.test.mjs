@@ -665,3 +665,36 @@ test('plannedRR checks trade direction for target and initial stop (FIN-04)', fu
   assert.equal(store.plannedRR({ side: 'short', entry: 100, stop: 105, target: 110 }), null);
   assert.equal(store.plannedRR({ side: 'long', entry: 100, stop: 105, target: 115 }), null);
 });
+
+test('analyzeImport counts multiple screenshots and caps beyond 4 (FEAT-06)', function () {
+  const s = store;
+  const stats = s.analyzeImport({
+    version: 4,
+    activeAccountId: 'a1',
+    accounts: [{
+      id: 'a1',
+      name: 'Main',
+      settings: {},
+      trades: [{
+        id: 't1',
+        date: '2026-01-05',
+        symbol: 'BTCUSD',
+        side: 'long',
+        entry: 10,
+        qty: 1,
+        screenshots: [
+          { src: 'data:image/png;base64,AAAA', label: 'HTF' },
+          { src: 'data:image/png;base64,BBBB', label: 'Вход' },
+          { src: 'data:image/gif;base64,CCCC', label: 'Bad' },
+          { src: 'data:image/png;base64,DDDD', label: 'Выход' },
+          { src: 'data:image/png;base64,EEEE', label: 'Excess' }
+        ]
+      }],
+      notes: []
+    }]
+  });
+  assert.equal(stats.screenshots, 5);
+  assert.equal(stats.screenshotsAccepted, 3);
+  assert.equal(stats.screenshotsDropped, 2);
+  assert.equal(stats.screenshotsInvalid, 1);
+});

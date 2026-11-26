@@ -48,7 +48,7 @@
     tradeOriginalId: null,
     tradeAccountId: null,
     tradeBaseline: null,
-    tradeBaselineScreenshot: '',
+    tradeBaselineScreenshots: [],
     tradeExits: [],
     csvImport: null,
     tradeDirty: false,
@@ -59,8 +59,10 @@
     draftShotWarned: false,
     draftScreenshotOmitted: false,
     noteId: null,
-    screenshot: '',
-    screenshotPreview: '',
+    screenshots: [],
+    screenshotPreviews: {},
+    lightboxItems: [],
+    lightboxIndex: 0,
     screenshotBusy: false,
     shotFocus: null,
     noteMood: 'neutral',
@@ -1074,6 +1076,8 @@
       ? '<span class="muted">—</span>'
       : '<span class="' + toneClass(pnl) + '">' + U.escapeHtml(U.money(pnl, { sign: true })) + '</span>' +
         (status === 'partial' ? '<small class="exit-remain">' + T('реализовано') + '</small>' : '');
+    const shots = store.tradeScreenshots(trade);
+    const hasShot = shots.length > 0;
     const statusHtml = status === 'partial'
       ? '<span class="partial-badge">' + T('частично') + '</span>'
       : (status === 'open' ? '<span class="open-badge">' + T('открыта') + '</span>' : '');
@@ -1081,9 +1085,11 @@
       '<td><div class="cell-date"><strong>' + U.escapeHtml(U.formatDate(trade.date, 'med')) + '</strong><span>' + U.escapeHtml(trade.time || '—') + '</span></div></td>' +
       '<td>' + (session ? '<span class="session-chip" data-i18n-skip>' + U.escapeHtml(session.label) + '</span>' : '<span class="muted">—</span>') + '</td>' +
       '<td><div class="symbol-cell"><div class="symbol-main">' +
-      '<button type="button" class="symbol-thumb' + (trade.screenshot ? ' has-shot' : '') + '"' +
-      (trade.screenshot ? ' data-open-shot="' + U.escapeHtml(trade.id) + '" title="' + U.escapeHtml(T('Открыть скриншот')) + '"' : ' tabindex="-1" aria-hidden="true"') + '>' +
-      '<span class="thumb-empty"></span></button>' +
+      '<button type="button" class="symbol-thumb' + (hasShot ? ' has-shot' : '') + '"' +
+      (hasShot ? ' data-open-shot="' + U.escapeHtml(trade.id) + '" title="' + U.escapeHtml(T('Открыть скриншот')) + '"' : ' tabindex="-1" aria-hidden="true"') + '>' +
+      '<span class="thumb-empty"></span>' +
+      (shots.length > 1 ? '<span class="thumb-count">' + shots.length + '</span>' : '') +
+      '</button>' +
       '<div class="symbol-line"><strong data-i18n-skip>' + U.escapeHtml(trade.symbol) + '</strong></div></div>' +
       '<span class="side-badge ' + trade.side + '"><span class="arr">' + (trade.side === 'long' ? '↑' : '↓') + '</span>' + (trade.side === 'long' ? 'Long' : 'Short') + '</span>' +
       statusHtml + '</div></td>' +
@@ -1102,8 +1108,9 @@
     const byId = new Map(trades.map(function (trade) { return [trade.id, trade]; }));
     $$('#tradesTbody [data-open-shot]').forEach(function (button) {
       const trade = byId.get(button.dataset.openShot);
-      if (!trade || !trade.screenshot) return;
-      store.screenshotSource(trade.screenshot).then(function (source) {
+      const shots = store.tradeScreenshots(trade);
+      if (!shots.length) return;
+      store.screenshotSource(shots[0].src).then(function (source) {
         if (token !== thumbHydrationToken || !source || !document.contains(button)) return;
         const image = document.createElement('img');
         image.src = source;
@@ -1111,6 +1118,12 @@
         image.loading = 'lazy';
         button.innerHTML = '';
         button.appendChild(image);
+        if (shots.length > 1) {
+          const badge = document.createElement('span');
+          badge.className = 'thumb-count';
+          badge.textContent = String(shots.length);
+          button.appendChild(badge);
+        }
       }).catch(function () { /* the placeholder stays */ });
     });
   }
@@ -3144,7 +3157,9 @@
       const tradeCount = accounts.reduce(function (sum, account) { return sum + (account.trades ? account.trades.length : 0); }, 0);
       const noteCount = accounts.reduce(function (sum, account) { return sum + (account.notes ? account.notes.length : 0); }, 0);
       const shotCount = accounts.reduce(function (sum, account) {
-        return sum + (account.trades || []).filter(function (trade) { return !!trade.screenshot; }).length;
+        return sum + (account.trades || []).reduce(function (tSum, trade) {
+          return tSum + store.tradeScreenshots(trade).length;
+        }, 0);
       }, 0);
       const readme = [
         T('TradeJournal — резервная копия'),
@@ -3816,10 +3831,40 @@
     if (reset) reset.classList.toggle('hidden', !state.tradeDirty);
   }
 
+  const SHOT_LABEL_OPTIONS = ['', 'HTF', 'Вход', 'Выход', 'График', 'Другое'];
+
+  function normalizeDraftScreenshots(list, legacyShot) {
+    const maxShots = store.MAX_SCREENSHOTS || 4;
+    const out = [];
+    const seen = new Set();
+    (Array.isArray(list) ? list : []).forEach(function (item) {
+      if (out.length >= maxShots) return;
+      const src = typeof item === 'string' ? item : (item && typeof item.src === 'string' ? item.src : '');
+      const label = item && typeof item === 'object' ? String(item.label || '').trim().slice(0, 32) : '';
+      if (isScreenshotValue(src) && !seen.has(src)) {
+        seen.add(src);
+        out.push({ src: src, label: label });
+      }
+    });
+    if (!out.length && isScreenshotValue(legacyShot)) {
+      out.push({ src: legacyShot, label: '' });
+    }
+    return out;
+  }
+
+  function screenshotsEqual(a, b) {
+    const left = Array.isArray(a) ? a : [];
+    const right = Array.isArray(b) ? b : [];
+    if (left.length !== right.length) return false;
+    return left.every(function (item, idx) {
+      return item && right[idx] && item.src === right[idx].src && (item.label || '') === (right[idx].label || '');
+    });
+  }
+
   function syncTradeDirty() {
     if (state.tradeInitializing || !state.tradeBaseline) return;
     const dirty = !sameTradeFields(readTradeFields(), state.tradeBaseline)
-      || (state.screenshot || '') !== (state.tradeBaselineScreenshot || '');
+      || !screenshotsEqual(state.screenshots, state.tradeBaselineScreenshots);
     state.tradeDirty = dirty;
     updateDraftUi();
     if (dirty) scheduleTradeDraft();
@@ -3839,25 +3884,32 @@
     }
     const accountId = state.tradeAccountId || store.state.activeAccountId;
     if (!accountId) return;
+    const shots = state.screenshots.map(function (item) {
+      return { src: item.src, label: item.label || '' };
+    });
     const payload = {
       savedAt: new Date().toISOString(),
       accountId: accountId,
       tradeId: state.tradeId || '',
       fields: readTradeFields(),
-      screenshot: state.screenshot || ''
+      screenshots: shots,
+      screenshot: shots[0] ? shots[0].src : ''
     };
 
     let serialized = JSON.stringify(payload);
     state.draftScreenshotOmitted = false;
-    if (serialized.length > DRAFT_MAX_CHARS && payload.screenshot) {
-      payload.screenshot = '';
-      payload.screenshotOmitted = true;
-      state.draftScreenshotOmitted = true;
-      serialized = JSON.stringify(payload);
-      if (!state.draftShotWarned) {
-        state.draftShotWarned = true;
-        toast('Скриншот слишком большой для черновика: если закрыть форму, он не сохранится. Сохраните сделку, чтобы не потерять изображение.', 'warn');
+    for (let i = payload.screenshots.length - 1; i >= 0 && serialized.length > DRAFT_MAX_CHARS; i--) {
+      if (/^data:/i.test(payload.screenshots[i].src)) {
+        payload.screenshots.splice(i, 1);
+        payload.screenshotOmitted = true;
+        state.draftScreenshotOmitted = true;
+        payload.screenshot = payload.screenshots[0] ? payload.screenshots[0].src : '';
+        serialized = JSON.stringify(payload);
       }
+    }
+    if (state.draftScreenshotOmitted && !state.draftShotWarned) {
+      state.draftShotWarned = true;
+      toast('Скриншот слишком большой для черновика: если закрыть форму, он не сохранится. Сохраните сделку, чтобы не потерять изображение.', 'warn');
     }
 
     if (serialized.length > DRAFT_MAX_CHARS) {
@@ -3945,9 +3997,11 @@
     state.tradeId = trade ? trade.id : null;
     state.tradeOriginalId = trade ? trade.id : null;
     state.tradeBaseline = tradeFieldsFromTrade(trade, presetDate);
-    state.tradeBaselineScreenshot = trade && trade.screenshot ? trade.screenshot : '';
-    state.screenshot = state.tradeBaselineScreenshot;
-    state.screenshotPreview = '';
+    state.tradeBaselineScreenshots = store.tradeScreenshots(trade);
+    state.screenshots = state.tradeBaselineScreenshots.map(function (item) {
+      return { src: item.src, label: item.label || '' };
+    });
+    state.screenshotPreviews = {};
     state.tradeDirty = false;
     state.tradeSaving = false;
     state.screenshotBusy = false;
@@ -3961,10 +4015,12 @@
     const draft = readTradeDraft(accountId, trade ? trade.id : null);
     if (draft) {
       const fields = normalizeDraftFields(draft.fields, state.tradeBaseline);
-      const draftShot = isScreenshotValue(draft.screenshot) ? draft.screenshot : state.tradeBaselineScreenshot;
-      if (!sameTradeFields(fields, state.tradeBaseline) || draftShot !== state.tradeBaselineScreenshot) {
+      const draftShots = (Array.isArray(draft.screenshots) || draft.screenshot)
+        ? normalizeDraftScreenshots(draft.screenshots, draft.screenshot)
+        : state.tradeBaselineScreenshots.map(function (item) { return Object.assign({}, item); });
+      if (!sameTradeFields(fields, state.tradeBaseline) || !screenshotsEqual(draftShots, state.tradeBaselineScreenshots)) {
         applyTradeFields(fields);
-        state.screenshot = draftShot;
+        state.screenshots = draftShots;
         restored = true;
       } else {
         clearTradeDraft(trade ? trade.id : null, accountId);
@@ -4012,15 +4068,28 @@
   let shotPreviewToken = 0;
   let shotLightboxToken = 0;
 
+  function removeShotAt(index) {
+    if (state.screenshotBusy) {
+      toast('Скриншот ещё сохраняется, подождите пару секунд.', 'warn');
+      return;
+    }
+    if (index < 0 || index >= state.screenshots.length) return;
+    state.screenshots.splice(index, 1);
+    renderShotPreview();
+    syncTradeDirty();
+  }
+
   function renderShotPreview() {
     const box = $('#shotPreview');
     const remove = $('#removeShot');
+    const countEl = $('#shotCount');
+    const maxShots = store.MAX_SCREENSHOTS || 4;
+    if (countEl) countEl.textContent = state.screenshots.length + ' / ' + maxShots;
     if (!box || !remove) return;
     const token = ++shotPreviewToken;
     box.innerHTML = '';
-    state.screenshotPreview = '';
 
-    if (!state.screenshot) {
+    if (!state.screenshots.length) {
       box.classList.remove('has');
       remove.classList.add('hidden');
       return;
@@ -4028,78 +4097,149 @@
 
     box.classList.add('has');
     remove.classList.remove('hidden');
-    const loading = document.createElement('span');
-    loading.className = 'shot-loading';
-    loading.textContent = 'Загрузка…';
-    box.appendChild(loading);
 
-    store.screenshotSource(state.screenshot).then(function (source) {
-      if (token !== shotPreviewToken) return;
-      box.innerHTML = '';
-      if (!source) {
-        const missing = document.createElement('span');
-        missing.className = 'shot-loading';
-        missing.textContent = 'Файл скриншота не найден';
-        box.appendChild(missing);
-        return;
-      }
-      state.screenshotPreview = source;
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.className = 'shot-open';
-      button.title = 'Открыть скриншот на весь экран';
-      button.setAttribute('aria-label', 'Открыть скриншот в полном размере');
-      button.addEventListener('click', openShotLightbox);
-      const image = document.createElement('img');
-      image.src = source;
-      image.alt = 'Скриншот сделки';
-      button.appendChild(image);
-      box.appendChild(button);
-    }).catch(function () {
-      if (token !== shotPreviewToken) return;
-      box.innerHTML = '<span class="shot-loading">Не удалось загрузить скриншот</span>';
+    state.screenshots.forEach(function (item, index) {
+      const card = document.createElement('div');
+      card.className = 'shot-card';
+
+      const delBtn = document.createElement('button');
+      delBtn.type = 'button';
+      delBtn.className = 'shot-del';
+      delBtn.title = T('Удалить скриншот');
+      delBtn.setAttribute('aria-label', T('Удалить скриншот'));
+      delBtn.textContent = '×';
+      delBtn.addEventListener('click', function () { removeShotAt(index); });
+      card.appendChild(delBtn);
+
+      const loading = document.createElement('span');
+      loading.className = 'shot-loading';
+      loading.textContent = T('Загрузка…');
+      card.appendChild(loading);
+
+      const select = document.createElement('select');
+      select.className = 'shot-label-select';
+      select.setAttribute('aria-label', T('Метка скриншота'));
+      const currentLabel = item.label || '';
+      const optionsList = SHOT_LABEL_OPTIONS.slice();
+      if (currentLabel && optionsList.indexOf(currentLabel) === -1) optionsList.push(currentLabel);
+      optionsList.forEach(function (optVal) {
+        const opt = document.createElement('option');
+        opt.value = optVal;
+        opt.textContent = optVal ? T(optVal) : T('Без метки');
+        select.appendChild(opt);
+      });
+      select.value = currentLabel;
+      select.addEventListener('change', function () {
+        if (!state.screenshots[index]) return;
+        state.screenshots[index].label = select.value;
+        syncTradeDirty();
+      });
+      card.appendChild(select);
+      box.appendChild(card);
+
+      store.screenshotSource(item.src).then(function (source) {
+        if (token !== shotPreviewToken || !document.contains(card)) return;
+        card.removeChild(loading);
+        if (!source) {
+          const missing = document.createElement('span');
+          missing.className = 'shot-loading';
+          missing.textContent = T('Файл скриншота не найден');
+          card.insertBefore(missing, select);
+          return;
+        }
+        state.screenshotPreviews[item.src] = source;
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'shot-open';
+        button.title = T('Открыть скриншот на весь экран');
+        button.setAttribute('aria-label', T('Открыть скриншот в полном размере'));
+        button.addEventListener('click', function () { openShotLightbox(index); });
+        const image = document.createElement('img');
+        image.src = source;
+        image.alt = item.label || T('Скриншот сделки');
+        button.appendChild(image);
+        card.insertBefore(button, select);
+      }).catch(function () {
+        if (token !== shotPreviewToken || !document.contains(card)) return;
+        loading.textContent = T('Не удалось загрузить скриншот');
+      });
     });
   }
 
-  function openScreenshotLightbox(value, focusElement) {
-    if (!value) return;
+  function renderLightboxCurrent() {
+    const lightbox = $('#shotLightbox');
+    const image = $('#shotLightboxImage');
+    if (!lightbox || !image || !state.lightboxItems.length) return;
+    const item = state.lightboxItems[state.lightboxIndex] || state.lightboxItems[0];
+    const total = state.lightboxItems.length;
+    const prevBtn = $('#shotLightboxPrev');
+    const nextBtn = $('#shotLightboxNext');
+    const bar = $('#shotLightboxBar');
+    const captionEl = $('#shotLightboxCaption');
+    const counterEl = $('#shotLightboxCounter');
+    if (prevBtn) prevBtn.hidden = total <= 1;
+    if (nextBtn) nextBtn.hidden = total <= 1;
+    if (bar) bar.hidden = total <= 1 && !item.label;
+    if (captionEl) captionEl.textContent = item.label ? T(item.label) : '';
+    if (counterEl) counterEl.textContent = total > 1 ? (state.lightboxIndex + 1) + ' / ' + total : '';
+
+    const token = ++shotLightboxToken;
+    const cached = state.screenshotPreviews[item.src];
+    if (cached) {
+      image.src = cached;
+      image.alt = item.label ? T(item.label) : T('Скриншот сделки');
+      return;
+    }
+    image.removeAttribute('src');
+    image.alt = T('Загрузка скриншота');
+    store.screenshotSource(item.src).then(function (source) {
+      if (token !== shotLightboxToken || lightbox.hidden || !source) return;
+      image.src = source;
+      image.alt = item.label ? T(item.label) : T('Скриншот сделки');
+    });
+  }
+
+  function stepLightbox(delta) {
+    if (state.lightboxItems.length <= 1) return;
+    const len = state.lightboxItems.length;
+    state.lightboxIndex = (state.lightboxIndex + delta + len) % len;
+    renderLightboxCurrent();
+  }
+
+  function openScreenshotLightbox(itemsOrValue, startIndexOrFocus, maybeFocusElement) {
+    let items = [];
+    let startIndex = 0;
+    let focusElement = maybeFocusElement;
+    if (Array.isArray(itemsOrValue)) {
+      items = itemsOrValue.filter(function (item) { return item && item.src; });
+      if (typeof startIndexOrFocus === 'number') startIndex = startIndexOrFocus;
+      else focusElement = startIndexOrFocus;
+    } else if (typeof itemsOrValue === 'string' && itemsOrValue) {
+      items = [{ src: itemsOrValue, label: '' }];
+      focusElement = startIndexOrFocus;
+    }
+    if (!items.length) return;
     const lightbox = $('#shotLightbox');
     const image = $('#shotLightboxImage');
     if (!lightbox || !image) return;
     state.shotFocus = focusElement || document.activeElement;
-    const token = ++shotLightboxToken;
-    image.removeAttribute('src');
-    image.alt = 'Загрузка скриншота';
+    state.lightboxItems = items;
+    state.lightboxIndex = Math.max(0, Math.min(items.length - 1, startIndex || 0));
     lightbox.hidden = false;
     $('#shotLightboxClose').focus();
-    store.screenshotSource(value).then(function (source) {
-      if (token !== shotLightboxToken || lightbox.hidden || !source) return;
-      image.src = source;
-      image.alt = 'Скриншот сделки';
-    });
+    renderLightboxCurrent();
   }
 
-  function openShotLightbox() {
-    if (!state.screenshot) return;
-    if (state.screenshotPreview) {
-      const lightbox = $('#shotLightbox');
-      const image = $('#shotLightboxImage');
-      if (!lightbox || !image) return;
-      state.shotFocus = document.activeElement;
-      shotLightboxToken++;
-      image.src = state.screenshotPreview;
-      image.alt = 'Скриншот сделки';
-      lightbox.hidden = false;
-      $('#shotLightboxClose').focus();
-      return;
-    }
-    openScreenshotLightbox(state.screenshot, document.activeElement);
+  function openShotLightbox(startIndex) {
+    if (!state.screenshots.length) return;
+    openScreenshotLightbox(state.screenshots, typeof startIndex === 'number' ? startIndex : 0, document.activeElement);
   }
 
   function openTradeScreenshot(tradeId, focusElement) {
     const trade = store.state.trades.find(function (item) { return item.id === tradeId; });
-    if (!trade || !trade.screenshot) return;
-    openScreenshotLightbox(trade.screenshot, focusElement);
+    const shots = store.tradeScreenshots(trade);
+    if (!shots.length) return;
+    openScreenshotLightbox(shots, 0, focusElement);
   }
 
   function closeShotLightbox() {
@@ -4107,6 +4247,8 @@
     const lightbox = $('#shotLightbox');
     if (!lightbox || lightbox.hidden) return;
     lightbox.hidden = true;
+    state.lightboxItems = [];
+    state.lightboxIndex = 0;
     $('#shotLightboxImage').removeAttribute('src');
     let focus = state.shotFocus;
     state.shotFocus = null;
@@ -4126,10 +4268,19 @@
 
   async function applyScreenshot(dataUrl, options) {
     const busyHeld = !!(options && options.busyHeld);
+    const maxShots = store.MAX_SCREENSHOTS || 4;
+    if (state.screenshots.length >= maxShots) {
+      if (busyHeld) setScreenshotBusy(false);
+      toast(T('Максимум {max} скриншота на сделку.').replace('{max}', maxShots), 'warn', null, { skip: true });
+      return;
+    }
     if (!busyHeld && state.screenshotBusy) return;
     setScreenshotBusy(true);
     try {
-      state.screenshot = await store.saveScreenshot(dataUrl);
+      const ref = await store.saveScreenshot(dataUrl);
+      if (state.screenshots.length < maxShots) {
+        state.screenshots.push({ src: ref, label: '' });
+      }
       renderShotPreview();
       syncTradeDirty();
       toast('Скриншот добавлен');
@@ -4172,50 +4323,72 @@
   }
 
   function compressScreenshot(file) {
-    if (!file) return;
+    if (!file) return Promise.resolve();
+    const maxShots = store.MAX_SCREENSHOTS || 4;
+    if (state.screenshots.length >= maxShots) {
+      toast(T('Максимум {max} скриншота на сделку.').replace('{max}', maxShots), 'warn', null, { skip: true });
+      return Promise.resolve();
+    }
     if (state.screenshotBusy) {
       toast('Дождитесь окончания сохранения скриншота.', 'warn');
-      return;
+      return Promise.resolve();
     }
     if (!/^image\//.test(file.type)) {
       toast('Можно прикрепить только изображение.', 'error');
-      return;
+      return Promise.resolve();
     }
     setScreenshotBusy(true);
-    const reader = new FileReader();
-    reader.onload = function () {
-      const image = new Image();
-      image.onload = function () {
-        const maxSide = desktop ? SHOT_MAX_SIDE_DESKTOP : SHOT_MAX_SIDE_WEB;
-        const scale = Math.min(1, maxSide / Math.max(image.width, image.height));
-        const canvas = document.createElement('canvas');
-        canvas.width = Math.max(1, Math.round(image.width * scale));
-        canvas.height = Math.max(1, Math.round(image.height * scale));
-        const ctx = canvas.getContext('2d');
-        ctx.imageSmoothingEnabled = true;
-        ctx.imageSmoothingQuality = 'high';
-        ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
-        let dataUrl;
-        try {
-          dataUrl = encodeScreenshot(canvas);
-        } catch (err) {
+    return new Promise(function (resolve) {
+      const reader = new FileReader();
+      reader.onload = function () {
+        const image = new Image();
+        image.onload = function () {
+          const maxSide = desktop ? SHOT_MAX_SIDE_DESKTOP : SHOT_MAX_SIDE_WEB;
+          const scale = Math.min(1, maxSide / Math.max(image.width, image.height));
+          const canvas = document.createElement('canvas');
+          canvas.width = Math.max(1, Math.round(image.width * scale));
+          canvas.height = Math.max(1, Math.round(image.height * scale));
+          const ctx = canvas.getContext('2d');
+          ctx.imageSmoothingEnabled = true;
+          ctx.imageSmoothingQuality = 'high';
+          ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+          let dataUrl;
+          try {
+            dataUrl = encodeScreenshot(canvas);
+          } catch (err) {
+            setScreenshotBusy(false);
+            toast('Не удалось обработать изображение.', 'error');
+            resolve();
+            return;
+          }
+          Promise.resolve(applyScreenshot(dataUrl, { busyHeld: true })).then(resolve, resolve);
+        };
+        image.onerror = function () {
           setScreenshotBusy(false);
-          toast('Не удалось обработать изображение.', 'error');
-          return;
-        }
-        applyScreenshot(dataUrl, { busyHeld: true });
+          toast('Не удалось открыть изображение.', 'error');
+          resolve();
+        };
+        image.src = String(reader.result);
       };
-      image.onerror = function () {
+      reader.onerror = function () {
         setScreenshotBusy(false);
-        toast('Не удалось открыть изображение.', 'error');
+        toast('Не удалось прочитать файл.', 'error');
+        resolve();
       };
-      image.src = String(reader.result);
-    };
-    reader.onerror = function () {
-      setScreenshotBusy(false);
-      toast('Не удалось прочитать файл.', 'error');
-    };
-    reader.readAsDataURL(file);
+      reader.readAsDataURL(file);
+    });
+  }
+
+  async function compressScreenshots(fileList) {
+    const files = Array.prototype.slice.call(fileList || []);
+    const maxShots = store.MAX_SCREENSHOTS || 4;
+    for (const file of files) {
+      if (state.screenshots.length >= maxShots) {
+        toast(T('Максимум {max} скриншота на сделку.').replace('{max}', maxShots), 'warn', null, { skip: true });
+        break;
+      }
+      await compressScreenshot(file);
+    }
   }
 
   async function pasteScreenshotFromClipboard() {
@@ -4424,12 +4597,23 @@
         }
       }
 
-      let screenshot = state.screenshot || '';
-      if (desktop && screenshot && !/^file:screenshots\//i.test(screenshot)) {
-        screenshot = await store.saveScreenshot(screenshot);
-        state.screenshot = screenshot;
-        renderShotPreview();
+      const screenshots = state.screenshots.map(function (item) {
+        return { src: item.src, label: item.label || '' };
+      });
+      if (desktop && screenshots.length) {
+        let converted = false;
+        for (const item of screenshots) {
+          if (item.src && !/^file:screenshots\//i.test(item.src)) {
+            item.src = await store.saveScreenshot(item.src);
+            converted = true;
+          }
+        }
+        if (converted) {
+          state.screenshots = screenshots.map(function (item) { return Object.assign({}, item); });
+          renderShotPreview();
+        }
       }
+      const screenshot = screenshots[0] ? screenshots[0].src : '';
 
       const trade = store.normalizeTrade({
         id: existing ? existing.id : U.uid(),
@@ -4451,7 +4635,8 @@
         discipline: Number($('#tradeDiscipline').value) || 0,
         tags: splitTags($('#tradeTags').value),
         notes: $('#tradeNotes').value.trim(),
-        screenshot: screenshot
+        screenshot: screenshot,
+        screenshots: screenshots
       }, { timeZone: accountTimeZone() });
       if (!trade) throw new Error('Не удалось подготовить сделку к сохранению.');
 
@@ -4506,8 +4691,10 @@
       clearTradeDraft(trade.id, accountId);
       state.tradeDirty = false;
       state.tradeBaseline = tradeFieldsFromTrade(trade);
-      state.tradeBaselineScreenshot = trade.screenshot || '';
-      state.screenshot = trade.screenshot || '';
+      state.tradeBaselineScreenshots = store.tradeScreenshots(trade);
+      state.screenshots = state.tradeBaselineScreenshots.map(function (item) {
+        return { src: item.src, label: item.label || '' };
+      });
       state.tradeId = trade.id;
       updateDraftUi();
       closeModal('tradeModal');
@@ -5141,8 +5328,7 @@
       $('#tradeShot').click();
     });
     $('#tradeShot').addEventListener('change', function (event) {
-      const file = event.target.files && event.target.files[0];
-      compressScreenshot(file);
+      compressScreenshots(event.target.files);
       event.target.value = '';
     });
     $('#pasteShot').addEventListener('click', pasteScreenshotFromClipboard);
@@ -5151,13 +5337,15 @@
         toast('Скриншот ещё сохраняется, подождите пару секунд.', 'warn');
         return;
       }
-      state.screenshot = '';
-      state.screenshotPreview = '';
+      state.screenshots = [];
+      state.screenshotPreviews = {};
       renderShotPreview();
       syncTradeDirty();
     });
     $('#shotLightboxClose').addEventListener('click', closeShotLightbox);
     $('#shotLightboxBackdrop').addEventListener('click', closeShotLightbox);
+    $('#shotLightboxPrev').addEventListener('click', function () { stepLightbox(-1); });
+    $('#shotLightboxNext').addEventListener('click', function () { stepLightbox(1); });
 
     const shotField = $('#shotField');
     ['dragenter', 'dragover'].forEach(function (type) {
@@ -5177,8 +5365,9 @@
     shotField.addEventListener('drop', function (event) {
       event.preventDefault();
       shotField.classList.remove('is-dragover');
-      const file = event.dataTransfer && event.dataTransfer.files && event.dataTransfer.files[0];
-      if (file) compressScreenshot(file);
+      if (event.dataTransfer && event.dataTransfer.files && event.dataTransfer.files.length) {
+        compressScreenshots(event.dataTransfer.files);
+      }
     });
     $('#tradeForm').addEventListener('input', handleTradeFormChanged);
     $('#tradeForm').addEventListener('change', handleTradeFormChanged);
@@ -5296,6 +5485,12 @@
       return;
     }
 
+    if (lightboxOpen && (key === 'ArrowLeft' || key === 'ArrowRight')) {
+      event.preventDefault();
+      stepLightbox(key === 'ArrowLeft' ? -1 : 1);
+      return;
+    }
+
     if (key === 'Escape') {
       if (lightboxOpen) {
         closeShotLightbox();
@@ -5372,7 +5567,10 @@
     renderDayPanel: renderDayPanel,
     changeMonth: changeMonth,
     redrawDashboardCharts: redrawDashboardCharts,
-    fillTimezoneOptions: fillTimezoneOptions
+    fillTimezoneOptions: fillTimezoneOptions,
+    tradeRowHtml: tradeRowHtml,
+    openTradeScreenshot: openTradeScreenshot,
+    stepLightbox: stepLightbox
   };
 
   if (document.readyState === 'loading') {
