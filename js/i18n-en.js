@@ -1255,7 +1255,6 @@ window.TJ_I18N_EN = {
   "Файл экспорта уже закрыт.": "Export file is already closed.",
   "Не удалось записать фрагмент файла:": "Failed to write file chunk:",
   "Не удалось завершить сохранение файла:": "Failed to finalize file save:",
-  "Не удалось подготовить экспорт:": "Failed to prepare export:",
   "Не удалось записать данные экспорта:": "Failed to write export data:",
   "Не удалось отменить экспорт:": "Failed to cancel export:",
   "Журнал и скриншоты хранятся в IndexedDB. Браузер не сообщает точный размер хранилища.": "Journal and screenshots are stored in IndexedDB. The browser does not report the exact storage size.",
