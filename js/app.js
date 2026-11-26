@@ -4,7 +4,7 @@
   const U = NS.utils;
   const store = NS.store;
   const desktop = window.tradeJournalDesktop || null;
-  const APP_VERSION = '2.6.0';
+  const APP_VERSION = '2.6.1';
   const DRAFT_PREFIX = 'tradejournal.draft.v1.';
   const META_KEY = store.META_KEY;
   // Drafts live in localStorage even on desktop, so a full screenshot data URL
@@ -6029,7 +6029,16 @@
     $('#themeSegmented').addEventListener('click', function (event) {
       const button = event.target.closest('button[data-theme-option]');
       if (!button) return;
-      saveAppearance({ theme: button.dataset.themeOption === 'light' ? 'light' : 'dark' }, true);
+      const nextTheme = button.dataset.themeOption === 'light' ? 'light' : 'dark';
+      const cur = NS.prefs && NS.prefs.get();
+      if (cur && cur.theme === nextTheme && cur.bg) {
+        const isLightBg = NS.prefs.luminance(cur.bg) > 0.22;
+        if ((nextTheme === 'light' && !isLightBg) || (nextTheme === 'dark' && isLightBg)) {
+          saveAppearance({ theme: nextTheme, bg: '', panel: '', accent: '', preset: '' }, true);
+          return;
+        }
+      }
+      saveAppearance({ theme: nextTheme }, true);
     });
     $('#accentSwatches').addEventListener('click', function (event) {
       const button = event.target.closest('button[data-accent-value]');

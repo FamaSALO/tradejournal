@@ -90,6 +90,12 @@
     return 0.2126 * channel(rgb.r) + 0.7152 * channel(rgb.g) + 0.0722 * channel(rgb.b);
   }
 
+  function contrastRatio(a, b) {
+    const la = luminance(a);
+    const lb = luminance(b);
+    return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
+  }
+
   function contrastText(hex) {
     return luminance(hex) > 0.42 ? '#07130f' : '#ffffff';
   }
@@ -256,7 +262,27 @@
   }
 
   function save(patch) {
-    const next = normalize(Object.assign(read(), patch));
+    const current = read();
+    const source = patch && typeof patch === 'object' ? patch : {};
+    const hasTheme = Object.prototype.hasOwnProperty.call(source, 'theme');
+    const hasBg = Object.prototype.hasOwnProperty.call(source, 'bg');
+    const hasPanel = Object.prototype.hasOwnProperty.call(source, 'panel');
+    const hasAccent = Object.prototype.hasOwnProperty.call(source, 'accent');
+    const nextTheme = hasTheme ? (source.theme === 'light' ? 'light' : 'dark') : current.theme;
+    const merged = Object.assign({}, current, source);
+    if (hasTheme && nextTheme !== current.theme) {
+      // Clear carried-over background/panel overrides when flipping light <-> dark
+      // unless the caller explicitly sets new surfaces in the same patch.
+      if (!hasBg) merged.bg = '';
+      if (!hasPanel) merged.panel = '';
+      if (!hasAccent && merged.accent) {
+        const targetPanel = validColor(merged.panel) || defaultsFor(nextTheme).panel;
+        if (current.preset || matchesPreset(current) || contrastRatio(merged.accent, targetPanel) < 3) {
+          merged.accent = '';
+        }
+      }
+    }
+    const next = normalize(merged);
     try { localStorage.setItem(KEY, JSON.stringify(next)); } catch (err) { /* storage can be unavailable */ }
     apply(next);
     return next;

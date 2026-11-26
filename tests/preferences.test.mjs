@@ -244,3 +244,38 @@ test('custom light background in dark mode updates semantic and muted contrast c
   assert.equal(doc.properties['--green'], undefined);
   assert.ok(ratio(doc.properties['--muted-2'], '#101822') >= 4.5, 'dark muted-2 contrast');
 });
+
+test('switching theme from any preset clears previous preset surfaces and preserves contrast', function () {
+  const { prefs, doc } = loadPreferences();
+
+  prefs.PRESETS.forEach(function (preset) {
+    prefs.usePreset(preset.id);
+    const targetTheme = preset.theme === 'dark' ? 'light' : 'dark';
+    const expectedBase = prefs.defaultsFor(targetTheme);
+
+    const switched = prefs.save({ theme: targetTheme });
+
+    assert.equal(switched.theme, targetTheme, 'switched theme from ' + preset.id);
+    assert.equal(switched.bg, '', 'cleared bg after switching from ' + preset.id);
+    assert.equal(switched.panel, '', 'cleared panel after switching from ' + preset.id);
+    assert.equal(switched.accent, '', 'cleared preset accent after switching from ' + preset.id);
+    assert.equal(switched.preset, '', 'cleared preset id after switching from ' + preset.id);
+    assert.equal(doc.documentElement.dataset.theme, targetTheme);
+    assert.equal(doc.properties['--bg'], expectedBase.bg);
+    assert.equal(doc.properties['--panel'], expectedBase.panel);
+    assert.equal(doc.properties['--accent'], expectedBase.accent);
+  });
+
+  // High-contrast custom accent survives theme switch; low-contrast custom accent resets.
+  prefs.save({ theme: 'dark', bg: '#111418', panel: '#1a1f26', accent: '#2563eb' });
+  const keptAccent = prefs.save({ theme: 'light' });
+  assert.equal(keptAccent.bg, '');
+  assert.equal(keptAccent.panel, '');
+  assert.equal(keptAccent.accent, '#2563eb');
+  assert.equal(doc.properties['--bg'], '#f4f7fb');
+
+  prefs.save({ theme: 'dark', bg: '#111418', panel: '#1a1f26', accent: '#e2e8f0' });
+  const resetWeakAccent = prefs.save({ theme: 'light' });
+  assert.equal(resetWeakAccent.accent, '');
+  assert.equal(doc.properties['--accent'], '#0b7a5c');
+});
