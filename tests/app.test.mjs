@@ -666,3 +666,54 @@ test('multi-screenshot badge renders on trade row and lightbox cycles through sc
   await new Promise(function (resolve) { setTimeout(resolve, 10); });
   assert.equal(counterEl.textContent, '1 / 2');
 });
+
+test('moveStopToBreakeven copies entry price and collectEntryRows validates scale-ins (FEAT-01, FEAT-10)', function () {
+  const els = {
+    '#tradeEntry': { value: '105.5', focus: function () {} },
+    '#tradeCurrentStop': { value: '95' },
+    '#tradeSide': { value: 'long' },
+    '#tradeStop': { value: '95' },
+    '#tradeTarget': { value: '125' },
+    '#tradeQty': { value: '2' },
+    '#tradeMultiplier': { value: '1' },
+    '#tradeFees': { value: '4' },
+    '#previewPnl': { textContent: '', className: '' },
+    '#previewR': { textContent: '', className: '' },
+    '#previewRR': { textContent: '', className: '' },
+    '#previewRemaining': { textContent: '', className: '' },
+    '#exitsHint': { textContent: '' },
+    '#closeRemainingBtn': { disabled: false },
+    '#positionHistory': { hidden: true, innerHTML: '' },
+    '#feePresetsBar': { innerHTML: '' },
+    '#toasts': {
+      appendChild: function () {},
+      remove: function () {}
+    }
+  };
+  const { TJ, sandbox } = loadApp(els);
+  sandbox.document.createElement = function () {
+    return {
+      className: '',
+      innerHTML: '',
+      textContent: '',
+      classList: { add: function () {}, remove: function () {}, toggle: function () {} },
+      style: {},
+      setAttribute: function () {},
+      remove: function () {}
+    };
+  };
+  TJ.app.moveStopToBreakeven();
+  assert.equal(els['#tradeCurrentStop'].value, '105.5');
+
+  TJ.app.state.tradeEntries = [
+    { id: 'e1', qty: '1', price: '100', date: '2026-02-01' },
+    { id: 'e2', qty: '0', price: '110', date: '2026-02-02' }
+  ];
+  const bad = TJ.app.collectEntryRows('2026-02-01');
+  assert.match(bad.error, /Вход 2/);
+
+  TJ.app.state.tradeEntries[1].qty = '2';
+  const ok = TJ.app.collectEntryRows('2026-02-01');
+  assert.equal(ok.entries.length, 2);
+  assert.equal(ok.entries[1].date, '2026-02-02');
+});

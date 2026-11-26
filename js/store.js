@@ -11,6 +11,8 @@
   const SCHEMA_VERSION = 4;
   const DEFAULT_ACCOUNT_NAME = 'Основной счёт';
   const MAX_EXITS = 50;
+  const MAX_ENTRIES = 50;
+  const MAX_FEE_PRESETS = 8;
   const MAX_SCREENSHOTS = 4;
   const MULTIPLIER_MIN = 0.000000001;
   const MULTIPLIER_MAX = 1000000000;
@@ -34,7 +36,8 @@
     dailyLossLimit: 3,
     maxTradesPerDay: 3,
     timezone: U.systemTimeZone(),
-    sessions: U.normalizeSessions()
+    sessions: U.normalizeSessions(),
+    feePresets: []
   };
 
   let root = blankRoot();
@@ -248,25 +251,61 @@
     });
   }
 
-  function sumExitQty(exits) {
-    return (exits || []).reduce(function (sum, exit) {
-      const qty = U.parseNum(exit && exit.qty);
+  function sumLegQty(legs) {
+    return (legs || []).reduce(function (sum, leg) {
+      const qty = U.parseNum(leg && leg.qty);
       return sum + (qty !== null && qty > 0 ? qty : 0);
     }, 0);
   }
 
-  function weightedExitFromExits(exits) {
-    const list = exits || [];
+  function sumExitQty(exits) {
+    return sumLegQty(exits);
+  }
+
+  function weightedPriceFromLegs(legs) {
+    const list = legs || [];
     let qtySum = 0;
     let value = 0;
-    list.forEach(function (exit) {
-      const qty = U.parseNum(exit && exit.qty);
-      const price = U.parseNum(exit && exit.price);
+    list.forEach(function (leg) {
+      const qty = U.parseNum(leg && leg.qty);
+      const price = U.parseNum(leg && leg.price);
       if (qty === null || qty <= 0 || price === null) return;
       qtySum += qty;
       value += qty * price;
     });
     return qtySum > QTY_EPSILON ? value / qtySum : null;
+  }
+
+  function weightedExitFromExits(exits) {
+    return weightedPriceFromLegs(exits);
+  }
+
+  function normalizeEntry(raw, fallbackDate) {
+    if (!raw || typeof raw !== 'object') return null;
+    const qty = U.parseNum(raw.qty);
+    let price = U.parseNum(raw.price);
+    if (price === null && raw.price === undefined) price = U.parseNum(raw.entry);
+    if (qty === null || qty <= 0 || price === null) return null;
+    return {
+      id: raw.id ? String(raw.id) : U.uid(),
+      qty: qty,
+      price: price,
+      date: normalizeExitDate(raw.date, fallbackDate)
+    };
+  }
+
+  function normalizeEntries(raw, trade) {
+    const entries = [];
+    const seenIds = new Set();
+    const source = Array.isArray(raw && raw.entries) ? raw.entries.slice(0, MAX_ENTRIES) : [];
+    source.forEach(function (item) {
+      const leg = normalizeEntry(item, trade.date);
+      if (!leg) return;
+      if (seenIds.has(leg.id)) leg.id = U.uid();
+      seenIds.add(leg.id);
+      entries.push(leg);
+    });
+    return entries;
   }
 
   function normalizeExits(raw, trade) {
@@ -281,7 +320,7 @@
       exits.push(exit);
     });
 
-    const quantity = U.parseNum(raw.qty);
+    const quantity = U.parseNum(trade && trade.qty !== undefined ? trade.qty : raw.qty);
     if (!exits.length && quantity !== null && quantity > 0) {
       const legacyPrice = U.parseNum(raw.exit);
       if (legacyPrice !== null) {
@@ -333,7 +372,9 @@
     const discipline = U.clamp(Math.round(U.parseNum(raw.discipline) || 0), 0, 5);
     const screenshots = normalizeScreenshots(raw);
     const shot = screenshots.length ? screenshots[0].src : '';
-    const qty = U.parseNum(raw.qty);
+    const entries = normalizeEntries(raw, { date: date });
+    const entryPrice = entries.length ? weightedPriceFromLegs(entries) : U.parseNum(raw.entry);
+    const qty = entries.length ? sumLegQty(entries) : U.parseNum(raw.qty);
     let fees = U.parseNum(raw.fees);
     if (fees === null) {
       fees = (Array.isArray(raw.exits) ? raw.exits : []).reduce(function (sum, exit) {
@@ -355,7 +396,7 @@
       timeUtc: timeUtc,
       symbol: symbol,
       side: side,
-      entry: U.parseNum(raw.entry),
+      entry: entryPrice,
       exit: fullyClosed ? weightedExitFromExits(exits) : (keepLegacyExit ? legacyExit : null),
       stop: U.parseNum(raw.stop),
       currentStop: U.parseNum(raw.currentStop),
@@ -363,6 +404,7 @@
       qty: qty,
       multiplier: multiplier,
       fees: fees,
+      entries: entries,
       exits: exits,
       setup: String(raw.setup || '').trim(),
       emotion: String(raw.emotion || '').trim(),
@@ -455,6 +497,21 @@
     });
   }
 
+  function normalizeFeePresets(rawList) {
+    const out = [];
+    const seen = new Set();
+    (Array.isArray(rawList) ? rawList : []).forEach(function (val) {
+      if (out.length >= MAX_FEE_PRESETS) return;
+      const num = U.parseNum(val);
+      if (num === null || !isFinite(num) || num <= 0) return;
+      const key = String(Math.round(num * 1e6) / 1e6);
+      if (seen.has(key)) return;
+      seen.add(key);
+      out.push(Math.round(num * 1e6) / 1e6);
+    });
+    return out;
+  }
+
   function normalizeSettings(raw) {
     raw = raw || {};
     const currency = String(raw.currency || '$').slice(0, 3);
@@ -469,7 +526,8 @@
       dailyLossLimit: daily !== null && daily >= 0 ? U.clamp(daily, 0, 100) : 3,
       maxTradesPerDay: maxTrades !== null && maxTrades >= 0 ? U.clamp(Math.round(maxTrades), 0, 100) : 3,
       timezone: U.validTimeZone(raw.timezone) ? raw.timezone : U.systemTimeZone(),
-      sessions: U.normalizeSessions(raw.sessions)
+      sessions: U.normalizeSessions(raw.sessions),
+      feePresets: normalizeFeePresets(raw.feePresets)
     };
   }
 
@@ -1145,6 +1203,24 @@
     return snapshot;
   }
 
+  function tradeEntries(trade) {
+    if (!trade) return [];
+    if (Array.isArray(trade.entries) && trade.entries.length) return trade.entries;
+    const price = U.parseNum(trade.entry);
+    const quantity = U.parseNum(trade.qty);
+    if (price === null || quantity === null || quantity <= 0) return [];
+    return [{
+      id: 'legacy-entry',
+      qty: quantity,
+      price: price,
+      date: trade.date || ''
+    }];
+  }
+
+  function weightedEntry(trade) {
+    return weightedPriceFromLegs(tradeEntries(trade));
+  }
+
   function tradeExits(trade) {
     if (!trade) return [];
     if (Array.isArray(trade.exits) && trade.exits.length) return trade.exits;
@@ -1566,6 +1642,8 @@
     DEFAULT_ACCOUNT_NAME: DEFAULT_ACCOUNT_NAME,
     DEFAULT_SETTINGS: DEFAULT_SETTINGS,
     MAX_EXITS: MAX_EXITS,
+    MAX_ENTRIES: MAX_ENTRIES,
+    MAX_FEE_PRESETS: MAX_FEE_PRESETS,
     MAX_SCREENSHOTS: MAX_SCREENSHOTS,
     MULTIPLIER_MIN: MULTIPLIER_MIN,
     MULTIPLIER_MAX: MULTIPLIER_MAX,
@@ -1601,6 +1679,8 @@
     isStoragePersisted: isStoragePersisted,
     storageEstimate: storageEstimate,
     exportSnapshot: exportSnapshot,
+    tradeEntries: tradeEntries,
+    weightedEntry: weightedEntry,
     tradeExits: tradeExits,
     exitedQty: exitedQty,
     remainingQty: remainingQty,

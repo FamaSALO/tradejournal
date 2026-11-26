@@ -837,23 +837,26 @@
             <input type="hidden" id="tradeSide" value="long">
           </div>
           <label class="field">
-            <span>Цена входа *</span>
+            <span>Цена входа * <em class="field-auto hidden" id="tradeEntryAuto">средневзвеш.</em></span>
             <input type="number" id="tradeEntry" step="any" inputmode="decimal" placeholder="0.00000" required>
           </label>
           <label class="field">
             <span>Стоп при входе</span>
             <input type="number" id="tradeStop" step="any" inputmode="decimal" placeholder="От него считается R">
           </label>
-          <label class="field">
-            <span>Текущий стоп</span>
+          <div class="field">
+            <div class="field-head">
+              <label for="tradeCurrentStop">Текущий стоп</label>
+              <button type="button" class="link-btn field-action-btn" id="stopToBeBtn" title="Перенести текущий стоп на цену входа">В безубыток</button>
+            </div>
             <input type="number" id="tradeCurrentStop" step="any" inputmode="decimal" placeholder="Если передвинули">
-          </label>
+          </div>
           <label class="field">
             <span>Тейк-профит</span>
             <input type="number" id="tradeTarget" step="any" inputmode="decimal" placeholder="Для планового R:R">
           </label>
           <label class="field">
-            <span>Количество *</span>
+            <span>Количество * <em class="field-auto hidden" id="tradeQtyAuto">сумма</em></span>
             <input type="number" id="tradeQty" step="any" min="0" inputmode="decimal" placeholder="100" required>
           </label>
           <label class="field">
@@ -861,10 +864,14 @@
             <input type="number" id="tradeMultiplier" step="any" min="0" inputmode="decimal" placeholder="1">
             <small class="field-hint">Для фьючерсов и опционов: сколько единиц актива в одном контракте</small>
           </label>
-          <label class="field">
-            <span>Комиссия</span>
+          <div class="field">
+            <div class="field-head">
+              <label for="tradeFees">Комиссия</label>
+              <button type="button" class="link-btn field-action-btn" id="saveFeePresetBtn" title="Сохранить текущую ставку в шаблоны">+ Шаблон</button>
+            </div>
             <input type="number" id="tradeFees" step="any" min="0" inputmode="decimal" placeholder="0">
-          </label>
+            <div class="fee-presets" id="feePresetsBar"></div>
+          </div>
           <label class="field">
             <span>Сетап</span>
             <input type="text" id="tradeSetup" list="setupList" placeholder="Пробой уровня" autocomplete="off">
@@ -874,6 +881,17 @@
             <span>Эмоция</span>
             <select id="tradeEmotion"></select>
           </label>
+          <div class="field span-2 entries-field" id="entriesField">
+            <div class="exits-head">
+              <span>Входы и доборы <em>средневзвешенная цена позиции</em></span>
+              <div class="exits-actions">
+                <button type="button" class="btn btn-ghost btn-sm" id="addEntryBtn">+ Добавить вход / добор</button>
+              </div>
+            </div>
+            <div class="exits-editor" id="entriesEditor" hidden></div>
+            <p class="field-hint" id="entriesHint">Один вход — цена и объём заданы полями выше. Добавьте доборы, чтобы автоматически считать средневзвешенную цену входа.</p>
+            <div class="position-history" id="positionHistory" hidden></div>
+          </div>
           <div class="field span-2 exits-field">
             <div class="exits-head">
               <span>Выходы <em>частичные или полный</em></span>

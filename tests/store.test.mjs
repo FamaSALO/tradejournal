@@ -698,3 +698,36 @@ test('analyzeImport counts multiple screenshots and caps beyond 4 (FEAT-06)', fu
   assert.equal(stats.screenshotsDropped, 2);
   assert.equal(stats.screenshotsInvalid, 1);
 });
+
+test('scale-in entries compute weighted entry price, total qty and preserve fee presets (FEAT-10, FEAT-01)', function () {
+  const s = store;
+  const scaled = s.normalizeTrade({
+    id: 'scaled-1',
+    date: '2026-02-10',
+    symbol: 'BTCUSD',
+    side: 'long',
+    stop: 90,
+    fees: 10,
+    entries: [
+      { id: 'en1', qty: 1, price: 100, date: '2026-02-10' },
+      { id: 'en2', qty: 3, price: 120, date: '2026-02-11' }
+    ],
+    exits: [
+      { id: 'ex1', qty: 4, price: 130, date: '2026-02-12' }
+    ]
+  });
+  // Weighted average entry: (1*100 + 3*120) / 4 = 460 / 4 = 115
+  assert.equal(scaled.qty, 4);
+  assert.equal(scaled.entry, 115);
+  assert.equal(s.weightedEntry(scaled), 115);
+  assert.equal(s.tradeEntries(scaled).length, 2);
+  // PnL = (130 - 115) * 4 - 10 = 50
+  assert.equal(s.tradePnl(scaled), 50);
+  // Risk = |115 - 90| * 4 = 100, R = 0.5
+  assert.equal(s.tradeRisk(scaled), 100);
+  assert.equal(s.tradeR(scaled), 0.5);
+  assert.equal(s.isClosed(scaled), true);
+
+  s.state.settings = Object.assign({}, s.state.settings, { feePresets: [2.5, 0, -5, 2.5, 12.75] });
+  assert.deepEqual(Array.from(s.state.settings.feePresets), [2.5, 12.75]);
+});

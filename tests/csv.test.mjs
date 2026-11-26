@@ -132,3 +132,22 @@ test('extracts time from ISO datetime column when Time column is empty (DATA-01)
   assert.equal(res.trades[2].time, '16:45');
   assert.equal(res.trades[3].time, '09:15');
 });
+
+test('imports multi-entry scale-in legs and computes weighted entry price (FEAT-10)', function () {
+  const text = [
+    'Date;Symbol;Side;Entry;Qty;Entries;Exits',
+    '2026-02-01;BTCUSD;Long;;;1@100|3@120@2026-02-02;4@130@2026-02-03'
+  ].join('\n');
+  const res = csv.analyze(text, [], { timeZone: 'UTC' });
+  assert.equal(res.errors.length, 0);
+  assert.equal(res.trades.length, 1);
+  assert.equal(res.trades[0].qty, 4);
+  assert.equal(res.trades[0].entry, 115);
+  assert.equal(res.trades[0].entries.length, 2);
+  assert.equal(res.trades[0].entries[1].date, '2026-02-02');
+  assert.equal(res.trades[0].exits[0].date, '2026-02-03');
+
+  const dup = csv.analyze(text, res.trades, { timeZone: 'UTC' });
+  assert.equal(dup.duplicates, 1);
+  assert.equal(dup.trades.length, 0);
+});

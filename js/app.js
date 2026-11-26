@@ -49,6 +49,7 @@
     tradeAccountId: null,
     tradeBaseline: null,
     tradeBaselineScreenshots: [],
+    tradeEntries: [],
     tradeExits: [],
     csvImport: null,
     tradeDirty: false,
@@ -3083,11 +3084,21 @@
     return num === null ? '' : String(num);
   }
 
-  function exitsForCsv(trade) {
-    return store.tradeExits(trade).map(function (exit) {
-      const date = exit.date && exit.date !== trade.date ? '@' + exit.date : '';
-      return plainNumber(exit.qty) + '@' + plainNumber(exit.price) + date;
+  function legsForCsv(legs, tradeDate) {
+    return (legs || []).map(function (leg) {
+      const date = leg.date && leg.date !== tradeDate ? '@' + leg.date : '';
+      return plainNumber(leg.qty) + '@' + plainNumber(leg.price) + date;
     }).join('|');
+  }
+
+  function entriesForCsv(trade) {
+    return trade && Array.isArray(trade.entries) && trade.entries.length > 1
+      ? legsForCsv(trade.entries, trade.date)
+      : '';
+  }
+
+  function exitsForCsv(trade) {
+    return legsForCsv(store.tradeExits(trade), trade.date);
   }
 
   async function exportCSV() {
@@ -3096,12 +3107,12 @@
     const headers = english
       ? [
         'Date', 'Time', 'Symbol', 'Side', 'Entry', 'Exit', 'Initial Stop',
-        'Current Stop', 'Target', 'Qty', 'Multiplier', 'Fees', 'Exits',
+        'Current Stop', 'Target', 'Qty', 'Multiplier', 'Fees', 'Entries', 'Exits',
         'Remaining', 'Status', 'P&L', 'R', 'Setup', 'Emotion', 'Discipline', 'Tags', 'Notes'
       ]
       : [
         'Дата', 'Время', 'Инструмент', 'Направление', 'Вход', 'Выход', 'Стоп при входе',
-        'Текущий стоп', 'Тейк', 'Количество', 'Множитель', 'Комиссия', 'Выходы',
+        'Текущий стоп', 'Тейк', 'Количество', 'Множитель', 'Комиссия', 'Входы', 'Выходы',
         'Остаток', 'Статус', 'P&L', 'R', 'Сетап', 'Эмоция', 'Дисциплина', 'Теги', 'Заметка'
       ];
     const lines = [headers.map(csvCell).join(';')];
@@ -3126,6 +3137,7 @@
         csvNumber(trade.qty, 4),
         csvNumber(trade.multiplier, 8),
         csvNumber(trade.fees, 2),
+        csvText(entriesForCsv(trade)),
         csvText(exitsForCsv(trade)),
         store.remainingQty(trade) === null ? '' : csvNumber(store.remainingQty(trade), 4),
         csvText(statusLabels[status] || status),
@@ -3572,7 +3584,7 @@
     }).join('');
   }
 
-  const TRADE_FIELD_KEYS = ['date', 'time', 'symbol', 'entry', 'stop', 'currentStop', 'target', 'qty', 'multiplier', 'fees', 'setup', 'emotion', 'discipline', 'tags', 'notes', 'side', 'exits'];
+  const TRADE_FIELD_KEYS = ['date', 'time', 'symbol', 'entry', 'stop', 'currentStop', 'target', 'qty', 'multiplier', 'fees', 'setup', 'emotion', 'discipline', 'tags', 'notes', 'side', 'entries', 'exits'];
 
   function tradeDraftKey(accountId, tradeId) {
     return DRAFT_PREFIX + String(accountId || '') + '.' + (tradeId || 'new');
@@ -3585,9 +3597,9 @@
       || /^idb:screenshots\/[a-z0-9-]{1,80}$/i.test(value);
   }
 
-  function normalizeExitRows(rows) {
+  function normalizeLegRows(rows, maxRows) {
     const result = [];
-    (Array.isArray(rows) ? rows : []).slice(0, store.MAX_EXITS || 50).forEach(function (row) {
+    (Array.isArray(rows) ? rows : []).slice(0, maxRows || store.MAX_EXITS || 50).forEach(function (row) {
       if (!row || typeof row !== 'object') return;
       const qty = row.qty === null || row.qty === undefined ? '' : String(row.qty).slice(0, 40);
       const price = row.price === null || row.price === undefined ? '' : String(row.price).slice(0, 40);
@@ -3602,18 +3614,18 @@
     return result;
   }
 
-  function exitsFromField(value) {
+  function legsFromField(value, maxRows) {
     if (!value) return [];
     try {
       const parsed = typeof value === 'string' ? JSON.parse(value) : value;
-      return normalizeExitRows(parsed);
+      return normalizeLegRows(parsed, maxRows);
     } catch (err) {
       return [];
     }
   }
 
-  function exitsToField(rows) {
-    return JSON.stringify(normalizeExitRows(rows).map(function (row) {
+  function legsToField(rows, maxRows) {
+    return JSON.stringify(normalizeLegRows(rows, maxRows).map(function (row) {
       return { qty: row.qty, price: row.price, date: row.date };
     }));
   }
@@ -3637,7 +3649,8 @@
       tags: trade ? trade.tags.join(', ') : '',
       notes: trade ? (trade.notes || '') : '',
       side: trade ? trade.side : 'long',
-      exits: exitsToField(trade ? store.tradeExits(trade) : [])
+      entries: legsToField(trade && Array.isArray(trade.entries) ? trade.entries : [], store.MAX_ENTRIES),
+      exits: legsToField(trade ? store.tradeExits(trade) : [], store.MAX_EXITS)
     };
   }
 
@@ -3659,7 +3672,8 @@
       tags: $('#tradeTags').value,
       notes: $('#tradeNotes').value,
       side: $('#tradeSide').value,
-      exits: exitsToField(state.tradeExits)
+      entries: legsToField(state.tradeEntries, store.MAX_ENTRIES),
+      exits: legsToField(state.tradeExits, store.MAX_EXITS)
     };
   }
 
@@ -3675,18 +3689,285 @@
     if (!fields || typeof fields !== 'object') return result;
     TRADE_FIELD_KEYS.forEach(function (key) {
       if (typeof fields[key] !== 'string') return;
-      const max = key === 'notes' ? 20000 : (key === 'tags' ? 2000 : (key === 'exits' ? 20000 : 200));
+      const max = key === 'notes' ? 20000 : (key === 'tags' ? 2000 : (key === 'exits' || key === 'entries' ? 20000 : 200));
       result[key] = fields[key].slice(0, max);
     });
-    result.exits = exitsToField(exitsFromField(result.exits));
+    result.entries = legsToField(legsFromField(result.entries, store.MAX_ENTRIES), store.MAX_ENTRIES);
+    result.exits = legsToField(legsFromField(result.exits, store.MAX_EXITS), store.MAX_EXITS);
     result.multiplier = result.multiplier || '1';
     result.side = result.side === 'short' ? 'short' : 'long';
     result.discipline = String(U.clamp(Math.round(U.parseNum(result.discipline) || 0), 0, 5));
     return result;
   }
 
+  function setTradeEntries(rows) {
+    state.tradeEntries = normalizeLegRows(rows, store.MAX_ENTRIES);
+  }
+
   function setTradeExits(rows) {
-    state.tradeExits = normalizeExitRows(rows);
+    state.tradeExits = normalizeLegRows(rows, store.MAX_EXITS);
+  }
+
+  function entryRowsTotals() {
+    let qty = 0;
+    let notional = 0;
+    let validCount = 0;
+    state.tradeEntries.forEach(function (row) {
+      const q = U.parseNum(row.qty);
+      const p = U.parseNum(row.price);
+      if (q !== null && q > 0 && p !== null) {
+        qty += q;
+        notional += q * p;
+        validCount++;
+      }
+    });
+    return {
+      qty: qty,
+      entry: qty > (store.QTY_EPSILON || 1e-9) ? notional / qty : null,
+      count: validCount
+    };
+  }
+
+  function syncEntryAggregate() {
+    const hasEntries = state.tradeEntries.length > 0;
+    const entryEl = $('#tradeEntry');
+    const qtyEl = $('#tradeQty');
+    const entryBadge = $('#tradeEntryAuto');
+    const qtyBadge = $('#tradeQtyAuto');
+    if (entryBadge) entryBadge.classList.toggle('hidden', !hasEntries);
+    if (qtyBadge) qtyBadge.classList.toggle('hidden', !hasEntries);
+    if (entryEl) entryEl.readOnly = hasEntries;
+    if (qtyEl) qtyEl.readOnly = hasEntries;
+    if (hasEntries) {
+      const totals = entryRowsTotals();
+      if (entryEl && totals.entry !== null) entryEl.value = String(totals.entry);
+      if (qtyEl && totals.qty > 0) qtyEl.value = String(totals.qty);
+    }
+    const hint = $('#entriesHint');
+    if (hint) {
+      if (!hasEntries) {
+        hint.textContent = T('Один вход — цена и объём заданы полями выше. Добавьте доборы, чтобы автоматически считать средневзвешенную цену входа.');
+      } else {
+        const totals = entryRowsTotals();
+        hint.textContent = totals.entry !== null
+          ? T('Входов {count}, общий объём {qty}, средневзвешенная цена {entry}.')
+            .replace('{count}', totals.count)
+            .replace('{qty}', U.qty(totals.qty))
+            .replace('{entry}', U.price(totals.entry))
+          : T('Укажите корректную цену и количество хотя бы для одного входа.');
+      }
+    }
+    renderPositionHistory();
+  }
+
+  function renderPositionHistory() {
+    const box = $('#positionHistory');
+    if (!box) return;
+    const validEntries = state.tradeEntries.filter(function (row) {
+      return U.parseNum(row.qty) > 0 && U.parseNum(row.price) !== null;
+    });
+    const validExits = state.tradeExits.filter(function (row) {
+      return U.parseNum(row.qty) > 0 && U.parseNum(row.price) !== null;
+    });
+    if (validEntries.length <= 1 && !validExits.length) {
+      box.hidden = true;
+      box.innerHTML = '';
+      return;
+    }
+    const steps = [];
+    const baseDate = $('#tradeDate') ? $('#tradeDate').value : '';
+    const entriesList = validEntries.length
+      ? validEntries
+      : (U.parseNum($('#tradeQty') && $('#tradeQty').value) > 0 && U.parseNum($('#tradeEntry') && $('#tradeEntry').value) !== null
+        ? [{ qty: $('#tradeQty').value, price: $('#tradeEntry').value, date: baseDate }]
+        : []);
+    entriesList.forEach(function (leg, idx) {
+      steps.push({
+        kind: 'entry',
+        order: 0,
+        idx: idx,
+        date: leg.date || baseDate || '',
+        qty: U.parseNum(leg.qty),
+        price: U.parseNum(leg.price)
+      });
+    });
+    validExits.forEach(function (leg, idx) {
+      steps.push({
+        kind: 'exit',
+        order: 1,
+        idx: idx,
+        date: leg.date || baseDate || '',
+        qty: U.parseNum(leg.qty),
+        price: U.parseNum(leg.price)
+      });
+    });
+    steps.sort(function (a, b) {
+      if (a.date !== b.date) return a.date < b.date ? -1 : 1;
+      if (a.order !== b.order) return a.order - b.order;
+      return a.idx - b.idx;
+    });
+    box.hidden = false;
+    box.innerHTML = '<span class="muted" style="font-size:10px;align-self:center">' + T('История позиции:') + '</span>' + steps.map(function (step) {
+      const label = step.kind === 'entry'
+        ? (step.idx === 0 ? T('Вход') : T('Добор')) + ' +' + U.qty(step.qty)
+        : T('Выход') + ' −' + U.qty(step.qty);
+      const dateTxt = step.date ? ' (' + U.formatDate(step.date, 'short') + ')' : '';
+      return '<span class="history-step is-' + step.kind + '">' + U.escapeHtml(label + ' @ ' + U.price(step.price) + dateTxt) + '</span>';
+    }).join('');
+  }
+
+  function renderEntriesEditor() {
+    const editor = $('#entriesEditor');
+    if (!editor) {
+      syncEntryAggregate();
+      return;
+    }
+    if (!state.tradeEntries.length) {
+      editor.hidden = true;
+      editor.innerHTML = '';
+      syncEntryAggregate();
+      return;
+    }
+    editor.hidden = false;
+    editor.innerHTML = state.tradeEntries.map(function (row, index) {
+      return '<div class="exit-row" data-entry-index="' + index + '">' +
+        '<input type="number" step="any" min="0" inputmode="decimal" data-entry-field="qty" value="' + U.escapeHtml(row.qty) + '" placeholder="' + T('Количество') + '" aria-label="' + T('Количество входа') + ' ' + (index + 1) + '">' +
+        '<input type="number" step="any" inputmode="decimal" data-entry-field="price" value="' + U.escapeHtml(row.price) + '" placeholder="' + T('Цена входа') + '" aria-label="' + T('Цена входа') + ' ' + (index + 1) + '">' +
+        '<input type="date" data-entry-field="date" data-entry-date value="' + U.escapeHtml(row.date) + '" aria-label="' + T('Дата входа') + ' ' + (index + 1) + '">' +
+        '<button type="button" class="icon-btn exit-remove" data-remove-entry="' + index + '" title="' + T('Удалить вход') + '" aria-label="' + T('Удалить вход') + '">×</button>' +
+        '</div>';
+    }).join('');
+    syncEntryAggregate();
+  }
+
+  function addEntryRow(qty, price) {
+    const maxEntries = store.MAX_ENTRIES || 50;
+    if (state.tradeEntries.length >= maxEntries) {
+      toast(T('Слишком много входов: максимум {max}.').replace('{max}', maxEntries), 'warn', null, { skip: true });
+      return;
+    }
+    const baseDate = $('#tradeDate') ? ($('#tradeDate').value || U.todayISO(accountTimeZone())) : U.todayISO(accountTimeZone());
+    if (!state.tradeEntries.length) {
+      const curQty = $('#tradeQty') ? $('#tradeQty').value.trim() : '';
+      const curEntry = $('#tradeEntry') ? $('#tradeEntry').value.trim() : '';
+      if (curQty || curEntry) {
+        state.tradeEntries.push({ id: U.uid(), qty: curQty, price: curEntry, date: baseDate });
+      }
+    }
+    if (state.tradeEntries.length < maxEntries) {
+      state.tradeEntries.push({
+        id: U.uid(),
+        qty: qty === undefined || qty === null ? '' : String(qty),
+        price: price === undefined || price === null ? '' : String(price),
+        date: baseDate
+      });
+    }
+    renderEntriesEditor();
+    const row = $('#entriesEditor .exit-row:last-child');
+    const target = row && row.querySelector('[data-entry-field="qty"]');
+    if (target) target.focus();
+    updateTradePreview();
+    syncTradeDirty();
+  }
+
+  function removeEntryRow(index) {
+    if (index < 0 || index >= state.tradeEntries.length) return;
+    if (state.tradeEntries.length === 1) {
+      const only = state.tradeEntries[0];
+      state.tradeEntries = [];
+      if ($('#tradeQty')) $('#tradeQty').value = only.qty || '';
+      if ($('#tradeEntry')) $('#tradeEntry').value = only.price || '';
+    } else {
+      state.tradeEntries.splice(index, 1);
+    }
+    renderEntriesEditor();
+    updateTradePreview();
+    syncTradeDirty();
+  }
+
+  function formatPresetNumber(val) {
+    const rounded = Math.round(val * 1e6) / 1e6;
+    return Number.isInteger(rounded) ? String(rounded) : String(rounded);
+  }
+
+  function collectFeeSuggestions() {
+    const saved = Array.isArray(store.state.settings.feePresets) ? store.state.settings.feePresets : [];
+    const seen = new Set(saved.map(function (v) { return Math.round(v * 1e6) / 1e6; }));
+    const recent = [];
+    const trades = store.state.trades || [];
+    for (let i = trades.length - 1; i >= 0 && recent.length < 3; i--) {
+      const fee = U.parseNum(trades[i] && trades[i].fees);
+      if (fee === null || fee <= 0) continue;
+      const key = Math.round(fee * 1e6) / 1e6;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      recent.push(key);
+    }
+    return { saved: saved, recent: recent };
+  }
+
+  function renderFeePresets() {
+    const bar = $('#feePresetsBar');
+    if (!bar) return;
+    const feeVal = U.parseNum($('#tradeFees') ? $('#tradeFees').value : null);
+    const data = collectFeeSuggestions();
+    const cur = (store.state.settings && store.state.settings.currency) || '$';
+    const items = [{ value: 0, label: '0', saved: false }].concat(
+      data.saved.map(function (v) {
+        return { value: v, label: cur + formatPresetNumber(v), saved: true };
+      }),
+      data.recent.map(function (v) {
+        return { value: v, label: cur + formatPresetNumber(v), saved: false };
+      })
+    );
+    bar.innerHTML = items.map(function (item) {
+      const active = feeVal !== null && Math.abs(feeVal - item.value) < 1e-8;
+      return '<span class="fee-chip' + (active ? ' active' : '') + '" data-fee-value="' + item.value + '" role="button" tabindex="0">' +
+        '<span data-i18n-skip>' + U.escapeHtml(item.label) + '</span>' +
+        (item.saved ? '<button type="button" class="fee-chip-remove" data-remove-fee-preset="' + item.value + '" aria-label="' + U.escapeHtml(T('Удалить шаблон {fee}').replace('{fee}', item.label)) + '">×</button>' : '') +
+        '</span>';
+    }).join('');
+  }
+
+  function moveStopToBreakeven() {
+    const entry = U.parseNum($('#tradeEntry') ? $('#tradeEntry').value : null);
+    if (entry === null) {
+      toast('Сначала укажите цену входа.', 'warn');
+      if ($('#tradeEntry')) $('#tradeEntry').focus();
+      return;
+    }
+    $('#tradeCurrentStop').value = String(entry);
+    updateTradePreview();
+    syncTradeDirty();
+    toast('Текущий стоп перенесён в безубыток');
+  }
+
+  async function saveFeePreset() {
+    const fee = U.parseNum($('#tradeFees') ? $('#tradeFees').value : null);
+    if (fee === null || fee <= 0) {
+      toast('Укажите комиссию больше нуля для шаблона.', 'warn');
+      return;
+    }
+    const val = Math.round(fee * 1e6) / 1e6;
+    const list = (store.state.settings.feePresets || []).slice();
+    if (!list.some(function (v) { return Math.abs(v - val) < 1e-8; })) {
+      if (list.length >= (store.MAX_FEE_PRESETS || 8)) list.pop();
+      list.unshift(val);
+      store.state.settings.feePresets = list;
+      await persist();
+    }
+    renderFeePresets();
+    toast('Шаблон комиссии сохранён');
+  }
+
+  async function removeFeePreset(val) {
+    const list = (store.state.settings.feePresets || []).filter(function (v) {
+      return Math.abs(v - val) >= 1e-8;
+    });
+    store.state.settings.feePresets = list;
+    await persist();
+    renderFeePresets();
+    toast('Шаблон комиссии удалён');
   }
 
   function renderExitsEditor() {
@@ -3695,6 +3976,7 @@
     if (!state.tradeExits.length) {
       editor.innerHTML = '<div class="exits-empty">' + T('Выходов пока нет — позиция открыта') + '</div>';
       updateExitsSummary();
+      renderPositionHistory();
       return;
     }
     editor.innerHTML = state.tradeExits.map(function (row, index) {
@@ -3706,6 +3988,7 @@
         '</div>';
     }).join('');
     updateExitsSummary();
+    renderPositionHistory();
   }
 
   function exitRowsTotals() {
@@ -3775,10 +4058,13 @@
     $('#tradeEmotion').value = fields.emotion || '';
     $('#tradeTags').value = fields.tags || '';
     $('#tradeNotes').value = fields.notes || '';
-    setTradeExits(exitsFromField(fields.exits));
+    setTradeEntries(legsFromField(fields.entries, store.MAX_ENTRIES));
+    setTradeExits(legsFromField(fields.exits, store.MAX_EXITS));
+    renderEntriesEditor();
     renderExitsEditor();
     setSide(fields.side);
     setDiscipline(Number(fields.discipline) || 0);
+    renderFeePresets();
   }
 
   function addExitRow(qty, price) {
@@ -4033,8 +4319,9 @@
     $('#saveTradeBtn').disabled = false;
     $('#tradeShot').value = '';
     state.tradeInitializing = false;
-    renderShotPreview();
     updateTradePreview();
+    renderFeePresets();
+    renderShotPreview();
     syncTradeDirty();
     openModal('tradeModal', '#tradeSymbol');
     if (restored) {
@@ -4501,31 +4788,46 @@
       remainingEl.className = remaining !== null && remaining > epsilon && exits.length ? 'neutral' : '';
     }
     updateExitsSummary();
+    renderPositionHistory();
+    renderFeePresets();
   }
 
-  function collectExitRows(tradeDate) {
-    const exits = [];
-    for (let i = 0; i < state.tradeExits.length; i++) {
-      const row = state.tradeExits[i];
+  function collectLegRows(rows, tradeDate, kind) {
+    const isEntry = kind === 'entry';
+    const items = [];
+    for (let i = 0; i < (rows || []).length; i++) {
+      const row = rows[i];
       const qtyRaw = String(row.qty === undefined || row.qty === null ? '' : row.qty).trim();
       const priceRaw = String(row.price === undefined || row.price === null ? '' : row.price).trim();
       if (!qtyRaw && !priceRaw) continue;
       const qty = U.parseNum(qtyRaw);
       const price = U.parseNum(priceRaw);
       if (qty === null || qty <= 0) {
-        return { error: T('Выход {index}: количество должно быть больше нуля.').replace('{index}', i + 1) };
+        return {
+          error: T(isEntry ? 'Вход {index}: количество должно быть больше нуля.' : 'Выход {index}: количество должно быть больше нуля.').replace('{index}', i + 1)
+        };
       }
       if (price === null) {
-        return { error: T('Выход {index}: укажите цену выхода.').replace('{index}', i + 1) };
+        return {
+          error: T(isEntry ? 'Вход {index}: укажите цену входа.' : 'Выход {index}: укажите цену выхода.').replace('{index}', i + 1)
+        };
       }
-      exits.push({
+      items.push({
         id: row.id,
         qty: qty,
         price: price,
         date: row.date || tradeDate
       });
     }
-    return { exits: exits };
+    return isEntry ? { entries: items } : { exits: items };
+  }
+
+  function collectEntryRows(tradeDate) {
+    return collectLegRows(state.tradeEntries, tradeDate, 'entry');
+  }
+
+  function collectExitRows(tradeDate) {
+    return collectLegRows(state.tradeExits, tradeDate, 'exit');
   }
 
   async function saveTrade(event) {
@@ -4538,8 +4840,15 @@
 
     const date = $('#tradeDate').value;
     const symbol = $('#tradeSymbol').value.trim().toUpperCase();
-    const entry = U.parseNum($('#tradeEntry').value);
-    const qty = U.parseNum($('#tradeQty').value);
+    const collectedEntries = collectEntryRows(date);
+    const entries = collectedEntries.entries || [];
+    let entry = U.parseNum($('#tradeEntry').value);
+    let qty = U.parseNum($('#tradeQty').value);
+    if (entries.length) {
+      const entryTotals = entryRowsTotals();
+      entry = entryTotals.entry;
+      qty = entryTotals.qty;
+    }
     const multiplierRaw = $('#tradeMultiplier').value.trim();
     const multiplier = multiplierRaw === '' ? 1 : U.parseNum(multiplierRaw);
     const stopRaw = $('#tradeStop').value.trim();
@@ -4553,7 +4862,7 @@
     const collected = collectExitRows(date);
     const exits = collected.exits || [];
 
-    let error = collected.error || '';
+    let error = collectedEntries.error || collected.error || '';
     if (!error && !date) error = 'Укажите дату сделки.';
     else if (!error && !symbol) error = 'Укажите инструмент (например, EURUSD).';
     else if (!error && entry === null) error = 'Укажите цену входа.';
@@ -4629,6 +4938,7 @@
         qty: qty,
         multiplier: multiplier,
         fees: fees,
+        entries: entries,
         exits: exits,
         setup: $('#tradeSetup').value.trim(),
         emotion: $('#tradeEmotion').value,
@@ -4746,8 +5056,9 @@
     applyTradeFields(state.tradeBaseline || tradeFieldsFromTrade(null));
     state.tradeDirty = false;
     updateDraftUi();
-    renderShotPreview();
     updateTradePreview();
+    renderFeePresets();
+    renderShotPreview();
     toast('Черновик сброшен');
   }
 
@@ -5289,6 +5600,62 @@
       setSide(button.dataset.side);
       syncTradeDirty();
     });
+    $('#stopToBeBtn').addEventListener('click', moveStopToBreakeven);
+    $('#saveFeePresetBtn').addEventListener('click', saveFeePreset);
+    $('#feePresetsBar').addEventListener('click', function (event) {
+      const removeBtn = event.target.closest('[data-remove-fee-preset]');
+      if (removeBtn) {
+        event.stopPropagation();
+        removeFeePreset(Number(removeBtn.dataset.removeFeePreset));
+        return;
+      }
+      const chip = event.target.closest('[data-fee-value]');
+      if (!chip) return;
+      const val = Number(chip.dataset.feeValue);
+      $('#tradeFees').value = val === 0 ? '0' : String(val);
+      renderFeePresets();
+      updateTradePreview();
+      syncTradeDirty();
+    });
+    $('#feePresetsBar').addEventListener('keydown', function (event) {
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      const chip = event.target.closest('[data-fee-value]');
+      if (!chip || event.target.closest('[data-remove-fee-preset]')) return;
+      event.preventDefault();
+      const val = Number(chip.dataset.feeValue);
+      $('#tradeFees').value = val === 0 ? '0' : String(val);
+      renderFeePresets();
+      updateTradePreview();
+      syncTradeDirty();
+    });
+    $('#addEntryBtn').addEventListener('click', function () { addEntryRow(); });
+    $('#entriesEditor').addEventListener('input', function (event) {
+      const row = event.target.closest('[data-entry-index]');
+      const field = event.target.dataset.entryField;
+      if (!row || !field) return;
+      const index = Number(row.dataset.entryIndex);
+      if (!state.tradeEntries[index]) return;
+      state.tradeEntries[index][field] = event.target.value;
+      syncEntryAggregate();
+      updateTradePreview();
+      syncTradeDirty();
+    });
+    $('#entriesEditor').addEventListener('change', function (event) {
+      const row = event.target.closest('[data-entry-index]');
+      const field = event.target.dataset.entryField;
+      if (!row || !field) return;
+      const index = Number(row.dataset.entryIndex);
+      if (!state.tradeEntries[index]) return;
+      state.tradeEntries[index][field] = event.target.value;
+      syncEntryAggregate();
+      updateTradePreview();
+      syncTradeDirty();
+    });
+    $('#entriesEditor').addEventListener('click', function (event) {
+      const button = event.target.closest('[data-remove-entry]');
+      if (!button) return;
+      removeEntryRow(Number(button.dataset.removeEntry));
+    });
     $('#addExitBtn').addEventListener('click', function () { addExitRow(); });
     $('#closeRemainingBtn').addEventListener('click', closeRemainingExit);
     $('#exitsEditor').addEventListener('input', function (event) {
@@ -5555,6 +5922,8 @@
     renderDiscipline: renderDiscipline,
     getFilteredTrades: getFilteredTrades,
     collectExitRows: collectExitRows,
+    collectEntryRows: collectEntryRows,
+    moveStopToBreakeven: moveStopToBreakeven,
     calcUpdate: calcUpdate,
     openModal: openModal,
     closeModal: closeModal,

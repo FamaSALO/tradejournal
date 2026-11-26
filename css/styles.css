@@ -1591,6 +1591,70 @@ svg { display: block; }
 .exit-row .exit-remove:hover { color: var(--red); }
 .exits-empty { padding: 10px; border: 1px dashed rgba(148, 178, 212, 0.16); border-radius: 8px; color: var(--muted-2); font-size: 10px; text-align: center; }
 
+.field-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.field-head label { font-size: 10.5px; font-weight: 500; color: var(--muted); letter-spacing: 0.01em; cursor: pointer; }
+.field-action-btn { font-size: 10px; color: var(--accent); padding: 0; }
+.field-auto {
+  margin-left: 5px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--accent-softer);
+  color: var(--accent);
+  font-style: normal;
+  font-size: 9px;
+  font-weight: 600;
+}
+.fee-presets { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; margin-top: 2px; }
+.fee-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 7px;
+  border: 1px solid var(--border);
+  border-radius: 99px;
+  background: var(--input-bg);
+  color: var(--muted);
+  font-size: 10px;
+  cursor: pointer;
+}
+.fee-chip:hover { border-color: var(--border-strong); color: var(--text); }
+.fee-chip.active { border-color: var(--accent-border); background: var(--accent-soft); color: var(--accent); }
+.fee-chip-remove {
+  margin-left: 2px;
+  padding: 0 2px;
+  border: 0;
+  background: none;
+  color: var(--muted-2);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+}
+.fee-chip-remove:hover { color: var(--red); }
+
+.entries-field { gap: 8px; }
+.position-history {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.015);
+}
+.history-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  border-radius: 6px;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  border: 1px solid var(--border);
+  background: var(--input-bg);
+}
+.history-step.is-entry { border-color: rgba(49, 227, 170, 0.3); color: var(--pos); }
+.history-step.is-exit { border-color: rgba(157, 123, 255, 0.32); color: var(--violet); }
+
 /* ============================ Table thumbnails and status ============================ */
 .symbol-main { display: flex; align-items: center; gap: 7px; min-width: 0; }
 .symbol-thumb {

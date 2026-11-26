@@ -27,6 +27,7 @@
     discipline: ['дисциплина', 'discipline', 'оценка'],
     tags: ['теги', 'tags', 'tag'],
     notes: ['заметка', 'заметки', 'notes', 'note', 'комментарий', 'comment'],
+    entries: ['входы', 'entries', 'доборы', 'усреднения', 'scale in', 'entry legs'],
     exits: ['выходы', 'exits', 'частичные выходы', 'partial exits', 'exit legs', 'закрытия']
   };
 
@@ -258,31 +259,43 @@
       .slice(0, 12);
   }
 
-  function parseExits(value, fallbackDate) {
+  function parseLegs(value, fallbackDate, kind) {
     const text = String(value === null || value === undefined ? '' : value).trim();
-    if (!text) return { exits: [], errors: [] };
-    const exits = [];
+    if (!text) return { legs: [], errors: [] };
+    const isEntry = kind === 'entry';
+    const prefix = isEntry ? 'вход' : 'выход';
+    const legs = [];
     const errors = [];
     text.split(/\s*[|;]\s*/).filter(Boolean).forEach(function (part, index) {
       const match = part.match(/^([^@]+)@([^@]+)(?:@(.+))?$/);
       if (!match) {
-        errors.push(tr('выход {index}: ожидается формат «количество@цена»').replace('{index}', index + 1));
+        errors.push(tr(prefix + ' {index}: ожидается формат «количество@цена»').replace('{index}', index + 1));
         return;
       }
       const qty = number(match[1]);
       const price = number(match[2]);
       if (qty === null || qty <= 0) {
-        errors.push(tr('выход {index}: некорректное количество').replace('{index}', index + 1));
+        errors.push(tr(prefix + ' {index}: некорректное количество').replace('{index}', index + 1));
         return;
       }
       if (price === null) {
-        errors.push(tr('выход {index}: некорректная цена').replace('{index}', index + 1));
+        errors.push(tr(prefix + ' {index}: некорректная цена').replace('{index}', index + 1));
         return;
       }
-      const exitDate = date(match[3]) || fallbackDate;
-      exits.push({ qty: qty, price: price, date: exitDate });
+      const legDate = date(match[3]) || fallbackDate;
+      legs.push({ qty: qty, price: price, date: legDate });
     });
-    return { exits: exits, errors: errors };
+    return { legs: legs, errors: errors };
+  }
+
+  function parseExits(value, fallbackDate) {
+    const res = parseLegs(value, fallbackDate, 'exit');
+    return { exits: res.legs, errors: res.errors };
+  }
+
+  function parseEntries(value, fallbackDate) {
+    const res = parseLegs(value, fallbackDate, 'entry');
+    return { entries: res.legs, errors: res.errors };
   }
 
   function roundKey(value) {
@@ -298,12 +311,20 @@
     return [];
   }
 
+  function entriesOf(trade) {
+    if (trade && Array.isArray(trade.entries) && trade.entries.length > 1) return trade.entries;
+    return [];
+  }
+
   function fingerprint(trade) {
     if (!trade) return '';
     const exits = exitsOf(trade).map(function (exit) {
       return roundKey(exit.qty) + '@' + roundKey(exit.price);
     }).join('|');
-    return [
+    const entries = entriesOf(trade).map(function (leg) {
+      return roundKey(leg.qty) + '@' + roundKey(leg.price);
+    }).join('|');
+    const parts = [
       String(trade.date || ''),
       String(trade.time || ''),
       String(trade.symbol || '').trim().toUpperCase(),
@@ -312,7 +333,9 @@
       roundKey(trade.qty),
       roundKey(trade.multiplier === undefined ? 1 : trade.multiplier),
       exits
-    ].join('~');
+    ];
+    if (entries) parts.push(entries);
+    return parts.join('~');
   }
 
   function analyze(text, existingTrades, options) {
@@ -336,7 +359,8 @@
 
     result.headers = parsed.rows[0].map(function (header) { return String(header).trim(); });
     result.mapping = mapHeaders(result.headers);
-    const required = ['symbol', 'entry', 'qty'];
+    const hasEntriesCol = result.mapping.entries !== undefined;
+    const required = hasEntriesCol ? ['symbol'] : ['symbol', 'entry', 'qty'];
     const missing = required.filter(function (field) { return result.mapping[field] === undefined; });
     if (missing.length) {
       const labels = { symbol: tr('Инструмент'), entry: tr('Вход'), qty: tr('Количество') };
@@ -359,16 +383,6 @@
       const symbol = String(cell(row, result.mapping, 'symbol')).trim().toUpperCase();
       if (!symbol) {
         result.errors.push(tr('Строка {line}: не указан инструмент.').replace('{line}', line));
-        return;
-      }
-      const entry = number(cell(row, result.mapping, 'entry'));
-      if (entry === null) {
-        result.errors.push(tr('Строка {line}: некорректная цена входа.').replace('{line}', line));
-        return;
-      }
-      const qty = number(cell(row, result.mapping, 'qty'));
-      if (qty === null || qty <= 0) {
-        result.errors.push(tr('Строка {line}: количество должно быть больше нуля.').replace('{line}', line));
         return;
       }
 
@@ -407,6 +421,35 @@
         }
       }
       if (!tradeDate) tradeDate = todayISO(options.timeZone);
+
+      const parsedEntries = parseEntries(cell(row, result.mapping, 'entries'), tradeDate);
+      if (parsedEntries.errors.length) {
+        result.errors.push(
+          tr('Строка {line}: {details}.')
+            .replace('{line}', line)
+            .replace('{details}', parsedEntries.errors.join('; '))
+        );
+        return;
+      }
+      const entries = parsedEntries.entries;
+      let entry = number(cell(row, result.mapping, 'entry'));
+      let qty = number(cell(row, result.mapping, 'qty'));
+      if (entries.length) {
+        const eQty = entries.reduce(function (sum, leg) { return sum + leg.qty; }, 0);
+        const eVal = entries.reduce(function (sum, leg) { return sum + leg.qty * leg.price; }, 0);
+        if (eQty > 0) {
+          qty = eQty;
+          entry = eVal / eQty;
+        }
+      }
+      if (entry === null) {
+        result.errors.push(tr('Строка {line}: некорректная цена входа.').replace('{line}', line));
+        return;
+      }
+      if (qty === null || qty <= 0) {
+        result.errors.push(tr('Строка {line}: количество должно быть больше нуля.').replace('{line}', line));
+        return;
+      }
 
       const tradeSide = side(cell(row, result.mapping, 'side'));
       if (!tradeSide) {
@@ -465,6 +508,7 @@
         qty: qty,
         multiplier: multiplier,
         fees: fees,
+        entries: entries,
         exits: exits,
         setup: String(cell(row, result.mapping, 'setup')).trim(),
         emotion: emotion(cell(row, result.mapping, 'emotion')),
