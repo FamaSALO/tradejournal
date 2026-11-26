@@ -3530,8 +3530,9 @@
         T('Импорт заменяет текущие данные журнала. Перед восстановлением сделайте резервную копию текущего состояния.'),
         ''
       ].join('\r\n');
-      const archive = NS.zip.create([
-        { name: 'journal.json', data: JSON.stringify(payload, null, 2), date: new Date() },
+      const zipCreate = NS.zip.createAsync || NS.zip.create;
+      const archive = await zipCreate([
+        { name: 'journal.json', data: JSON.stringify(payload), date: new Date() },
         { name: 'README.txt', data: readme, date: new Date() }
       ]);
       const result = await U.downloadBytes('tradejournal-backup-' + U.todayISO() + '.zip', archive, 'application/zip');

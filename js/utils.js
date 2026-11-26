@@ -594,6 +594,21 @@
   function downloadBytes(filename, bytes, mime) {
     const data = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
     const desktop = window.tradeJournalDesktop;
+    if (desktop && typeof desktop.saveDownloadBytesStream === 'function') {
+      return Promise.resolve().then(function () {
+        return desktop.saveDownloadBytesStream(filename, data);
+      }).then(function (result) {
+        return {
+          ok: !!(result && result.ok !== false),
+          canceled: !!(result && result.canceled),
+          path: result && result.path ? result.path : null
+        };
+      }, function (err) {
+        const message = err && err.message ? tr(err.message) : tr('Не удалось сохранить файл.');
+        window.dispatchEvent(new CustomEvent('tj:download-error', { detail: message }));
+        return { ok: false, canceled: false, error: message };
+      });
+    }
     if (desktop && typeof desktop.saveDownloadBytes === 'function') {
       let encoded;
       try {

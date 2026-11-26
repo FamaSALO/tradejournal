@@ -1,8 +1,8 @@
 use base64::Engine as _;
 use serde::Serialize;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs::{self, OpenOptions};
-use std::io::{ErrorKind, Write};
+use std::io::{BufWriter, ErrorKind, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -30,11 +30,18 @@ struct StorePaths {
     screenshots: PathBuf,
 }
 
+struct StagedDownload {
+    target_path: PathBuf,
+    temp_path: PathBuf,
+    writer: Option<BufWriter<fs::File>>,
+}
+
 #[derive(Clone)]
 struct AppState {
     paths: StorePaths,
     save_lock: Arc<Mutex<()>>,
     last_auto_backup: Arc<Mutex<Option<Instant>>>,
+    staged_downloads: Arc<Mutex<HashMap<String, StagedDownload>>>,
 }
 
 #[derive(Serialize)]
@@ -113,6 +120,15 @@ struct SaveDownloadResult {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+struct DownloadBeginResult {
+    ok: bool,
+    canceled: bool,
+    token: Option<String>,
+    path: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct UpdateInfo {
     available: bool,
     current_version: String,
@@ -176,18 +192,22 @@ fn validate_raw(raw: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn unique_temp_path(path: &Path) -> PathBuf {
+    let counter = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    path.with_file_name(format!(
+        ".tj-{}-{}-{}.tmp",
+        std::process::id(),
+        now_millis(),
+        counter
+    ))
+}
+
 fn write_atomic(path: &Path, content: &[u8]) -> std::io::Result<()> {
     if let Some(directory) = path.parent() {
         fs::create_dir_all(directory)?;
     }
 
-    let counter = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let temp_path = path.with_file_name(format!(
-        ".tj-{}-{}-{}.tmp",
-        std::process::id(),
-        now_millis(),
-        counter
-    ));
+    let temp_path = unique_temp_path(path);
 
     let write_result = (|| -> std::io::Result<()> {
         let mut file = OpenOptions::new()
@@ -1184,6 +1204,174 @@ async fn save_download_bytes(
     })
 }
 
+fn begin_staged_download(state: &AppState, target_path: PathBuf) -> Result<String, String> {
+    if let Some(directory) = target_path.parent() {
+        fs::create_dir_all(directory)
+            .map_err(|error| format!("Не удалось создать папку для экспорта: {error}"))?;
+    }
+    let temp_path = unique_temp_path(&target_path);
+    let file = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&temp_path)
+        .map_err(|error| format!("Не удалось подготовить файл экспорта: {error}"))?;
+    let token = format!(
+        "dl-{}-{}",
+        std::process::id(),
+        TEMP_COUNTER.fetch_add(1, Ordering::Relaxed)
+    );
+    let mut map = lock_or_recover(&state.staged_downloads);
+    if map.len() >= 16 {
+        let _ = fs::remove_file(&temp_path);
+        return Err("Слишком много незавершённых операций экспорта.".to_string());
+    }
+    map.insert(
+        token.clone(),
+        StagedDownload {
+            target_path,
+            temp_path,
+            writer: Some(BufWriter::with_capacity(64 * 1024, file)),
+        },
+    );
+    Ok(token)
+}
+
+fn append_staged_download_chunk(
+    state: &AppState,
+    token: &str,
+    chunk_base64: &str,
+) -> Result<(), String> {
+    if chunk_base64.len() > 8 * 1024 * 1024 {
+        return Err("Слишком большой фрагмент экспорта.".to_string());
+    }
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(chunk_base64.as_bytes())
+        .map_err(|_| "Не удалось декодировать фрагмент файла.".to_string())?;
+    let mut map = lock_or_recover(&state.staged_downloads);
+    let staged = map
+        .get_mut(token)
+        .ok_or_else(|| "Сессия экспорта не найдена.".to_string())?;
+    let writer = staged
+        .writer
+        .as_mut()
+        .ok_or_else(|| "Файл экспорта уже закрыт.".to_string())?;
+    writer
+        .write_all(&bytes)
+        .map_err(|error| format!("Не удалось записать фрагмент файла: {error}"))?;
+    Ok(())
+}
+
+fn finish_staged_download(state: &AppState, token: &str) -> Result<String, String> {
+    let mut staged = {
+        let mut map = lock_or_recover(&state.staged_downloads);
+        map.remove(token)
+            .ok_or_else(|| "Сессия экспорта не найдена.".to_string())?
+    };
+
+    let finish_result = (|| -> std::io::Result<()> {
+        if let Some(mut writer) = staged.writer.take() {
+            writer.flush()?;
+            let file = writer
+                .into_inner()
+                .map_err(std::io::IntoInnerError::into_error)?;
+            file.sync_all()?;
+        }
+        fs::rename(&staged.temp_path, &staged.target_path)?;
+        Ok(())
+    })();
+
+    if let Err(error) = finish_result {
+        drop(staged.writer.take());
+        let _ = fs::remove_file(&staged.temp_path);
+        return Err(format!("Не удалось завершить сохранение файла: {error}"));
+    }
+
+    Ok(staged.target_path.to_string_lossy().to_string())
+}
+
+fn abort_staged_download(state: &AppState, token: &str) {
+    let staged = {
+        let mut map = lock_or_recover(&state.staged_downloads);
+        map.remove(token)
+    };
+    if let Some(mut entry) = staged {
+        drop(entry.writer.take());
+        let _ = fs::remove_file(&entry.temp_path);
+    }
+}
+
+#[tauri::command]
+async fn save_download_begin(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    filename: String,
+) -> Result<DownloadBeginResult, String> {
+    let Some(path) = choose_download_path_async(app, filename).await? else {
+        return Ok(DownloadBeginResult {
+            ok: true,
+            canceled: true,
+            token: None,
+            path: None,
+        });
+    };
+
+    let saved_path = path.to_string_lossy().to_string();
+    let state = state.inner().clone();
+    let token = tauri::async_runtime::spawn_blocking(move || begin_staged_download(&state, path))
+        .await
+        .map_err(|error| format!("Не удалось подготовить экспорт: {error}"))??;
+
+    Ok(DownloadBeginResult {
+        ok: true,
+        canceled: false,
+        token: Some(token),
+        path: Some(saved_path),
+    })
+}
+
+#[tauri::command]
+async fn save_download_chunk(
+    state: State<'_, AppState>,
+    token: String,
+    chunk: String,
+) -> Result<OkResult, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        append_staged_download_chunk(&state, &token, &chunk)
+    })
+    .await
+    .map_err(|error| format!("Не удалось записать данные экспорта: {error}"))??;
+    Ok(OkResult { ok: true })
+}
+
+#[tauri::command]
+async fn save_download_finish(
+    state: State<'_, AppState>,
+    token: String,
+) -> Result<SaveDownloadResult, String> {
+    let state = state.inner().clone();
+    let path = tauri::async_runtime::spawn_blocking(move || finish_staged_download(&state, &token))
+        .await
+        .map_err(|error| format!("Не удалось завершить сохранение файла: {error}"))??;
+    Ok(SaveDownloadResult {
+        ok: true,
+        canceled: false,
+        path: Some(path),
+    })
+}
+
+#[tauri::command]
+async fn save_download_abort(
+    state: State<'_, AppState>,
+    token: String,
+) -> Result<OkResult, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || abort_staged_download(&state, &token))
+        .await
+        .map_err(|error| format!("Не удалось отменить экспорт: {error}"))?;
+    Ok(OkResult { ok: true })
+}
+
 #[tauri::command]
 async fn update_check(app: tauri::AppHandle) -> Result<UpdateInfo, String> {
     use tauri_plugin_updater::UpdaterExt;
@@ -1257,6 +1445,7 @@ pub fn run() {
                 paths,
                 save_lock: Arc::new(Mutex::new(())),
                 last_auto_backup: Arc::new(Mutex::new(None)),
+                staged_downloads: Arc::new(Mutex::new(HashMap::new())),
             });
             Ok(())
         })
@@ -1277,6 +1466,10 @@ pub fn run() {
             open_data_folder,
             save_download,
             save_download_bytes,
+            save_download_begin,
+            save_download_chunk,
+            save_download_finish,
+            save_download_abort,
             update_check,
             update_install
         ])
@@ -1396,6 +1589,7 @@ mod tests {
                 paths,
                 save_lock: Arc::new(Mutex::new(())),
                 last_auto_backup: Arc::new(Mutex::new(None)),
+                staged_downloads: Arc::new(Mutex::new(HashMap::new())),
             };
             Self { dir, state }
         }
@@ -1620,5 +1814,27 @@ mod tests {
             decode_screenshot_data_url(&format!("data:image/png;base64,{}", b64(&too_large)))
                 .is_err()
         );
+    }
+
+    #[test]
+    fn staged_download_streams_chunks_atomically_and_cleans_up_on_abort() {
+        let store = TempStore::new("staged-download");
+        let target = store.dir.join("export.zip");
+        let b64 = |bytes: &[u8]| base64::engine::general_purpose::STANDARD.encode(bytes);
+
+        let token = begin_staged_download(&store.state, target.clone()).unwrap();
+        append_staged_download_chunk(&store.state, &token, &b64(b"hello ")).unwrap();
+        append_staged_download_chunk(&store.state, &token, &b64(b"zip world")).unwrap();
+        assert!(!target.exists());
+
+        let saved_path = finish_staged_download(&store.state, &token).unwrap();
+        assert_eq!(saved_path, target.to_string_lossy().to_string());
+        assert_eq!(fs::read(&target).unwrap(), b"hello zip world");
+
+        let aborted_target = store.dir.join("aborted.zip");
+        let abort_token = begin_staged_download(&store.state, aborted_target.clone()).unwrap();
+        append_staged_download_chunk(&store.state, &abort_token, &b64(b"partial")).unwrap();
+        abort_staged_download(&store.state, &abort_token);
+        assert!(!aborted_target.exists());
     }
 }

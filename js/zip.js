@@ -60,26 +60,28 @@
     view.setUint32(offset, value >>> 0, true);
   }
 
-  function create(entries) {
-    const files = (entries || []).map(function (entry) {
-      const name = String(entry && entry.name || '').replace(/\\/g, '/');
-      if (!name || name.charAt(0) === '/') throw new Error(tr('Некорректное имя файла в архиве.'));
-      const data = asBytes(entry && entry.data);
-      const stamp = dosDateTime(entry && entry.date);
-      return {
-        name: name,
-        nameBytes: utf8(name),
-        data: data,
-        crc: crc32(data),
-        time: stamp.time,
-        date: stamp.date
-      };
-    });
+  function prepareEntry(entry) {
+    const name = String(entry && entry.name || '').replace(/\\/g, '/');
+    if (!name || name.charAt(0) === '/') throw new Error(tr('Некорректное имя файла в архиве.'));
+    const data = asBytes(entry && entry.data);
+    const stamp = dosDateTime(entry && entry.date);
+    return {
+      name: name,
+      nameBytes: utf8(name),
+      data: data,
+      packed: data,
+      method: 0,
+      crc: crc32(data),
+      time: stamp.time,
+      date: stamp.date
+    };
+  }
 
+  function assembleZip(files) {
     let localSize = 0;
     let centralSize = 0;
     files.forEach(function (file) {
-      localSize += 30 + file.nameBytes.length + file.data.length;
+      localSize += 30 + file.nameBytes.length + file.packed.length;
       centralSize += 46 + file.nameBytes.length;
     });
 
@@ -93,17 +95,17 @@
       writeU32(view, offset, 0x04034b50);
       writeU16(view, offset + 4, 20);
       writeU16(view, offset + 6, 0x0800);
-      writeU16(view, offset + 8, 0);
+      writeU16(view, offset + 8, file.method);
       writeU16(view, offset + 10, file.time);
       writeU16(view, offset + 12, file.date);
       writeU32(view, offset + 14, file.crc);
-      writeU32(view, offset + 18, file.data.length);
+      writeU32(view, offset + 18, file.packed.length);
       writeU32(view, offset + 22, file.data.length);
       writeU16(view, offset + 26, file.nameBytes.length);
       writeU16(view, offset + 28, 0);
       output.set(file.nameBytes, offset + 30);
-      output.set(file.data, offset + 30 + file.nameBytes.length);
-      offset += 30 + file.nameBytes.length + file.data.length;
+      output.set(file.packed, offset + 30 + file.nameBytes.length);
+      offset += 30 + file.nameBytes.length + file.packed.length;
     });
 
     const centralOffset = offset;
@@ -112,11 +114,11 @@
       writeU16(view, offset + 4, 20);
       writeU16(view, offset + 6, 20);
       writeU16(view, offset + 8, 0x0800);
-      writeU16(view, offset + 10, 0);
+      writeU16(view, offset + 10, file.method);
       writeU16(view, offset + 12, file.time);
       writeU16(view, offset + 14, file.date);
       writeU32(view, offset + 16, file.crc);
-      writeU32(view, offset + 20, file.data.length);
+      writeU32(view, offset + 20, file.packed.length);
       writeU32(view, offset + 24, file.data.length);
       writeU16(view, offset + 28, file.nameBytes.length);
       writeU16(view, offset + 30, 0);
@@ -138,6 +140,38 @@
     writeU32(view, offset + 16, centralOffset);
     writeU16(view, offset + 20, 0);
     return output;
+  }
+
+  function create(entries) {
+    const files = (entries || []).map(prepareEntry);
+    return assembleZip(files);
+  }
+
+  async function deflateRaw(bytes) {
+    const stream = new Blob([bytes]).stream().pipeThrough(new CompressionStream('deflate-raw'));
+    const buffer = await new Response(stream).arrayBuffer();
+    return new Uint8Array(buffer);
+  }
+
+  async function createAsync(entries, opts) {
+    const compress = !(opts && opts.compress === false) && typeof CompressionStream === 'function' && typeof Blob === 'function' && typeof Response === 'function';
+    const files = (entries || []).map(prepareEntry);
+    if (compress) {
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        if (file.data.length <= 64) continue;
+        try {
+          const packed = await deflateRaw(file.data);
+          if (packed && packed.length > 0 && packed.length < file.data.length) {
+            file.packed = packed;
+            file.method = 8;
+          }
+        } catch (err) {
+          // Keep stored (method 0) if the browser CompressionStream fails for this entry.
+        }
+      }
+    }
+    return assembleZip(files);
   }
 
   var MAX_ENTRIES = 2000;
@@ -431,6 +465,7 @@
     crc32: crc32,
     utf8: utf8,
     create: create,
+    createAsync: createAsync,
     read: read,
     readJournal: readJournal,
     MAX_ENTRIES: MAX_ENTRIES,

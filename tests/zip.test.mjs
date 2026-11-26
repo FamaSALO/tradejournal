@@ -287,3 +287,38 @@ test('reads journal.json with UTF-8 BOM and 1-level subfolder fallback, and igno
   withTrailingGarbage.set(subArchive, 0);
   await assert.rejects(function () { return zip.read(archiveBuffer(withTrailingGarbage)); }, /повреждён или обрезан/);
 });
+
+test('createAsync compresses compressible payloads with Deflate (method 8) and round-trips (FEAT-08)', async function () {
+  const repeated = JSON.stringify({
+    version: 4,
+    accounts: [{
+      id: 'a1',
+      name: 'Main',
+      trades: Array.from({ length: 120 }, function (_, i) {
+        return { id: 't-' + i, date: '2026-01-05', symbol: 'BTCUSD', side: 'long', entry: 50000, qty: 1, notes: 'trend continuation breakout' };
+      }),
+      notes: []
+    }]
+  });
+  const stored = zip.create([
+    { name: 'journal.json', data: repeated },
+    { name: 'tiny.txt', data: 'ok' }
+  ]);
+  const compressed = await zip.createAsync([
+    { name: 'journal.json', data: repeated },
+    { name: 'tiny.txt', data: 'ok' }
+  ]);
+
+  assert.ok(compressed.length < stored.length * 0.4, 'expected strong deflate compression: ' + compressed.length + ' vs ' + stored.length);
+  const view = new DataView(compressed.buffer, compressed.byteOffset, compressed.byteLength);
+  // First entry header compression method at offset 8 should be 8 (Deflate)
+  assert.equal(view.getUint16(8, true), 8);
+
+  const parsed = await zip.readJournal(archiveBuffer(compressed));
+  assert.equal(parsed.accounts[0].trades.length, 120);
+
+  // Without CompressionStream, createAsync cleanly falls back to Stored (method 0)
+  const noStream = loadTradeJournal(null, { globals: { CompressionStream: undefined } });
+  const fallbackZip = await noStream.TJ.zip.createAsync([{ name: 'journal.json', data: repeated }]);
+  assert.equal(new DataView(fallbackZip.buffer, fallbackZip.byteOffset, fallbackZip.byteLength).getUint16(8, true), 0);
+});

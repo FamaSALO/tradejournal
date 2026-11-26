@@ -175,6 +175,36 @@
       return call('save_download_bytes', { filename: filename, content: base64Content });
     },
 
+    saveDownloadBytesStream: async function (filename, bytes) {
+      const data = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes || 0);
+      const began = await call('save_download_begin', { filename: filename });
+      if (!began || began.canceled || !began.token) {
+        return { ok: true, canceled: true, path: null };
+      }
+      const token = began.token;
+      const chunkSize = 512 * 1024;
+      const encode = (window.TJ && window.TJ.utils && window.TJ.utils.bytesToBase64)
+        ? window.TJ.utils.bytesToBase64
+        : function (slice) {
+          let binary = '';
+          const step = 0x8000;
+          for (let i = 0; i < slice.length; i += step) {
+            binary += String.fromCharCode.apply(null, slice.subarray(i, i + step));
+          }
+          return btoa(binary);
+        };
+      try {
+        for (let offset = 0; offset < data.length; offset += chunkSize) {
+          const slice = data.subarray(offset, Math.min(data.length, offset + chunkSize));
+          await call('save_download_chunk', { token: token, chunk: encode(slice) });
+        }
+        return await call('save_download_finish', { token: token });
+      } catch (err) {
+        await call('save_download_abort', { token: token }).catch(function () { /* ignore */ });
+        throw err;
+      }
+    },
+
     checkUpdate: function () {
       return call('update_check');
     },

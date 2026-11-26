@@ -845,3 +845,58 @@ test('journal search/mood/tag filters and trade checklist rendering work togethe
   assert.equal(els['#tradeChecklistProgress'].textContent, '1 / 2');
   assert.equal(els['#tradeChecklistWarn'].hidden, false);
 });
+
+test('downloadBytes uses desktop chunked streaming IPC without encoding on cancel (FEAT-08)', async function () {
+  const calls = [];
+  const doc = fakeDocument();
+  const payload = new Uint8Array(700 * 1024); // > 512 KB -> 2 chunks
+  payload.fill(65);
+
+  const loadedCancel = loadTradeJournal(['js/desktop-bridge.js'], {
+    globals: {
+      document: doc,
+      __TAURI__: {
+        core: {
+          invoke: async function (cmd) {
+            calls.push(cmd);
+            if (cmd === 'data_info') return { platform: 'windows' };
+            if (cmd === 'save_download_begin') return { ok: true, canceled: true, token: null };
+            return { ok: true };
+          }
+        }
+      }
+    }
+  });
+  const canceled = await loadedCancel.TJ.utils.downloadBytes('big.zip', payload, 'application/zip');
+  assert.equal(canceled.canceled, true);
+  assert.equal(calls.includes('save_download_chunk'), false);
+
+  const streamCalls = [];
+  const receivedChunks = [];
+  const loadedOk = loadTradeJournal(['js/desktop-bridge.js'], {
+    globals: {
+      document: doc,
+      __TAURI__: {
+        core: {
+          invoke: async function (cmd, args) {
+            streamCalls.push(cmd);
+            if (cmd === 'data_info') return { platform: 'windows' };
+            if (cmd === 'save_download_begin') return { ok: true, canceled: false, token: 'dl-1' };
+            if (cmd === 'save_download_chunk') {
+              receivedChunks.push(Buffer.from(args.chunk, 'base64'));
+              return { ok: true };
+            }
+            if (cmd === 'save_download_finish') return { ok: true, canceled: false, path: 'C:/tmp/big.zip' };
+            return { ok: true };
+          }
+        }
+      }
+    }
+  });
+  const ok = await loadedOk.TJ.utils.downloadBytes('big.zip', payload, 'application/zip');
+  assert.equal(ok.ok, true);
+  assert.equal(ok.canceled, false);
+  assert.equal(receivedChunks.length, 2);
+  assert.equal(Buffer.concat(receivedChunks).length, payload.length);
+  assert.equal(streamCalls.filter(function (c) { return c === 'save_download_finish'; }).length, 1);
+});
