@@ -42,6 +42,7 @@
     periodFrom: '',
     periodTo: '',
     filters: { search: '', side: 'all', result: 'all', setup: 'all' },
+    journalFilters: { search: '', mood: 'all', tag: 'all' },
     sort: { key: 'date', dir: 'desc' },
     page: 1,
     pageSize: 25,
@@ -54,6 +55,7 @@
     tradeBaselineScreenshots: [],
     tradeEntries: [],
     tradeExits: [],
+    tradeChecklist: [],
     csvImport: null,
     tradeDirty: false,
     tradeSaving: false,
@@ -1971,10 +1973,77 @@
      Journal
      ============================================================ */
 
+  function fillJournalFilterOptions(notes) {
+    const moodSel = $('#journalMoodFilter');
+    if (moodSel) {
+      const currentMood = state.journalFilters.mood;
+      const moods = Object.keys(NS.MOODS || {});
+      moodSel.innerHTML = '<option value="all">' + T('Все настроения') + '</option>' + moods.map(function (key) {
+        const meta = U.moodMeta(key);
+        return '<option value="' + U.escapeHtml(key) + '">' + U.escapeHtml(meta.emoji + ' ' + meta.label) + '</option>';
+      }).join('');
+      moodSel.value = (currentMood !== 'all' && moods.indexOf(currentMood) !== -1) ? currentMood : 'all';
+      state.journalFilters.mood = moodSel.value;
+    }
+
+    const tagSel = $('#journalTagFilter');
+    if (tagSel) {
+      const currentTag = state.journalFilters.tag;
+      const tagsSet = new Set();
+      (notes || []).forEach(function (note) {
+        (note.tags || []).forEach(function (tag) { if (tag) tagsSet.add(tag); });
+      });
+      const tags = Array.from(tagsSet).sort();
+      tagSel.innerHTML = '<option value="all">' + T('Все теги') + '</option>' + tags.map(function (tag) {
+        return '<option data-i18n-skip value="' + U.escapeHtml(tag) + '">' + U.escapeHtml(tag) + '</option>';
+      }).join('');
+      if (currentTag !== 'all' && tags.indexOf(currentTag) === -1) {
+        state.journalFilters.tag = 'all';
+        tagSel.value = 'all';
+      } else {
+        tagSel.value = currentTag;
+      }
+    }
+  }
+
+  function getFilteredNotes(notes) {
+    const sorted = (notes || store.state.notes).slice().sort(function (a, b) {
+      return (b.date + String(b.createdAt)).localeCompare(a.date + String(a.createdAt));
+    });
+    const q = (state.journalFilters.search || '').trim().toLowerCase();
+    const mood = state.journalFilters.mood;
+    const tag = state.journalFilters.tag;
+    return sorted.filter(function (note) {
+      if (mood !== 'all' && note.mood !== mood) return false;
+      if (tag !== 'all' && (!Array.isArray(note.tags) || note.tags.indexOf(tag) === -1)) return false;
+      if (q) {
+        const hay = ((note.title || '') + ' ' + (note.text || '') + ' ' + ((note.tags || []).join(' '))).toLowerCase();
+        if (hay.indexOf(q) === -1) return false;
+      }
+      return true;
+    });
+  }
+
+  function resetJournalFilters() {
+    state.journalFilters = { search: '', mood: 'all', tag: 'all' };
+    if ($('#journalSearch')) $('#journalSearch').value = '';
+    if ($('#journalMoodFilter')) $('#journalMoodFilter').value = 'all';
+    if ($('#journalTagFilter')) $('#journalTagFilter').value = 'all';
+    renderJournal();
+  }
+
   function renderJournal() {
     const notes = store.state.notes.slice().sort(function (a, b) {
       return (b.date + String(b.createdAt)).localeCompare(a.date + String(a.createdAt));
     });
+    fillJournalFilterOptions(notes);
+    const filtered = getFilteredNotes(notes);
+    const countLabel = $('#journalCountLabel');
+    if (countLabel) {
+      countLabel.textContent = notes.length
+        ? T('Показано {shown} из {total}').replace('{shown}', filtered.length).replace('{total}', notes.length)
+        : '';
+    }
 
     const dates = new Set(notes.map(function (note) { return note.date; }));
     const moodScore = notes.length
@@ -1997,9 +2066,17 @@
       return;
     }
 
+    if (!filtered.length) {
+      container.innerHTML = '<div class="card empty-state" style="grid-column:1/-1">' +
+        '<div class="empty-icon">🔍</div><h3>' + T('По заданным фильтрам записей нет') + '</h3>' +
+        '<p>' + T('Попробуйте изменить поисковый запрос, настроение или тег.') + '</p>' +
+        '<div class="empty-actions"><button class="btn btn-ghost" data-action="clear-journal-filters">' + T('Сбросить фильтры') + '</button></div></div>';
+      return;
+    }
+
     const dayStats = store.dayPnlMap(store.state.trades);
 
-    container.innerHTML = notes.map(function (note) {
+    container.innerHTML = filtered.map(function (note) {
       const mood = U.moodMeta(note.mood);
       const day = dayStats.get(note.date) || { pnl: 0, count: 0 };
       return '<article class="note-card" style="--mood:' + mood.color + '">' +
@@ -2197,6 +2274,75 @@
     });
   }
 
+  const STARTER_CHECKLIST_RULES = [
+    'Соответствует тренду и структуре рынка',
+    'Соотношение R:R не ниже 1 : 2',
+    'Определён уровень стоп-лосса и объём',
+    'Нет важных новостей и эмоционального тильта'
+  ];
+
+  function checklistRuleRowHtml(text, index) {
+    return '<div class="checklist-setting-row">' +
+      '<input type="text" data-checklist-rule="' + index + '" maxlength="120" value="' + U.escapeHtml(text) + '" placeholder="' + U.escapeHtml(T('Текст правила…')) + '" aria-label="' + U.escapeHtml(T('Правило чек-листа')) + ' ' + (index + 1) + '">' +
+      '<button type="button" class="icon-btn" data-remove-rule="' + index + '" title="' + U.escapeHtml(T('Удалить правило')) + '" aria-label="' + U.escapeHtml(T('Удалить правило')) + '">×</button>' +
+      '</div>';
+  }
+
+  function renderChecklistSettings(rules) {
+    const box = $('#checklistSettings');
+    if (!box) return;
+    const list = Array.isArray(rules) ? rules : (store.state.settings.checklist || []);
+    if (!list.length) {
+      box.innerHTML = '<div class="checklist-empty">' + T('Правила пока не добавлены. Нажмите «+ Добавить правило» или загрузите базовый набор.') + '</div>';
+      return;
+    }
+    box.innerHTML = list.map(checklistRuleRowHtml).join('');
+  }
+
+  function readChecklistSettings() {
+    const inputs = $$('#checklistSettings [data-checklist-rule]');
+    const out = [];
+    const seen = new Set();
+    inputs.forEach(function (input) {
+      if (out.length >= (store.MAX_CHECKLIST || 20)) return;
+      const text = String(input.value || '').trim().slice(0, 120);
+      if (!text) return;
+      const key = text.toLowerCase();
+      if (seen.has(key)) return;
+      seen.add(key);
+      out.push(text);
+    });
+    return out;
+  }
+
+  function addChecklistRuleRow(text) {
+    const existing = readChecklistSettings();
+    const max = store.MAX_CHECKLIST || 20;
+    if (existing.length >= max) {
+      toast(T('Слишком много правил: максимум {max}.').replace('{max}', max), 'warn', null, { skip: true });
+      return;
+    }
+    const list = existing.concat([text || '']);
+    renderChecklistSettings(list);
+    const inputs = $$('#checklistSettings [data-checklist-rule]');
+    const last = inputs[inputs.length - 1];
+    if (last && !text) last.focus();
+  }
+
+  function loadStarterChecklistRules() {
+    const existing = readChecklistSettings();
+    const seen = new Set(existing.map(function (r) { return r.toLowerCase(); }));
+    const merged = existing.slice();
+    STARTER_CHECKLIST_RULES.forEach(function (rule) {
+      const translated = T(rule);
+      if (seen.has(translated.toLowerCase()) || merged.length >= (store.MAX_CHECKLIST || 20)) return;
+      seen.add(translated.toLowerCase());
+      merged.push(translated);
+    });
+    renderChecklistSettings(merged);
+    toast('Базовые правила загружены в список');
+  }
+
   function renderSessionSettings() {
     const box = $('#sessionSettings');
     if (!box) return;
@@ -2327,6 +2473,7 @@
     $('#settingTimezone').value = settings.timezone || U.systemTimeZone();
     renderSessionSettings();
     renderClockSettings();
+    renderChecklistSettings();
     $('#settingsSavedAt').textContent = '';
     setVersionLabel(APP_VERSION);
 
@@ -2947,7 +3094,9 @@
       dailyLossLimit: daily,
       maxTradesPerDay: Math.round(maxTrades),
       timezone: timezone,
-      sessions: cleaned
+      sessions: cleaned,
+      feePresets: store.state.settings.feePresets || [],
+      checklist: readChecklistSettings()
     };
     state.selectedDay = todayInAccount();
     store.state.demo = false;
@@ -3770,7 +3919,7 @@
     }).join('');
   }
 
-  const TRADE_FIELD_KEYS = ['date', 'time', 'symbol', 'entry', 'stop', 'currentStop', 'target', 'qty', 'multiplier', 'fees', 'setup', 'emotion', 'discipline', 'tags', 'notes', 'side', 'entries', 'exits'];
+  const TRADE_FIELD_KEYS = ['date', 'time', 'symbol', 'entry', 'stop', 'currentStop', 'target', 'qty', 'multiplier', 'fees', 'setup', 'emotion', 'discipline', 'tags', 'notes', 'side', 'entries', 'exits', 'checklist'];
 
   function tradeDraftKey(accountId, tradeId) {
     return DRAFT_PREFIX + String(accountId || '') + '.' + (tradeId || 'new');
@@ -3816,6 +3965,78 @@
     }));
   }
 
+  function checklistForTrade(trade) {
+    const saved = trade && Array.isArray(trade.checklist) ? trade.checklist : [];
+    const rules = (store.state.settings && Array.isArray(store.state.settings.checklist))
+      ? store.state.settings.checklist
+      : [];
+    const out = [];
+    const seen = new Set();
+    saved.forEach(function (item) {
+      if (!item || !item.text || out.length >= (store.MAX_CHECKLIST || 20)) return;
+      const text = String(item.text).trim().slice(0, 120);
+      if (!text) return;
+      seen.add(text.toLowerCase());
+      out.push({ text: text, done: !!item.done });
+    });
+    rules.forEach(function (rule) {
+      if (out.length >= (store.MAX_CHECKLIST || 20)) return;
+      const text = String(rule || '').trim().slice(0, 120);
+      if (!text || seen.has(text.toLowerCase())) return;
+      seen.add(text.toLowerCase());
+      out.push({ text: text, done: false });
+    });
+    return out;
+  }
+
+  function normalizeChecklistField(raw) {
+    const list = [];
+    let source = [];
+    if (typeof raw === 'string' && raw) {
+      try { source = JSON.parse(raw); } catch (err) { source = []; }
+    } else if (Array.isArray(raw)) {
+      source = raw;
+    }
+    (Array.isArray(source) ? source : []).slice(0, store.MAX_CHECKLIST || 20).forEach(function (item) {
+      if (!item || typeof item !== 'object') return;
+      const text = String(item.text || '').trim().slice(0, 120);
+      if (text) list.push({ text: text, done: !!item.done });
+    });
+    return list;
+  }
+
+  function checklistToField(items) {
+    return JSON.stringify(normalizeChecklistField(items));
+  }
+
+  function renderTradeChecklist() {
+    const field = $('#tradeChecklistField');
+    const box = $('#tradeChecklistBox');
+    const prog = $('#tradeChecklistProgress');
+    const warn = $('#tradeChecklistWarn');
+    if (!field || !box) return;
+    const list = state.tradeChecklist || [];
+    if (!list.length) {
+      field.hidden = true;
+      box.innerHTML = '';
+      if (warn) warn.hidden = true;
+      return;
+    }
+    field.hidden = false;
+    const done = list.filter(function (item) { return !!item.done; }).length;
+    if (prog) {
+      prog.textContent = done + ' / ' + list.length;
+      prog.classList.toggle('all-done', done === list.length);
+    }
+    if (warn) warn.hidden = done === list.length;
+    box.innerHTML = list.map(function (item, index) {
+      return '<label class="checklist-item' + (item.done ? ' is-done' : '') + '">' +
+        '<input type="checkbox" data-check-idx="' + index + '"' + (item.done ? ' checked' : '') + '>' +
+        '<span data-i18n-skip>' + U.escapeHtml(item.text) + '</span>' +
+        '</label>';
+    }).join('');
+  }
+
   function tradeFieldsFromTrade(trade, presetDate) {
     const timeZone = accountTimeZone();
     return {
@@ -3836,7 +4057,8 @@
       notes: trade ? (trade.notes || '') : '',
       side: trade ? trade.side : 'long',
       entries: legsToField(trade && Array.isArray(trade.entries) ? trade.entries : [], store.MAX_ENTRIES),
-      exits: legsToField(trade ? store.tradeExits(trade) : [], store.MAX_EXITS)
+      exits: legsToField(trade ? store.tradeExits(trade) : [], store.MAX_EXITS),
+      checklist: checklistToField(checklistForTrade(trade))
     };
   }
 
@@ -3859,7 +4081,8 @@
       notes: $('#tradeNotes').value,
       side: $('#tradeSide').value,
       entries: legsToField(state.tradeEntries, store.MAX_ENTRIES),
-      exits: legsToField(state.tradeExits, store.MAX_EXITS)
+      exits: legsToField(state.tradeExits, store.MAX_EXITS),
+      checklist: checklistToField(state.tradeChecklist)
     };
   }
 
@@ -3875,11 +4098,12 @@
     if (!fields || typeof fields !== 'object') return result;
     TRADE_FIELD_KEYS.forEach(function (key) {
       if (typeof fields[key] !== 'string') return;
-      const max = key === 'notes' ? 20000 : (key === 'tags' ? 2000 : (key === 'exits' || key === 'entries' ? 20000 : 200));
+      const max = key === 'notes' ? 20000 : (key === 'tags' ? 2000 : (key === 'exits' || key === 'entries' || key === 'checklist' ? 20000 : 200));
       result[key] = fields[key].slice(0, max);
     });
     result.entries = legsToField(legsFromField(result.entries, store.MAX_ENTRIES), store.MAX_ENTRIES);
     result.exits = legsToField(legsFromField(result.exits, store.MAX_EXITS), store.MAX_EXITS);
+    result.checklist = checklistToField(normalizeChecklistField(result.checklist));
     result.multiplier = result.multiplier || '1';
     result.side = result.side === 'short' ? 'short' : 'long';
     result.discipline = String(U.clamp(Math.round(U.parseNum(result.discipline) || 0), 0, 5));
@@ -4246,8 +4470,10 @@
     $('#tradeNotes').value = fields.notes || '';
     setTradeEntries(legsFromField(fields.entries, store.MAX_ENTRIES));
     setTradeExits(legsFromField(fields.exits, store.MAX_EXITS));
+    state.tradeChecklist = normalizeChecklistField(fields.checklist);
     renderEntriesEditor();
     renderExitsEditor();
+    renderTradeChecklist();
     setSide(fields.side);
     setDiscipline(Number(fields.discipline) || 0);
     renderFeePresets();
@@ -5131,6 +5357,9 @@
         discipline: Number($('#tradeDiscipline').value) || 0,
         tags: splitTags($('#tradeTags').value),
         notes: $('#tradeNotes').value.trim(),
+        checklist: state.tradeChecklist.map(function (item) {
+          return { text: item.text, done: !!item.done };
+        }),
         screenshot: screenshot,
         screenshots: screenshots
       }, { timeZone: accountTimeZone() });
@@ -5644,6 +5873,27 @@
     $('#filterResult').addEventListener('change', function (event) { state.filters.result = event.target.value; state.page = 1; renderTrades(); });
     $('#filterSetup').addEventListener('change', function (event) { state.filters.setup = event.target.value; state.page = 1; renderTrades(); });
     $('#clearFilters').addEventListener('click', resetFilters);
+    if ($('#journalSearch')) {
+      $('#journalSearch').addEventListener('input', U.debounce(function (event) {
+        state.journalFilters.search = event.target.value.trim().toLowerCase();
+        renderJournal();
+      }, 160));
+    }
+    if ($('#journalMoodFilter')) {
+      $('#journalMoodFilter').addEventListener('change', function (event) {
+        state.journalFilters.mood = event.target.value;
+        renderJournal();
+      });
+    }
+    if ($('#journalTagFilter')) {
+      $('#journalTagFilter').addEventListener('change', function (event) {
+        state.journalFilters.tag = event.target.value;
+        renderJournal();
+      });
+    }
+    if ($('#clearJournalFilters')) {
+      $('#clearJournalFilters').addEventListener('click', resetJournalFilters);
+    }
     const tradesHead = $('#tradesTable').querySelector('thead');
     function toggleTradeSort(th) {
       if (!th) return;
@@ -5717,6 +5967,28 @@
     $('#settingsForm').addEventListener('submit', saveSettings);
     $('#profileForm').addEventListener('submit', saveProfile);
     $('#addSessionBtn').addEventListener('click', addSessionRow);
+    if ($('#addChecklistRuleBtn')) $('#addChecklistRuleBtn').addEventListener('click', function () { addChecklistRuleRow(''); });
+    if ($('#loadStarterChecklistBtn')) $('#loadStarterChecklistBtn').addEventListener('click', loadStarterChecklistRules);
+    if ($('#checklistSettings')) {
+      $('#checklistSettings').addEventListener('click', function (event) {
+        const button = event.target.closest('[data-remove-rule]');
+        if (!button) return;
+        const row = button.closest('.checklist-setting-row');
+        if (row) row.remove();
+        if (!$$('#checklistSettings .checklist-setting-row').length) renderChecklistSettings([]);
+      });
+    }
+    if ($('#tradeChecklistBox')) {
+      $('#tradeChecklistBox').addEventListener('change', function (event) {
+        const input = event.target.closest('[data-check-idx]');
+        if (!input) return;
+        const idx = Number(input.dataset.checkIdx);
+        if (!state.tradeChecklist[idx]) return;
+        state.tradeChecklist[idx].done = !!input.checked;
+        renderTradeChecklist();
+        syncTradeDirty();
+      });
+    }
     $('#settingTimezone').addEventListener('change', renderClockSettings);
     $('#sessionSettings').addEventListener('input', renderClockSettings);
     $('#sessionSettings').addEventListener('click', function (event) {
@@ -5997,6 +6269,7 @@
       const action = actionEl.dataset.action;
       if (action === 'new-trade') { openTradeModal(null, actionEl.dataset.date); return; }
       if (action === 'new-note') { openNoteModal(null, actionEl.dataset.date); return; }
+      if (action === 'clear-journal-filters') { resetJournalFilters(); return; }
     }
 
     const shotEl = event.target.closest('[data-open-shot]');
@@ -6146,6 +6419,12 @@
     saveTrade: saveTrade,
     renderCalendar: renderCalendar,
     renderDayPanel: renderDayPanel,
+    renderJournal: renderJournal,
+    getFilteredNotes: getFilteredNotes,
+    resetJournalFilters: resetJournalFilters,
+    renderChecklistSettings: renderChecklistSettings,
+    readChecklistSettings: readChecklistSettings,
+    renderTradeChecklist: renderTradeChecklist,
     changeMonth: changeMonth,
     redrawDashboardCharts: redrawDashboardCharts,
     redrawAnalyticsCharts: redrawAnalyticsCharts,

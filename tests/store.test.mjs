@@ -809,3 +809,20 @@ test('drawdownSeries computes depth, duration and groupRows supports multi-tag a
   assert.equal(trend.count, 2);
   assert.equal(trend.pnl, 80);
 });
+
+test('normalizes settings pre-trade checklist and trade checklist items (FEAT-05)', function () {
+  const s = store;
+  s.state.settings = Object.assign({}, s.state.settings, {
+    checklist: ['  Тренд подтверждён ', '', 'тренд подтверждён', 'Стоп выставлен']
+  });
+  assert.deepEqual(Array.from(s.state.settings.checklist), ['Тренд подтверждён', 'Стоп выставлен']);
+
+  const t = s.normalizeTrade({
+    id: 'chk-1', date: '2026-02-01', symbol: 'BTCUSD', side: 'long', entry: 100, qty: 1,
+    checklist: [{ text: 'Тренд подтверждён', done: true }, { text: '   ', done: true }, { text: 'Стоп выставлен', done: false }]
+  });
+  assert.deepEqual(JSON.parse(JSON.stringify(t.checklist)), [
+    { text: 'Тренд подтверждён', done: true },
+    { text: 'Стоп выставлен', done: false }
+  ]);
+});

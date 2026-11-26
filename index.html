@@ -459,6 +459,18 @@
           </button>
         </div>
 
+        <div class="trades-toolbar journal-toolbar card">
+          <label class="search">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.2-3.2"/></svg>
+            <input type="search" id="journalSearch" placeholder="Поиск: заголовок, текст, тег…" autocomplete="off">
+          </label>
+          <label class="select-wrap"><select id="journalMoodFilter" aria-label="Фильтр по настроению"><option value="all">Все настроения</option></select></label>
+          <label class="select-wrap"><select id="journalTagFilter" aria-label="Фильтр по тегу"><option value="all">Все теги</option></select></label>
+          <button class="btn btn-ghost btn-sm" id="clearJournalFilters">Сбросить</button>
+          <div class="toolbar-spacer"></div>
+          <span class="muted" id="journalCountLabel"></span>
+        </div>
+
         <div class="journal-stats" id="journalStats"></div>
         <div class="journal-list" id="journalList"></div>
       </section>
@@ -691,6 +703,17 @@
                 <div class="session-settings" id="sessionSettings"></div>
                 <button type="button" class="btn btn-ghost btn-sm session-add" id="addSessionBtn">Добавить сессию</button>
                 <small class="field-hint">Время начала сессий в выбранном часовом поясе. Сессия длится до начала следующей, последняя — до первой. Удаление сессии не меняет сделки — они распределятся по оставшимся сессиям.</small>
+              </div>
+              <div class="field span-2">
+                <div class="exits-head">
+                  <span>Чек-лист перед сделкой <em>проверяется в форме сделки</em></span>
+                  <div class="exits-actions">
+                    <button type="button" class="btn btn-ghost btn-sm" id="loadStarterChecklistBtn">Базовые правила</button>
+                    <button type="button" class="btn btn-ghost btn-sm" id="addChecklistRuleBtn">+ Добавить правило</button>
+                  </div>
+                </div>
+                <div class="checklist-settings" id="checklistSettings"></div>
+                <small class="field-hint">Укажите торговые правила, которые стоит отмечать перед открытием сделки.</small>
               </div>
               <div class="form-actions span-2">
                 <button type="submit" class="btn btn-primary">Сохранить настройки</button>
@@ -952,6 +975,14 @@
             </div>
             <div class="exits-editor" id="exitsEditor"></div>
             <p class="field-hint" id="exitsHint">Выходов нет — позиция открыта. Добавьте один или несколько частичных выходов; комиссия распределится по объёму выходов.</p>
+          </div>
+          <div class="field span-2 checklist-field" id="tradeChecklistField" hidden>
+            <div class="exits-head">
+              <span>Чек-лист перед сделкой</span>
+              <span class="checklist-progress" id="tradeChecklistProgress">0 / 0</span>
+            </div>
+            <div class="checklist-box" id="tradeChecklistBox"></div>
+            <p class="checklist-warn" id="tradeChecklistWarn" hidden>Не все правила отмечены — проверьте условия входа перед сохранением.</p>
           </div>
           <div class="field span-2">
             <span>Дисциплина</span>

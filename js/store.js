@@ -13,6 +13,7 @@
   const MAX_EXITS = 50;
   const MAX_ENTRIES = 50;
   const MAX_FEE_PRESETS = 8;
+  const MAX_CHECKLIST = 20;
   const MAX_SCREENSHOTS = 4;
   const MULTIPLIER_MIN = 0.000000001;
   const MULTIPLIER_MAX = 1000000000;
@@ -37,7 +38,8 @@
     maxTradesPerDay: 3,
     timezone: U.systemTimeZone(),
     sessions: U.normalizeSessions(),
-    feePresets: []
+    feePresets: [],
+    checklist: []
   };
 
   let root = blankRoot();
@@ -411,9 +413,42 @@
       discipline: discipline,
       tags: parseTags(raw.tags),
       notes: String(raw.notes || ''),
+      checklist: normalizeTradeChecklist(raw.checklist),
       screenshot: shot,
       screenshots: screenshots
     };
+  }
+
+  function normalizeTradeChecklist(raw) {
+    const out = [];
+    (Array.isArray(raw) ? raw : []).forEach(function (item) {
+      if (out.length >= MAX_CHECKLIST) return;
+      if (typeof item === 'string') {
+        const text = item.trim().slice(0, 120);
+        if (text) out.push({ text: text, done: false });
+        return;
+      }
+      if (item && typeof item === 'object') {
+        const text = String(item.text || '').trim().slice(0, 120);
+        if (text) out.push({ text: text, done: !!item.done });
+      }
+    });
+    return out;
+  }
+
+  function normalizeChecklistRules(raw) {
+    const out = [];
+    const seen = new Set();
+    (Array.isArray(raw) ? raw : []).forEach(function (item) {
+      if (out.length >= MAX_CHECKLIST) return;
+      const text = String(item || '').trim().slice(0, 120);
+      if (!text) return;
+      const key = text.toLowerCase();
+      if (seen.has(key)) return;
+      seen.add(key);
+      out.push(text);
+    });
+    return out;
   }
 
   function isAllowedScreenshotRef(value) {
@@ -527,7 +562,8 @@
       maxTradesPerDay: maxTrades !== null && maxTrades >= 0 ? U.clamp(Math.round(maxTrades), 0, 100) : 3,
       timezone: U.validTimeZone(raw.timezone) ? raw.timezone : U.systemTimeZone(),
       sessions: U.normalizeSessions(raw.sessions),
-      feePresets: normalizeFeePresets(raw.feePresets)
+      feePresets: normalizeFeePresets(raw.feePresets),
+      checklist: normalizeChecklistRules(raw.checklist)
     };
   }
 
@@ -1796,6 +1832,7 @@
     MAX_EXITS: MAX_EXITS,
     MAX_ENTRIES: MAX_ENTRIES,
     MAX_FEE_PRESETS: MAX_FEE_PRESETS,
+    MAX_CHECKLIST: MAX_CHECKLIST,
     MAX_SCREENSHOTS: MAX_SCREENSHOTS,
     MULTIPLIER_MIN: MULTIPLIER_MIN,
     MULTIPLIER_MAX: MULTIPLIER_MAX,

@@ -800,3 +800,48 @@ test('renderAnalytics populates drawdown chip, monthly table, and tag table (FEA
   assert.match(els['#tagTableBody'].innerHTML, /momentum/);
   assert.match(els['#tagTableBody'].innerHTML, /plan/);
 });
+
+test('journal search/mood/tag filters and trade checklist rendering work together (FEAT-05)', function () {
+  const els = {
+    '#journalMoodFilter': { innerHTML: '', value: 'all' },
+    '#journalTagFilter': { innerHTML: '', value: 'all' },
+    '#journalCountLabel': { textContent: '' },
+    '#journalStats': { innerHTML: '' },
+    '#journalList': { innerHTML: '' },
+    '#tradeChecklistField': { hidden: true },
+    '#tradeChecklistBox': { innerHTML: '' },
+    '#tradeChecklistProgress': {
+      textContent: '',
+      classList: { toggle: function () {} }
+    },
+    '#tradeChecklistWarn': { hidden: true }
+  };
+  const { TJ } = loadApp(els);
+  TJ.store.state.notes = [
+    { id: 'n1', date: '2026-02-01', mood: 'great', title: 'Утренняя сессия', text: 'Отличный вход по тренду', tags: ['план', 'тренд'], createdAt: '1' },
+    { id: 'n2', date: '2026-02-02', mood: 'tilt', title: 'Вечер', text: 'Переторговал на новостях', tags: ['ошибка'], createdAt: '2' }
+  ];
+
+  TJ.app.renderJournal();
+  assert.match(els['#journalCountLabel'].textContent, /2 из 2/);
+
+  TJ.app.state.journalFilters = { search: 'тренду', mood: 'all', tag: 'all' };
+  assert.deepEqual(TJ.app.getFilteredNotes().map(function (n) { return n.id; }), ['n1']);
+
+  TJ.app.state.journalFilters = { search: '', mood: 'tilt', tag: 'all' };
+  assert.deepEqual(TJ.app.getFilteredNotes().map(function (n) { return n.id; }), ['n2']);
+
+  TJ.app.state.journalFilters = { search: '', mood: 'all', tag: 'ошибка' };
+  TJ.app.renderJournal();
+  assert.match(els['#journalCountLabel'].textContent, /1 из 2/);
+  assert.match(els['#journalList'].innerHTML, /Вечер/);
+
+  TJ.app.state.tradeChecklist = [
+    { text: 'Тренд', done: true },
+    { text: 'R:R > 2', done: false }
+  ];
+  TJ.app.renderTradeChecklist();
+  assert.equal(els['#tradeChecklistField'].hidden, false);
+  assert.equal(els['#tradeChecklistProgress'].textContent, '1 / 2');
+  assert.equal(els['#tradeChecklistWarn'].hidden, false);
+});
