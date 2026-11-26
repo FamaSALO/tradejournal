@@ -263,23 +263,22 @@
     const text = String(value === null || value === undefined ? '' : value).trim();
     if (!text) return { legs: [], errors: [] };
     const isEntry = kind === 'entry';
-    const prefix = isEntry ? 'вход' : 'выход';
     const legs = [];
     const errors = [];
     text.split(/\s*[|;]\s*/).filter(Boolean).forEach(function (part, index) {
       const match = part.match(/^([^@]+)@([^@]+)(?:@(.+))?$/);
       if (!match) {
-        errors.push(tr(prefix + ' {index}: ожидается формат «количество@цена»').replace('{index}', index + 1));
+        errors.push(tr(isEntry ? 'вход {index}: ожидается формат «количество@цена»' : 'выход {index}: ожидается формат «количество@цена»').replace('{index}', index + 1));
         return;
       }
       const qty = number(match[1]);
       const price = number(match[2]);
       if (qty === null || qty <= 0) {
-        errors.push(tr(prefix + ' {index}: некорректное количество').replace('{index}', index + 1));
+        errors.push(tr(isEntry ? 'вход {index}: некорректное количество' : 'выход {index}: некорректное количество').replace('{index}', index + 1));
         return;
       }
       if (price === null) {
-        errors.push(tr(prefix + ' {index}: некорректная цена').replace('{index}', index + 1));
+        errors.push(tr(isEntry ? 'вход {index}: некорректная цена' : 'выход {index}: некорректная цена').replace('{index}', index + 1));
         return;
       }
       const legDate = date(match[3]) || fallbackDate;
