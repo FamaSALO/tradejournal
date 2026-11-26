@@ -1341,6 +1341,10 @@ svg { display: block; }
   position: relative;
   z-index: 1;
   display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: min(360px, 90vw);
+  min-height: 220px;
   max-width: min(1400px, 96vw);
   max-height: calc(100vh - 2 * clamp(10px, 3vw, 30px));
   margin: 0;
@@ -1356,6 +1360,7 @@ svg { display: block; }
   position: absolute;
   top: 10px;
   right: 10px;
+  z-index: 3;
   background: rgba(8, 13, 19, 0.86);
   border: 1px solid rgba(148, 178, 212, 0.25);
   backdrop-filter: blur(4px);
@@ -1461,6 +1466,7 @@ svg { display: block; }
 
 /* ============================ Toasts ============================ */
 .toasts { position: fixed; right: 20px; bottom: 20px; z-index: 500; display: flex; flex-direction: column; gap: 8px; width: min(350px, calc(100vw - 40px)); pointer-events: none; }
+body:has(.modal:not([hidden])) .toasts { top: 14px; right: auto; bottom: auto; left: 50%; transform: translateX(-50%); align-items: center; }
 .toast {
   display: flex;
   align-items: flex-start;
@@ -1474,7 +1480,7 @@ svg { display: block; }
   line-height: 1.5;
   color: var(--text);
   animation: toastIn 0.22s ease;
-  pointer-events: auto;
+  pointer-events: none;
 }
 .toast.success { border-color: rgba(49, 227, 170, 0.3); }
 .toast.error { border-color: rgba(255, 107, 129, 0.35); }
@@ -1483,7 +1489,7 @@ svg { display: block; }
 .toast.error .toast-dot { background: var(--red); box-shadow: 0 0 10px rgba(255, 107, 129, 0.6); }
 .toast.warn .toast-dot { background: var(--amber); box-shadow: 0 0 10px rgba(245, 181, 68, 0.6); }
 .toast .toast-message { flex: 1; }
-.toast .toast-action { flex-shrink: 0; margin-left: 4px; padding: 0; border: 0; background: none; color: var(--accent); font-size: 11px; font-weight: 650; white-space: nowrap; }
+.toast .toast-action { flex-shrink: 0; margin-left: 4px; padding: 0; border: 0; background: none; color: var(--accent); font-size: 11px; font-weight: 650; white-space: nowrap; pointer-events: auto; }
 .toast .toast-action:hover { text-decoration: underline; }
 .toast.error .toast-action { color: var(--red); }
 .toast.out { animation: toastOut 0.2s ease forwards; }
@@ -1969,7 +1975,7 @@ svg { display: block; }
   .shot-actions { width: 100%; justify-content: flex-start; margin-left: 0; }
   .shot-hint { font-size: 9px; }
   .shot-lightbox { padding: 6px; }
-  .shot-lightbox-panel { max-width: 100%; border-radius: 8px; }
+  .shot-lightbox-panel { min-width: min(280px, 96vw); min-height: 180px; max-width: 100%; border-radius: 8px; }
   .shot-lightbox-panel img { max-width: 100%; max-height: calc(100vh - 12px); }
   .calc-strip { grid-template-columns: 1fr 1fr; gap: 7px; }
   .cs-item { display: flex; justify-content: space-between; align-items: baseline; }

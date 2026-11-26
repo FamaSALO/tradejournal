@@ -4010,10 +4010,21 @@
     return JSON.stringify(normalizeChecklistField(items));
   }
 
+  function syncTradeChecklistProgress() {
+    const prog = $('#tradeChecklistProgress');
+    const warn = $('#tradeChecklistWarn');
+    const list = state.tradeChecklist || [];
+    const done = list.filter(function (item) { return !!item.done; }).length;
+    if (prog) {
+      prog.textContent = done + ' / ' + list.length;
+      prog.classList.toggle('all-done', list.length > 0 && done === list.length);
+    }
+    if (warn) warn.hidden = !list.length || done === list.length;
+  }
+
   function renderTradeChecklist() {
     const field = $('#tradeChecklistField');
     const box = $('#tradeChecklistBox');
-    const prog = $('#tradeChecklistProgress');
     const warn = $('#tradeChecklistWarn');
     if (!field || !box) return;
     const list = state.tradeChecklist || [];
@@ -4024,12 +4035,7 @@
       return;
     }
     field.hidden = false;
-    const done = list.filter(function (item) { return !!item.done; }).length;
-    if (prog) {
-      prog.textContent = done + ' / ' + list.length;
-      prog.classList.toggle('all-done', done === list.length);
-    }
-    if (warn) warn.hidden = done === list.length;
+    syncTradeChecklistProgress();
     box.innerHTML = list.map(function (item, index) {
       return '<label class="checklist-item' + (item.done ? ' is-done' : '') + '">' +
         '<input type="checkbox" data-check-idx="' + index + '"' + (item.done ? ' checked' : '') + '>' +
@@ -5081,6 +5087,11 @@
 
   async function compressScreenshots(fileList) {
     const files = Array.prototype.slice.call(fileList || []);
+    if (!files.length) return;
+    if (state.screenshotBusy) {
+      toast('Дождитесь окончания сохранения скриншота.', 'warn');
+      return;
+    }
     const maxShots = store.MAX_SCREENSHOTS || 4;
     for (const file of files) {
       if (state.screenshots.length >= maxShots) {
@@ -5986,7 +5997,9 @@
         const idx = Number(input.dataset.checkIdx);
         if (!state.tradeChecklist[idx]) return;
         state.tradeChecklist[idx].done = !!input.checked;
-        renderTradeChecklist();
+        const row = input.closest('.checklist-item');
+        if (row) row.classList.toggle('is-done', !!input.checked);
+        syncTradeChecklistProgress();
         syncTradeDirty();
       });
     }
@@ -6180,8 +6193,11 @@
       $('#tradeShot').click();
     });
     $('#tradeShot').addEventListener('change', function (event) {
-      compressScreenshots(event.target.files);
-      event.target.value = '';
+      const input = event.target;
+      const files = Array.prototype.slice.call(input.files || []);
+      Promise.resolve(compressScreenshots(files)).finally(function () {
+        input.value = '';
+      });
     });
     $('#pasteShot').addEventListener('click', pasteScreenshotFromClipboard);
     $('#removeShot').addEventListener('click', function () {
