@@ -38,6 +38,9 @@
   const state = {
     view: 'dashboard',
     period: 'all',
+    dateMode: 'entry',
+    periodFrom: '',
+    periodTo: '',
     filters: { search: '', side: 'all', result: 'all', setup: 'all' },
     sort: { key: 'date', dir: 'desc' },
     page: 1,
@@ -573,14 +576,68 @@
       case '90': return { from: U.addDaysISO(today, -89), to: today };
       case 'month': return { from: today.slice(0, 8) + '01', to: today };
       case 'year': return { from: today.slice(0, 4) + '-01-01', to: today };
+      case 'custom': {
+        let from = U.validDateISO(state.periodFrom);
+        let to = U.validDateISO(state.periodTo);
+        if (from && to && from > to) { const tmp = from; from = to; to = tmp; }
+        return { from: from || null, to: to || null };
+      }
       default: return { from: null, to: null };
     }
   }
 
+  function dateInRange(dateStr, range) {
+    if (!range || (!range.from && !range.to)) return true;
+    return (!range.from || dateStr >= range.from) && (!range.to || dateStr <= range.to);
+  }
+
+  function projectTradeByExitRange(trade, range) {
+    const exits = store.tradeExits(trade);
+    if (!exits.length) return null;
+    if (!range || (!range.from && !range.to)) {
+      const lastDate = exits.reduce(function (maxD, ex) {
+        const d = ex.date || trade.date || '';
+        return d > maxD ? d : maxD;
+      }, trade.date || '');
+      return lastDate && lastDate !== trade.date
+        ? Object.assign({}, trade, { date: lastDate })
+        : trade;
+    }
+    const matchingExits = exits.filter(function (ex) {
+      return dateInRange(ex.date || trade.date || '', range);
+    });
+    if (!matchingExits.length) return null;
+    const latestExitDate = matchingExits.reduce(function (maxD, ex) {
+      const d = ex.date || trade.date || '';
+      return d > maxD ? d : maxD;
+    }, '');
+    const qtySum = matchingExits.reduce(function (s, ex) { return s + (U.parseNum(ex.qty) || 0); }, 0);
+    if (matchingExits.length === exits.length) {
+      return latestExitDate && latestExitDate !== trade.date
+        ? Object.assign({}, trade, { date: latestExitDate })
+        : trade;
+    }
+    return Object.assign({}, trade, {
+      date: latestExitDate || trade.date,
+      exit: null,
+      exits: matchingExits,
+      fees: matchingExits.reduce(function (s, ex) { return s + Math.max(0, U.parseNum(ex.fees) || 0); }, 0),
+      qty: qtySum > 0 ? qtySum : trade.qty
+    });
+  }
+
   function filterByRange(trades, range) {
+    if (state.dateMode === 'exit') {
+      const projected = [];
+      (trades || []).forEach(function (trade) {
+        const item = projectTradeByExitRange(trade, range);
+        if (item) projected.push(item);
+      });
+      return store.sortTrades(projected, 'asc');
+    }
     if (!range || (!range.from && !range.to)) return trades;
     return trades.filter(function (trade) {
-      return (!range.from || trade.date >= range.from) && (!range.to || trade.date <= range.to);
+      return dateInRange(trade.date, range);
     });
   }
 
@@ -591,16 +648,38 @@
     const filtered = filterByRange(closedAll, range);
     let beforePnl = 0;
     if (range.from) {
-      closedAll.forEach(function (trade) {
-        if (trade.date < range.from) {
-          const pnl = store.tradePnl(trade);
-          if (pnl !== null) beforePnl += pnl;
-        }
-      });
+      if (state.dateMode === 'exit') {
+        closedAll.forEach(function (trade) {
+          store.tradePnlEvents(trade).forEach(function (ev) {
+            if ((ev.date || trade.date || '') < range.from) beforePnl += ev.pnl;
+          });
+        });
+      } else {
+        closedAll.forEach(function (trade) {
+          if (trade.date < range.from) {
+            const pnl = store.tradePnl(trade);
+            if (pnl !== null) beforePnl += pnl;
+          }
+        });
+      }
     }
     const base = (U.parseNum(settings.startBalance) || 0) + beforePnl;
     const m = store.metrics(filtered, base);
     return { range: range, closedAll: closedAll, filtered: filtered, base: base, m: m };
+  }
+
+  function renderPeriodControls() {
+    const sel = $('#periodSelect');
+    if (sel && sel.value !== state.period) sel.value = state.period;
+    const customBox = $('#customPeriodRange');
+    if (customBox) customBox.hidden = state.period !== 'custom';
+    const fromEl = $('#periodFrom');
+    const toEl = $('#periodTo');
+    if (fromEl && fromEl.value !== (state.periodFrom || '')) fromEl.value = state.periodFrom || '';
+    if (toEl && toEl.value !== (state.periodTo || '')) toEl.value = state.periodTo || '';
+    $$('#dateModeSegmented [data-date-mode]').forEach(function (btn) {
+      btn.classList.toggle('active', btn.dataset.dateMode === state.dateMode);
+    });
   }
 
   /* ============================================================
@@ -688,6 +767,23 @@
     const streak = m.currentStreak
       ? m.currentStreak.n + (m.currentStreak.type === 'win' ? 'W' : 'L')
       : '—';
+    const openRisk = store.openPortfolioRisk(store.state.trades, store.balanceAll());
+    const openRiskTone = openRisk.unprotectedCount > 0
+      ? 'warn'
+      : (openRisk.riskPct > (store.state.settings.dailyLossLimit || 3) ? 'neg' : (openRisk.totalRisk > 0 ? 'neutral' : ''));
+    const openSub = openRisk.openCount
+      ? T('{pct} счёта · {count} открытых')
+        .replace('{pct}', U.percent(openRisk.riskPct, 1))
+        .replace('{count}', openRisk.openCount) +
+        (openRisk.unprotectedCount ? ' · ' + T('{count} без стопа').replace('{count}', openRisk.unprotectedCount) : '')
+      : T('Нет открытых позиций');
+    const beTone = m.beWinRate !== null
+      ? (m.winRate >= m.beWinRate ? 'pos' : 'neg')
+      : '';
+    const rSub = hasR
+      ? T('Итого {total} · {count} с R').replace('{total}', U.rfmt(m.totalR, { sign: true })).replace('{count}', m.rCount) +
+        (m.returnOnClosedRisk !== null ? ' · ' + (m.returnOnClosedRisk > 0 ? '+' : '') + U.percent(m.returnOnClosedRisk, 1) + ' RoR' : '')
+      : T('Добавьте стоп при входе к сделкам');
 
     const cards = [
       {
@@ -705,6 +801,14 @@
         sub: m.count ? m.wins + 'W · ' + m.losses + 'L · ' + m.be + 'BE' : T('Нужны закрытые сделки')
       },
       {
+        label: 'Безубыточный WR',
+        value: m.beWinRate !== null ? U.percent(m.beWinRate, 0) : '—',
+        tone: beTone,
+        sub: m.payoffRatio !== null
+          ? T('под средний R:R 1 : {rr}').replace('{rr}', decimal(m.payoffRatio, 2))
+          : T('Нужны прибыли и убытки')
+      },
+      {
         label: 'Профит-фактор',
         value: m.count ? pf : '—',
         tone: m.count ? (m.profitFactor > 1 ? 'pos' : (m.profitFactor < 1 ? 'neg' : '')) : '',
@@ -714,9 +818,13 @@
         label: 'Средний R',
         value: hasR ? U.rfmt(m.avgR, { sign: true }) : '—',
         tone: hasR ? toneClass(m.avgR) : '',
-        sub: hasR
-          ? T('Итого {total} · {count} с R').replace('{total}', U.rfmt(m.totalR, { sign: true })).replace('{count}', m.rCount)
-          : T('Добавьте стоп при входе к сделкам')
+        sub: rSub
+      },
+      {
+        label: 'Открытый риск',
+        value: openRisk.openCount ? U.money(openRisk.totalRisk) : '—',
+        tone: openRiskTone,
+        sub: openSub
       },
       {
         label: 'Макс. просадка, $',
@@ -1749,8 +1857,15 @@
     const withR = m.rows.filter(function (row) { return row.r !== null; }).length;
     const discipline = m.avgDiscipline > 0 ? decimal(m.avgDiscipline, 1) + ' / 5' : '—';
     const totalR = withR ? U.rfmt(m.totalR, { sign: true }) : '—';
+    const beWr = m.beWinRate !== null ? U.percent(m.beWinRate, 0) : '—';
+    const beTone = m.beWinRate !== null ? (m.winRate >= m.beWinRate ? 'pos' : 'neg') : '';
+    const ror = m.returnOnClosedRisk !== null
+      ? (m.returnOnClosedRisk > 0 ? '+' : '') + U.percent(m.returnOnClosedRisk, 1)
+      : '—';
     $('#qualityBlock').innerHTML =
       '<div class="quality-row"><span>Всего R</span><b class="' + (withR ? toneClass(m.totalR) : '') + '">' + U.escapeHtml(totalR) + '</b></div>' +
+      '<div class="quality-row"><span>Безубыточный винрейт (мин.)</span><b class="' + beTone + '">' + U.escapeHtml(beWr) + '</b></div>' +
+      '<div class="quality-row"><span>Доходность на закрытый риск</span><b class="' + (m.returnOnClosedRisk !== null ? toneClass(m.returnOnClosedRisk) : '') + '">' + U.escapeHtml(ror) + '</b></div>' +
       '<div class="quality-row"><span>Сделок с рассчитанным R</span><b>' + U.escapeHtml(T('{withR} из {total}').replace('{withR}', withR).replace('{total}', m.count)) + '</b></div>' +
       '<div class="quality-row"><span>Средняя дисциплина</span><b>' + discipline + '</b></div>' +
       '<div class="quality-row"><span>Комиссии и издержки</span><b class="neg">' + U.escapeHtml(U.money(-m.fees)) + '</b></div>' +
@@ -5393,6 +5508,31 @@
     $('#sidebarAccountSelect').addEventListener('change', function (event) { switchAccount(event.target.value); });
     $('#periodSelect').addEventListener('change', function (event) {
       state.period = event.target.value;
+      if (state.period === 'custom' && !state.periodFrom && !state.periodTo) {
+        const today = todayInAccount();
+        state.periodFrom = today.slice(0, 8) + '01';
+        state.periodTo = today;
+      }
+      renderPeriodControls();
+      renderCurrentView();
+    });
+    $('#periodFrom').addEventListener('change', function (event) {
+      state.periodFrom = event.target.value || '';
+      state.period = 'custom';
+      renderPeriodControls();
+      renderCurrentView();
+    });
+    $('#periodTo').addEventListener('change', function (event) {
+      state.periodTo = event.target.value || '';
+      state.period = 'custom';
+      renderPeriodControls();
+      renderCurrentView();
+    });
+    $('#dateModeSegmented').addEventListener('click', function (event) {
+      const btn = event.target.closest('[data-date-mode]');
+      if (!btn) return;
+      state.dateMode = btn.dataset.dateMode === 'exit' ? 'exit' : 'entry';
+      renderPeriodControls();
       renderCurrentView();
     });
 
@@ -5937,6 +6077,9 @@
     changeMonth: changeMonth,
     redrawDashboardCharts: redrawDashboardCharts,
     fillTimezoneOptions: fillTimezoneOptions,
+    buildPeriodMetrics: buildPeriodMetrics,
+    renderKpis: renderKpis,
+    renderQuality: renderQuality,
     tradeRowHtml: tradeRowHtml,
     openTradeScreenshot: openTradeScreenshot,
     stepLightbox: stepLightbox

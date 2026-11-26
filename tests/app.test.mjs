@@ -717,3 +717,48 @@ test('moveStopToBreakeven copies entry price and collectEntryRows validates scal
   assert.equal(ok.entries.length, 2);
   assert.equal(ok.entries[1].date, '2026-02-02');
 });
+
+test('dateMode exit and custom range split swing exits accurately and render 8 KPIs (FEAT-02, FEAT-04)', function () {
+  const kpiGrid = { innerHTML: '' };
+  const qualityBlock = { innerHTML: '' };
+  const { TJ } = loadApp({ '#kpiGrid': kpiGrid, '#qualityBlock': qualityBlock });
+  const s = TJ.store;
+  // Swing trade entered Jan 25, partial exit Jan 28 (+10), final exit Feb 05 (+30)
+  s.state.trades = [
+    s.normalizeTrade({
+      id: 'sw1', date: '2026-01-25', time: '10:00', symbol: 'BTCUSD', side: 'long',
+      entry: 100, stop: 90, qty: 2,
+      exits: [
+        { id: 'x1', qty: 1, price: 110, date: '2026-01-28' },
+        { id: 'x2', qty: 1, price: 130, date: '2026-02-05' }
+      ]
+    }),
+    s.normalizeTrade({
+      id: 'op1', date: '2026-02-06', time: '11:00', symbol: 'ETHUSD', side: 'long',
+      entry: 200, stop: 190, qty: 5, exits: []
+    })
+  ];
+
+  TJ.app.state.period = 'custom';
+  TJ.app.state.periodFrom = '2026-02-01';
+  TJ.app.state.periodTo = '2026-02-28';
+
+  TJ.app.state.dateMode = 'entry';
+  const byEntry = TJ.app.buildPeriodMetrics();
+  assert.equal(byEntry.m.count, 0);
+
+  TJ.app.state.dateMode = 'exit';
+  const byExit = TJ.app.buildPeriodMetrics();
+  assert.equal(byExit.m.count, 1);
+  assert.equal(byExit.m.net, 30);
+  // Base balance includes Jan 28 partial exit (+10)
+  assert.equal(byExit.base, s.state.settings.startBalance + 10);
+
+  TJ.app.renderKpis(byExit.m, byExit.base);
+  assert.match(kpiGrid.innerHTML, /Безубыточный WR/);
+  assert.match(kpiGrid.innerHTML, /Открытый риск/);
+  assert.match(kpiGrid.innerHTML, /50/);
+
+  TJ.app.renderQuality(byExit.m);
+  assert.match(qualityBlock.innerHTML, /Доходность на закрытый риск/);
+});

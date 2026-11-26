@@ -110,15 +110,27 @@
         <p id="pageSubtitle">Статистика счёта и последние результаты</p>
       </div>
       <div class="topbar-actions">
-        <label class="select-wrap period-wrap" id="periodWrap">
-          <select id="periodSelect" aria-label="Период статистики">
-            <option value="all">Всё время</option>
-            <option value="30">30 дней</option>
-            <option value="90">90 дней</option>
-            <option value="month">Этот месяц</option>
-            <option value="year">Этот год</option>
-          </select>
-        </label>
+        <div class="period-controls" id="periodWrap">
+          <div class="segmented period-mode" id="dateModeSegmented" role="group" aria-label="Учёт сделок по дате">
+            <button type="button" data-date-mode="entry" class="active" title="Фильтровать сделки по дате входа">По входу</button>
+            <button type="button" data-date-mode="exit" title="Фильтровать закрытый результат по дате выхода">По выходу</button>
+          </div>
+          <label class="select-wrap period-wrap">
+            <select id="periodSelect" aria-label="Период статистики">
+              <option value="all">Всё время</option>
+              <option value="30">30 дней</option>
+              <option value="90">90 дней</option>
+              <option value="month">Этот месяц</option>
+              <option value="year">Этот год</option>
+              <option value="custom">Свой период</option>
+            </select>
+          </label>
+          <div class="period-custom" id="customPeriodRange" hidden>
+            <input type="date" id="periodFrom" aria-label="Дата начала периода">
+            <span aria-hidden="true">—</span>
+            <input type="date" id="periodTo" aria-label="Дата окончания периода">
+          </div>
+        </div>
         <button class="avatar" id="avatarBtn" title="Профиль и настройки">
           <img id="avatarImage" alt="" hidden>
           <span id="avatarInitials">TJ</span>

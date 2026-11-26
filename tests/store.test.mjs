@@ -731,3 +731,44 @@ test('scale-in entries compute weighted entry price, total qty and preserve fee 
   s.state.settings = Object.assign({}, s.state.settings, { feePresets: [2.5, 0, -5, 2.5, 12.75] });
   assert.deepEqual(Array.from(s.state.settings.feePresets), [2.5, 12.75]);
 });
+
+test('computes directional openRisk, openPortfolioRisk, breakeven winrate and return on closed risk (FEAT-04)', function () {
+  const s = store;
+  // Closed winner (+3R: entry 100, stop 95, qty 2 => risk $10, exit 115 => pnl +$30)
+  const w1 = s.normalizeTrade({
+    id: 'w1', date: '2026-01-05', symbol: 'BTCUSD', side: 'long',
+    entry: 100, stop: 95, qty: 2, exits: [{ id: 'e1', qty: 2, price: 115, date: '2026-01-05' }]
+  });
+  // Closed loser (-1R: risk $10, pnl -$10)
+  const l1 = s.normalizeTrade({
+    id: 'l1', date: '2026-01-06', symbol: 'BTCUSD', side: 'long',
+    entry: 100, stop: 95, qty: 2, exits: [{ id: 'e2', qty: 2, price: 90, date: '2026-01-06' }]
+  });
+  // net = +$30 - $20 = +$10, closedRisk = $20 => returnOnClosedRisk = +50%
+  const m = s.metrics([w1, l1], 1000);
+  assert.equal(Math.round(m.payoffRatio * 100) / 100, 1.5);
+  assert.equal(Math.round(m.beWinRate), 40);
+  assert.equal(m.closedRisk, 20);
+  assert.equal(Math.round(m.returnOnClosedRisk), 50);
+
+  // Open positions: normal open ($15 risk), profit-locked stop ($0 risk), missing stop (unprotected)
+  const openRiskTrade = s.normalizeTrade({
+    id: 'o1', date: '2026-01-07', symbol: 'ETHUSD', side: 'long', entry: 100, stop: 90, currentStop: 95, qty: 3
+  });
+  const lockedTrade = s.normalizeTrade({
+    id: 'o2', date: '2026-01-07', symbol: 'SOLUSD', side: 'long', entry: 50, stop: 45, currentStop: 55, qty: 2
+  });
+  const noStopTrade = s.normalizeTrade({
+    id: 'o3', date: '2026-01-07', symbol: 'XRPUSD', side: 'short', entry: 1, qty: 100
+  });
+  assert.equal(s.openRisk(openRiskTrade), 15);
+  assert.equal(s.openRisk(lockedTrade), 0);
+  assert.equal(s.openRisk(noStopTrade), null);
+
+  const portfolio = s.openPortfolioRisk([w1, openRiskTrade, lockedTrade, noStopTrade], 1500);
+  assert.equal(portfolio.openCount, 3);
+  assert.equal(portfolio.protectedCount, 2);
+  assert.equal(portfolio.unprotectedCount, 1);
+  assert.equal(portfolio.totalRisk, 15);
+  assert.equal(portfolio.riskPct, 1);
+});

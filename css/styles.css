@@ -355,6 +355,21 @@ svg { display: block; }
 .select-wrap select:hover { border-color: var(--border-strong); }
 .select-wrap select:focus { border-color: var(--accent-ring); }
 .period-wrap select { background-color: var(--hover-bg-strong); }
+.period-controls { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+.period-controls.hidden { display: none; }
+.period-mode { padding: 2px; gap: 2px; }
+.period-mode button { padding: 5px 9px; font-size: 10.5px; white-space: nowrap; }
+.period-custom { display: inline-flex; align-items: center; gap: 5px; }
+.period-custom[hidden] { display: none; }
+.period-custom input[type="date"] {
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--input-bg);
+  color: var(--text);
+  font-size: 11px;
+}
+.period-custom span { color: var(--muted-2); font-size: 11px; }
 
 .search {
   display: flex;
@@ -470,9 +485,12 @@ svg { display: block; }
 /* ============================ KPI ============================ */
 .kpi-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 12px;
   margin-bottom: 16px;
+}
+@media (max-width: 1180px) {
+  .kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 .kpi {
   position: relative;
@@ -1905,7 +1923,7 @@ svg { display: block; }
   .cs-item span { margin: 0; }
   .cs-item strong { margin: 0; }
   .exit-row { grid-template-columns: 1fr 1fr auto; }
-  .exit-row input[data-exit-date] { grid-column: 1 / 3; }
+  .exit-row input[data-exit-date], .exit-row input[data-entry-date] { grid-column: 1 / 3; }
   .symbol-thumb { width: 23px; height: 23px; }
   .table-footer .pager { width: 100%; margin-left: 0; }
   .journal-stats { grid-template-columns: 1fr 1fr; }

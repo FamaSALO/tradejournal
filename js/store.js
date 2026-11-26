@@ -1439,8 +1439,39 @@
     const initialStop = U.parseNum(trade.stop);
     const stop = currentStop !== null ? currentStop : initialStop;
     if (entry === null || stop === null) return null;
-    const risk = Math.abs(entry - stop) * remaining * normalizeMultiplier(trade.multiplier);
-    return risk > 0 ? risk : null;
+    const dir = trade.side === 'short' ? -1 : 1;
+    const diff = (entry - stop) * dir;
+    if (diff <= 0) return 0;
+    const risk = diff * remaining * normalizeMultiplier(trade.multiplier);
+    return risk > 0 ? risk : 0;
+  }
+
+  function openPortfolioRisk(trades, currentBalance) {
+    let openCount = 0;
+    let protectedCount = 0;
+    let unprotectedCount = 0;
+    let totalRisk = 0;
+    (trades || []).forEach(function (trade) {
+      if (!trade) return;
+      const rem = remainingQty(trade);
+      if (rem === null || rem <= QTY_EPSILON) return;
+      openCount++;
+      const risk = openRisk(trade);
+      if (risk === null) {
+        unprotectedCount++;
+        return;
+      }
+      protectedCount++;
+      totalRisk += risk;
+    });
+    const balance = U.parseNum(currentBalance) || 0;
+    return {
+      openCount: openCount,
+      protectedCount: protectedCount,
+      unprotectedCount: unprotectedCount,
+      totalRisk: totalRisk,
+      riskPct: balance > 0 ? (totalRisk / balance) * 100 : 0
+    };
   }
 
   function tradeStatus(trade) {
@@ -1495,6 +1526,8 @@
     let wins = 0, losses = 0, be = 0;
     let net = 0, grossProfit = 0, grossLoss = 0, fees = 0;
     let rSum = 0, rCount = 0;
+    let winRSum = 0, winRCount = 0, lossRSum = 0, lossRCount = 0;
+    let closedRisk = 0, closedRiskNet = 0;
     let discSum = 0, discCount = 0;
     let best = null, worst = null;
 
@@ -1507,7 +1540,17 @@
       else if (pnl < -0.004) losses++;
       else be++;
       fees += tradeFees(row.trade);
-      if (row.r !== null) { rSum += row.r; rCount++; }
+      const riskAmt = tradeRisk(row.trade);
+      if (riskAmt !== null && riskAmt > 0) {
+        closedRisk += riskAmt;
+        closedRiskNet += pnl;
+      }
+      if (row.r !== null) {
+        rSum += row.r;
+        rCount++;
+        if (pnl > 0.004 && row.r > 0) { winRSum += row.r; winRCount++; }
+        else if (pnl < -0.004 && row.r < 0) { lossRSum += Math.abs(row.r); lossRCount++; }
+      }
       const disc = U.parseNum(row.trade.discipline);
       if (disc !== null && disc > 0) { discSum += disc; discCount++; }
       if (!best || pnl > best.pnl) best = row;
@@ -1516,6 +1559,20 @@
 
     const count = rows.length;
     const base = U.parseNum(startBalance) || 0;
+    const avgWin = wins ? grossProfit / wins : 0;
+    const avgLoss = losses ? Math.abs(grossLoss) / losses : 0;
+    const avgWinR = winRCount ? winRSum / winRCount : 0;
+    const avgLossR = lossRCount ? lossRSum / lossRCount : 0;
+    let payoffRatio = null;
+    let beWinRate = null;
+    if (winRCount > 0 && lossRCount > 0 && avgLossR > 0) {
+      payoffRatio = avgWinR / avgLossR;
+      beWinRate = (avgLossR / (avgWinR + avgLossR)) * 100;
+    } else if (wins > 0 && losses > 0 && avgLoss > 0) {
+      payoffRatio = avgWin / avgLoss;
+      beWinRate = (avgLoss / (avgWin + avgLoss)) * 100;
+    }
+    const returnOnClosedRisk = closedRisk > 0 ? (closedRiskNet / closedRisk) * 100 : null;
 
     let equity = 0, peak = 0, maxDD = 0, maxDDPct = 0;
     pnlEventRows(realized).forEach(function (event) {
@@ -1551,8 +1608,12 @@
       net: net,
       grossProfit: grossProfit,
       grossLoss: grossLoss,
-      avgWin: wins ? grossProfit / wins : 0,
-      avgLoss: losses ? Math.abs(grossLoss) / losses : 0,
+      avgWin: avgWin,
+      avgLoss: avgLoss,
+      payoffRatio: payoffRatio,
+      beWinRate: beWinRate,
+      closedRisk: closedRisk,
+      returnOnClosedRisk: returnOnClosedRisk,
       profitFactor: grossLoss < -0.0001 ? grossProfit / Math.abs(grossLoss) : (grossProfit > 0.0001 ? Infinity : 0),
       expectancy: count ? net / count : 0,
       avgR: rCount ? rSum / rCount : 0,
@@ -1698,6 +1759,7 @@
     tradeFees: tradeFees,
     tradeRisk: tradeRisk,
     openRisk: openRisk,
+    openPortfolioRisk: openPortfolioRisk,
     tradeStatus: tradeStatus,
     tradeR: tradeR,
     normalizeMultiplier: normalizeMultiplier,
