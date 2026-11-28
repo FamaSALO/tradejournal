@@ -1,5 +1,7 @@
 use base64::Engine as _;
-use serde::{Deserialize, Serialize};
+#[cfg(any(target_os = "macos", test))]
+use serde::Deserialize;
+use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, OpenOptions};
 use std::io::{BufWriter, ErrorKind, Write};
@@ -1375,7 +1377,7 @@ async fn save_download_abort(
 }
 
 const GITHUB_RELEASES_BASE: &str = "https://github.com/FamaSALO/tradejournal/releases";
-#[cfg(any(target_os = "macos", test))]
+#[cfg(target_os = "macos")]
 const MACOS_LATEST_MANIFEST_URL: &str =
     "https://github.com/FamaSALO/tradejournal/releases/latest/download/latest.json";
 
