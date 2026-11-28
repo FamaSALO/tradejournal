@@ -487,10 +487,17 @@
               <button class="btn btn-ghost btn-sm" id="calcReset">Сбросить</button>
             </header>
             <form class="calc-form" id="calcForm" autocomplete="off">
-              <label class="field">
-                <span>Баланс счёта</span>
+              <div class="field">
+                <div class="field-head">
+                  <label for="calcBalance">Баланс счёта</label>
+                  <span class="risk-base-inline" id="calcBalanceBaseBtns">
+                    <button type="button" data-calc-base="current">Текущий</button>
+                    <span>·</span>
+                    <button type="button" data-calc-base="initial">Начальный</button>
+                  </span>
+                </div>
                 <input type="number" id="calcBalance" step="any" min="0" inputmode="decimal">
-              </label>
+              </div>
               <label class="field">
                 <span>Риск на сделку, %</span>
                 <input type="number" id="calcRisk" step="0.1" min="0" max="100" inputmode="decimal">
@@ -679,6 +686,13 @@
                 <input type="number" id="settingRisk" step="0.1" min="0" max="100" inputmode="decimal">
               </label>
               <label class="field">
+                <span>База для расчёта риска</span>
+                <select id="settingRiskBase">
+                  <option value="current">От текущего капитала</option>
+                  <option value="initial">От начального капитала</option>
+                </select>
+              </label>
+              <label class="field">
                 <span>Дневной лимит убытка, %</span>
                 <input type="number" id="settingDailyLimit" step="0.1" min="0" max="100" inputmode="decimal">
               </label>
@@ -861,7 +875,7 @@
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17.5 8.5 12l4 3L21 6"/><path d="M15 6h6v6"/></svg>
             </div>
             <div>
-              <h3>TradeJournal <span class="version" id="appVersion">v2.6.2</span></h3>
+              <h3>TradeJournal <span class="version" id="appVersion">v2.6.3</span></h3>
               <p>Локальный дневник трейдера без серверов и регистрации. Сделки, календарь P&L, аналитика по сетапам и эмоциям, журнал наблюдений и калькулятор риска — всё в одном приложении. <span class="kbd">N</span> — новая сделка, <span class="kbd">Esc</span> — закрыть окно.</p>
             </div>
           </article>
@@ -934,7 +948,13 @@
               <span class="risk-cap-meta" id="tradeCapitalMeta"></span>
             </div>
             <input type="number" id="tradeQty" step="any" min="0" inputmode="decimal" placeholder="100" required>
-            <div class="fee-presets risk-presets" id="riskPresetsBar" role="group" aria-label="Быстрый расчёт объёма по риску"></div>
+            <div class="risk-sizing-bar">
+              <div class="fee-presets risk-presets" id="riskPresetsBar" role="group" aria-label="Быстрый расчёт объёма по риску"></div>
+              <div class="segmented risk-base-segmented" id="riskBaseSegmented" role="group" aria-label="База расчёта риска">
+                <button type="button" data-risk-base="current" title="Считать риск от текущего капитала">От текущ.</button>
+                <button type="button" data-risk-base="initial" title="Считать риск от начального капитала">От нач.</button>
+              </div>
+            </div>
           </div>
           <label class="field">
             <span>Множитель контракта</span>
@@ -1026,7 +1046,7 @@
         </div>
 
         <div class="calc-strip">
-          <div class="cs-item"><span>Риск от капитала</span><strong id="previewRisk">—</strong></div>
+          <div class="cs-item"><span>Риск от капитала</span><strong id="previewRisk">—</strong><small class="cs-sub" id="previewRiskCompare" hidden></small></div>
           <div class="cs-item"><span>P&L</span><strong id="previewPnl">—</strong></div>
           <div class="cs-item"><span>Результат в R</span><strong id="previewR">—</strong></div>
           <div class="cs-item"><span>Плановый R:R</span><strong id="previewRR">—</strong></div>

@@ -1036,3 +1036,102 @@ test('macOS update check surfaces update banner and redirects to GitHub release 
   assert.deepEqual(openedUrls, ['https://github.com/FamaSALO/tradejournal/releases/tag/v2.6.2']);
   assert.equal(els['#updateBanner'].hidden, true);
 });
+
+test('trade risk sizing and preview compare both current and initial capital bases', function () {
+  function makeSegBtn(base) {
+    const classes = new Set();
+    return {
+      dataset: { riskBase: base },
+      classList: {
+        toggle: function (cls, on) {
+          if (on) classes.add(cls);
+          else classes.delete(cls);
+        },
+        contains: function (cls) { return classes.has(cls); }
+      }
+    };
+  }
+  const btnCurrent = makeSegBtn('current');
+  const btnInitial = makeSegBtn('initial');
+  const els = {
+    '#tradeSide': { value: 'long' },
+    '#tradeEntry': { value: '100', focus: function () {} },
+    '#tradeStop': { value: '95', focus: function () {} },
+    '#tradeTarget': { value: '115' },
+    '#tradeQty': { value: '' },
+    '#tradeMultiplier': { value: '1' },
+    '#tradeFees': { value: '0' },
+    '#tradeCapitalMeta': { textContent: '' },
+    '#riskPresetsBar': { innerHTML: '' },
+    '#riskBaseSegmented': {
+      querySelectorAll: function () { return [btnCurrent, btnInitial]; }
+    },
+    '#previewRisk': { textContent: '', className: '' },
+    '#previewRiskCompare': { textContent: '', hidden: true },
+    '#previewPnl': { textContent: '', className: '' },
+    '#previewR': { textContent: '', className: '' },
+    '#previewRR': { textContent: '', className: '' },
+    '#previewRemaining': { textContent: '', className: '' },
+    '#exitsHint': { textContent: '' },
+    '#closeRemainingBtn': { disabled: false },
+    '#positionHistory': { hidden: true, innerHTML: '' },
+    '#feePresetsBar': { innerHTML: '' },
+    '#toasts': { appendChild: function () {} }
+  };
+  const { TJ, sandbox } = loadApp(els);
+  sandbox.document.createElement = function () {
+    return {
+      className: '',
+      innerHTML: '',
+      textContent: '',
+      classList: { add: function () {}, remove: function () {}, toggle: function () {} },
+      style: {},
+      setAttribute: function () {},
+      remove: function () {}
+    };
+  };
+  TJ.store.state.settings = Object.assign({}, TJ.store.state.settings, {
+    startBalance: 10000,
+    riskPercent: 1,
+    riskBase: 'current',
+    currency: '$'
+  });
+  TJ.store.state.trades = [
+    TJ.store.normalizeTrade({
+      id: 'gain-5k', date: '2026-03-01', symbol: 'NVDA', side: 'long',
+      entry: 100, qty: 100, exits: [{ id: 'e1', qty: 100, price: 150, date: '2026-03-01' }]
+    })
+  ];
+  assert.equal(TJ.store.balanceAll(), 15000);
+
+  // Current capital base: 1% of $15,000 = $150 => qty 30, secondary comparison shows 1,5% of initial
+  TJ.app.state.riskBase = 'current';
+  TJ.app.applyRiskPercentSizing(1);
+  assert.equal(els['#tradeQty'].value, '30');
+  assert.match(els['#tradeCapitalMeta'].textContent, /Тек\. капитал.*15\s*000/);
+  assert.equal(btnCurrent.classList.contains('active'), true);
+  assert.equal(btnInitial.classList.contains('active'), false);
+  assert.match(els['#previewRisk'].textContent, /\$150.*1%/);
+  assert.equal(els['#previewRiskCompare'].hidden, false);
+  assert.match(els['#previewRiskCompare'].textContent, /От нач\.:.*1[,.]5%/);
+
+  // Switch to initial capital base without changing qty yet: primary flips to 1,5%, comparison shows 1% of current
+  TJ.app.state.riskBase = 'initial';
+  TJ.app.updateTradePreview();
+  assert.match(els['#tradeCapitalMeta'].textContent, /Нач\. капитал.*10\s*000/);
+  assert.equal(btnCurrent.classList.contains('active'), false);
+  assert.equal(btnInitial.classList.contains('active'), true);
+  assert.match(els['#previewRisk'].textContent, /\$150.*1[,.]5%/);
+  assert.match(els['#previewRiskCompare'].textContent, /От тек\.:.*1%/);
+
+  // Click 1% in initial capital mode: 1% of $10,000 = $100 => qty 20, comparison shows 0,67% of current
+  TJ.app.applyRiskPercentSizing(1);
+  assert.equal(els['#tradeQty'].value, '20');
+  assert.match(els['#previewRisk'].textContent, /\$100.*1%/);
+  assert.match(els['#previewRiskCompare'].textContent, /От тек\.:.*0[,.]67%/);
+
+  // When current == initial, secondary comparison stays hidden
+  TJ.store.state.trades = [];
+  TJ.app.updateTradePreview();
+  assert.equal(els['#previewRiskCompare'].hidden, true);
+});

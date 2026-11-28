@@ -859,3 +859,42 @@ test('positionQtyForRisk and tradeRiskPct compute sizes and % against current ca
   assert.equal(pct, 1);
   assert.equal(s.tradeRiskPct({ entry: 100, qty: 24 }, 12000), null);
 });
+
+test('riskBase setting and riskCapital distinguish current vs initial capital', function () {
+  const s = store;
+  const origSettings = Object.assign({}, s.state.settings);
+  const origTrades = s.state.trades.slice();
+  try {
+    s.state.settings = {};
+    assert.equal(s.state.settings.riskBase, 'current');
+    s.state.settings = Object.assign({}, s.state.settings, { riskBase: 'weird' });
+    assert.equal(s.state.settings.riskBase, 'current');
+    s.state.settings = Object.assign({}, s.state.settings, { startBalance: 10000, riskPercent: 1, riskBase: 'initial', currency: '$' });
+    assert.equal(s.state.settings.riskBase, 'initial');
+
+    s.state.trades = [
+      s.normalizeTrade({
+        id: 'profit-1', date: '2026-03-01', symbol: 'NVDA', side: 'long',
+        entry: 100, qty: 100, exits: [{ id: 'e1', qty: 100, price: 150, date: '2026-03-01' }]
+      }),
+      s.normalizeTrade({
+        id: 'open-1', date: '2026-03-02', symbol: 'MSFT', side: 'long',
+        entry: 100, stop: 95, qty: 30
+      })
+    ];
+
+    assert.equal(s.balanceAll(), 15000);
+    assert.equal(s.riskCapital('current'), 15000);
+    assert.equal(s.riskCapital('initial'), 10000);
+    assert.equal(s.riskCapital(), 10000);
+
+    const openFromCurrent = s.openPortfolioRisk(s.state.trades, s.riskCapital('current'));
+    const openFromInitial = s.openPortfolioRisk(s.state.trades, s.riskCapital('initial'));
+    assert.equal(openFromCurrent.totalRisk, 150);
+    assert.equal(openFromCurrent.riskPct, 1);
+    assert.equal(openFromInitial.riskPct, 1.5);
+  } finally {
+    s.state.settings = origSettings;
+    s.state.trades = origTrades;
+  }
+});

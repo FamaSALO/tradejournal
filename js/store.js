@@ -34,6 +34,7 @@
     currency: '$',
     startBalance: 10000,
     riskPercent: 1,
+    riskBase: 'current',
     dailyLossLimit: 3,
     maxTradesPerDay: 3,
     timezone: U.systemTimeZone(),
@@ -558,6 +559,7 @@
       currency: currency || '$',
       startBalance: startBalance !== null && startBalance >= 0 ? startBalance : 10000,
       riskPercent: risk !== null && risk >= 0 ? U.clamp(risk, 0, 100) : 1,
+      riskBase: raw.riskBase === 'initial' ? 'initial' : 'current',
       dailyLossLimit: daily !== null && daily >= 0 ? U.clamp(daily, 0, 100) : 3,
       maxTradesPerDay: maxTrades !== null && maxTrades >= 0 ? U.clamp(Math.round(maxTrades), 0, 100) : 3,
       timezone: U.validTimeZone(raw.timezone) ? raw.timezone : U.systemTimeZone(),
@@ -1865,6 +1867,14 @@
     return value;
   }
 
+  function riskCapital(modeOrSettings) {
+    const mode = typeof modeOrSettings === 'string'
+      ? modeOrSettings
+      : ((modeOrSettings && modeOrSettings.riskBase) || (state.settings && state.settings.riskBase));
+    if (mode === 'initial') return U.parseNum(state.settings.startBalance) || 0;
+    return balanceAll();
+  }
+
   function storageSize() {
     try { return new Blob([JSON.stringify(root)]).size; } catch (err) { return 0; }
   }
@@ -1945,6 +1955,7 @@
     drawdownSeries: drawdownSeries,
     groupRows: groupRows,
     balanceAll: balanceAll,
+    riskCapital: riskCapital,
     storageSize: storageSize,
     normalizeTrade: normalizeTrade
   };

@@ -4,7 +4,7 @@
   const U = NS.utils;
   const store = NS.store;
   const desktop = window.tradeJournalDesktop || null;
-  const APP_VERSION = '2.6.2';
+  const APP_VERSION = '2.6.3';
   const DRAFT_PREFIX = 'tradejournal.draft.v1.';
   const META_KEY = store.META_KEY;
   // Drafts live in localStorage even on desktop, so a full screenshot data URL
@@ -41,6 +41,7 @@
     dateMode: 'entry',
     periodFrom: '',
     periodTo: '',
+    riskBase: 'current',
     filters: { search: '', side: 'all', result: 'all', setup: 'all' },
     journalFilters: { search: '', mood: 'all', tag: 'all' },
     sort: { key: 'date', dir: 'desc' },
@@ -769,12 +770,16 @@
     const streak = m.currentStreak
       ? m.currentStreak.n + (m.currentStreak.type === 'win' ? 'W' : 'L')
       : '—';
-    const openRisk = store.openPortfolioRisk(store.state.trades, store.balanceAll());
+    const riskBaseMode = store.state.settings && store.state.settings.riskBase === 'initial' ? 'initial' : 'current';
+    const openRisk = store.openPortfolioRisk(store.state.trades, store.riskCapital(riskBaseMode));
     const openRiskTone = openRisk.unprotectedCount > 0
       ? 'warn'
       : (openRisk.riskPct > (store.state.settings.dailyLossLimit || 3) ? 'neg' : (openRisk.totalRisk > 0 ? 'neutral' : ''));
+    const openSubTemplate = riskBaseMode === 'initial'
+      ? '{pct} нач. кап. · {count} открытых'
+      : '{pct} счёта · {count} открытых';
     const openSub = openRisk.openCount
-      ? T('{pct} счёта · {count} открытых')
+      ? T(openSubTemplate)
         .replace('{pct}', U.percent(openRisk.riskPct, 1))
         .replace('{count}', openRisk.openCount) +
         (openRisk.unprotectedCount ? ' · ' + T('{count} без стопа').replace('{count}', openRisk.unprotectedCount) : '')
@@ -2102,26 +2107,45 @@
      ============================================================ */
 
   let calcBalanceCustom = false;
+  let calcBalanceMode = '';
+
+  function calcBaseMode() {
+    return calcBalanceMode === 'initial' || calcBalanceMode === 'current'
+      ? calcBalanceMode
+      : (store.state.settings && store.state.settings.riskBase === 'initial' ? 'initial' : 'current');
+  }
+
+  function renderCalcBalanceBaseBtns() {
+    const box = $('#calcBalanceBaseBtns');
+    if (!box) return;
+    const mode = calcBaseMode();
+    box.querySelectorAll('button[data-calc-base]').forEach(function (btn) {
+      btn.classList.toggle('active', !calcBalanceCustom && btn.dataset.calcBase === mode);
+    });
+  }
 
   function ensureCalcDefaults() {
     const balanceField = $('#calcBalance');
     const riskField = $('#calcRisk');
     if (balanceField && (!balanceField.value || !calcBalanceCustom)) {
-      balanceField.value = round2(store.balanceAll());
+      balanceField.value = round2(store.riskCapital(calcBaseMode()));
     }
     if (riskField && !riskField.value) riskField.value = store.state.settings.riskPercent;
     if ($('#calcPointValue') && !$('#calcPointValue').value) $('#calcPointValue').value = '1';
+    renderCalcBalanceBaseBtns();
     calcUpdate();
   }
 
   function resetCalculator() {
     calcBalanceCustom = false;
-    $('#calcBalance').value = round2(store.balanceAll());
+    calcBalanceMode = '';
+    $('#calcBalance').value = round2(store.riskCapital(calcBaseMode()));
     $('#calcRisk').value = store.state.settings.riskPercent;
     $('#calcPointValue').value = '1';
     $('#calcEntry').value = '';
     $('#calcStop').value = '';
     $('#calcTarget').value = '';
+    renderCalcBalanceBaseBtns();
     calcUpdate();
   }
 
@@ -2473,6 +2497,9 @@
     $('#settingCurrency').value = settings.currency || '$';
     $('#settingBalance').value = settings.startBalance;
     $('#settingRisk').value = settings.riskPercent;
+    if ($('#settingRiskBase')) {
+      $('#settingRiskBase').value = settings.riskBase === 'initial' ? 'initial' : 'current';
+    }
     $('#settingDailyLimit').value = settings.dailyLossLimit;
     $('#settingMaxTrades').value = settings.maxTradesPerDay;
     $('#settingTimezone').value = settings.timezone || U.systemTimeZone();
@@ -3132,6 +3159,7 @@
       currency: currency,
       startBalance: balance,
       riskPercent: risk,
+      riskBase: $('#settingRiskBase') && $('#settingRiskBase').value === 'initial' ? 'initial' : 'current',
       dailyLossLimit: daily,
       maxTradesPerDay: Math.round(maxTrades),
       timezone: timezone,
@@ -4416,11 +4444,28 @@
     return base.sort(function (a, b) { return a - b; });
   }
 
+  function activeTradeRiskBase() {
+    if (state.riskBase === 'initial' || state.riskBase === 'current') return state.riskBase;
+    return store.state.settings && store.state.settings.riskBase === 'initial' ? 'initial' : 'current';
+  }
+
+  function activeTradeRiskCapital() {
+    return store.riskCapital(activeTradeRiskBase());
+  }
+
   function renderRiskPresets() {
-    const capital = store.balanceAll();
+    const mode = activeTradeRiskBase();
+    const capital = store.riskCapital(mode);
     const capEl = $('#tradeCapitalMeta');
     if (capEl) {
-      capEl.textContent = T('Капитал') + ': ' + U.money(capital);
+      const capLabel = mode === 'initial' ? T('Нач. капитал') : T('Тек. капитал');
+      capEl.textContent = capLabel + ': ' + U.money(capital);
+    }
+    const seg = $('#riskBaseSegmented');
+    if (seg) {
+      seg.querySelectorAll('button[data-risk-base]').forEach(function (button) {
+        button.classList.toggle('active', button.dataset.riskBase === mode);
+      });
     }
     const bar = $('#riskPresetsBar');
     if (!bar) return;
@@ -4455,7 +4500,7 @@
     const entry = $('#tradeEntry') ? $('#tradeEntry').value : '';
     const stop = $('#tradeStop') ? $('#tradeStop').value : '';
     const multiplier = $('#tradeMultiplier') ? $('#tradeMultiplier').value : 1;
-    const capital = store.balanceAll();
+    const capital = activeTradeRiskCapital();
     const res = store.positionQtyForRisk({
       balance: capital,
       riskPercent: pct,
@@ -4851,6 +4896,7 @@
     state.screenshotBusy = false;
     state.draftShotWarned = false;
     state.draftScreenshotOmitted = false;
+    state.riskBase = (store.state.settings && store.state.settings.riskBase === 'initial') ? 'initial' : 'current';
 
     $('#tradeModalTitleText').textContent = T(trade ? 'Редактировать сделку' : 'Новая сделка');
     applyTradeFields(state.tradeBaseline);
@@ -5351,9 +5397,15 @@
       remainingEl.className = remaining !== null && remaining > epsilon && exits.length ? 'neutral' : '';
     }
     const riskEl = $('#previewRisk');
+    const compareEl = $('#previewRiskCompare');
     if (riskEl) {
-      const capital = store.balanceAll();
+      const mode = activeTradeRiskBase();
+      const curCap = store.riskCapital('current');
+      const initCap = store.riskCapital('initial');
+      const capital = mode === 'initial' ? initCap : curCap;
+      const altCapital = mode === 'initial' ? curCap : initCap;
       const riskPct = risk !== null && capital > 0 ? (risk / capital) * 100 : null;
+      const altRiskPct = risk !== null && altCapital > 0 ? (risk / altCapital) * 100 : null;
       const planRisk = (store.state.settings && store.state.settings.riskPercent) || 1;
       if (risk !== null && qty !== null && qty > 0) {
         const pctLabel = riskPct !== null ? ' (' + formatRiskPctLabel(riskPct) + ')' : '';
@@ -5361,9 +5413,23 @@
         if (riskPct !== null && riskPct > planRisk * 1.5) riskEl.className = 'neg';
         else if (riskPct !== null && riskPct > planRisk + 0.05) riskEl.className = 'warn';
         else riskEl.className = 'neutral';
+        if (compareEl) {
+          if (altRiskPct !== null && Math.abs(curCap - initCap) > 0.01) {
+            const cmpTemplate = mode === 'initial' ? 'От тек.: {pct}' : 'От нач.: {pct}';
+            compareEl.textContent = T(cmpTemplate).replace('{pct}', formatRiskPctLabel(altRiskPct));
+            compareEl.hidden = false;
+          } else {
+            compareEl.textContent = '';
+            compareEl.hidden = true;
+          }
+        }
       } else {
         riskEl.textContent = '—';
         riskEl.className = '';
+        if (compareEl) {
+          compareEl.textContent = '';
+          compareEl.hidden = true;
+        }
       }
     }
     updateExitsSummary();
@@ -6131,7 +6197,21 @@
 
     $('#calcForm').addEventListener('input', calcUpdate);
     if ($('#calcBalance')) {
-      $('#calcBalance').addEventListener('input', function () { calcBalanceCustom = true; });
+      $('#calcBalance').addEventListener('input', function () {
+        calcBalanceCustom = true;
+        renderCalcBalanceBaseBtns();
+      });
+    }
+    if ($('#calcBalanceBaseBtns')) {
+      $('#calcBalanceBaseBtns').addEventListener('click', function (event) {
+        const btn = event.target.closest('button[data-calc-base]');
+        if (!btn) return;
+        calcBalanceCustom = false;
+        calcBalanceMode = btn.dataset.calcBase === 'initial' ? 'initial' : 'current';
+        if ($('#calcBalance')) $('#calcBalance').value = round2(store.riskCapital(calcBalanceMode));
+        renderCalcBalanceBaseBtns();
+        calcUpdate();
+      });
     }
     $('#calcReset').addEventListener('click', resetCalculator);
 
@@ -6273,6 +6353,14 @@
         if (!button || button.disabled) return;
         const pct = Number(button.dataset.riskPct);
         if (Number.isFinite(pct) && pct > 0) applyRiskPercentSizing(pct);
+      });
+    }
+    if ($('#riskBaseSegmented')) {
+      $('#riskBaseSegmented').addEventListener('click', function (event) {
+        const button = event.target.closest('button[data-risk-base]');
+        if (!button) return;
+        state.riskBase = button.dataset.riskBase === 'initial' ? 'initial' : 'current';
+        updateTradePreview();
       });
     }
     $('#saveFeePresetBtn').addEventListener('click', saveFeePreset);

@@ -1275,5 +1275,20 @@ window.TJ_I18N_EN = {
   "Объём: {qty} (риск {pct}% = {risk})": "Size: {qty} (risk {pct}% = {risk})",
   "Текущий капитал должен быть больше нуля.": "Current capital must be greater than zero.",
   "Процент риска должен быть больше 0 и не выше 100%.": "Risk percent must be greater than 0 and at most 100%.",
-  "Укажите цену входа и стоп при входе для расчёта объёма.": "Enter both entry price and initial stop to calculate size."
+  "Укажите цену входа и стоп при входе для расчёта объёма.": "Enter both entry price and initial stop to calculate size.",
+  "База для расчёта риска": "Risk calculation base",
+  "От текущего капитала": "From current capital",
+  "От начального капитала": "From initial capital",
+  "База расчёта риска": "Risk base",
+  "От текущ.": "Current",
+  "От нач.": "Initial",
+  "Считать риск от текущего капитала": "Calculate risk from current capital",
+  "Считать риск от начального капитала": "Calculate risk from initial capital",
+  "Текущий": "Current",
+  "Начальный": "Initial",
+  "Тек. капитал": "Current capital",
+  "Нач. капитал": "Initial capital",
+  "От нач.: {pct}": "Initial: {pct}",
+  "От тек.: {pct}": "Current: {pct}",
+  "{pct} нач. кап. · {count} открытых": "{pct} initial cap. · {count} open"
 };
