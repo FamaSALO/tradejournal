@@ -211,6 +211,10 @@
 
     installUpdate: function () {
       return call('update_install');
+    },
+
+    openReleasePage: function (url) {
+      return call('open_release_page', { url: url || '' });
     }
   };
 })();

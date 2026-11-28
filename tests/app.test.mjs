@@ -900,3 +900,139 @@ test('downloadBytes uses desktop chunked streaming IPC without encoding on cance
   assert.equal(Buffer.concat(receivedChunks).length, payload.length);
   assert.equal(streamCalls.filter(function (c) { return c === 'save_download_finish'; }).length, 1);
 });
+
+test('applyRiskPercentSizing uses current capital (startBalance + realized PnL) and updates risk preview', function () {
+  const els = {
+    '#tradeSide': { value: 'long' },
+    '#tradeEntry': { value: '100', focus: function () {} },
+    '#tradeStop': { value: '95', focus: function () {} },
+    '#tradeTarget': { value: '115' },
+    '#tradeQty': { value: '' },
+    '#tradeMultiplier': { value: '1' },
+    '#tradeFees': { value: '0' },
+    '#tradeCapitalMeta': { textContent: '' },
+    '#riskPresetsBar': { innerHTML: '' },
+    '#previewRisk': { textContent: '', className: '' },
+    '#previewPnl': { textContent: '', className: '' },
+    '#previewR': { textContent: '', className: '' },
+    '#previewRR': { textContent: '', className: '' },
+    '#previewRemaining': { textContent: '', className: '' },
+    '#exitsHint': { textContent: '' },
+    '#closeRemainingBtn': { disabled: false },
+    '#positionHistory': { hidden: true, innerHTML: '' },
+    '#feePresetsBar': { innerHTML: '' },
+    '#toasts': { appendChild: function () {} }
+  };
+  const { TJ, sandbox } = loadApp(els);
+  sandbox.document.createElement = function () {
+    return {
+      className: '',
+      innerHTML: '',
+      textContent: '',
+      classList: { add: function () {}, remove: function () {}, toggle: function () {} },
+      style: {},
+      setAttribute: function () {},
+      remove: function () {}
+    };
+  };
+  TJ.store.state.settings = Object.assign({}, TJ.store.state.settings, { startBalance: 10000, riskPercent: 1, currency: '$' });
+  TJ.store.state.trades = [
+    TJ.store.normalizeTrade({
+      id: 'gain-1', date: '2026-02-01', symbol: 'AAPL', side: 'long',
+      entry: 100, qty: 100, exits: [{ id: 'e1', qty: 100, price: 120, date: '2026-02-01' }]
+    })
+  ];
+  assert.equal(TJ.store.balanceAll(), 12000);
+
+  TJ.app.applyRiskPercentSizing(1);
+  assert.equal(els['#tradeQty'].value, '24');
+  assert.match(els['#tradeCapitalMeta'].textContent, /12\s*000/);
+  assert.match(els['#previewRisk'].textContent, /\$120/);
+  assert.match(els['#previewRisk'].textContent, /1%/);
+  assert.match(els['#riskPresetsBar'].innerHTML, /class="fee-chip risk-chip active" data-risk-pct="1"/);
+
+  TJ.app.applyRiskPercentSizing(2);
+  assert.equal(els['#tradeQty'].value, '48');
+  assert.equal(els['#previewRisk'].className, 'neg');
+
+  // Wrong-side stop should not overwrite qty
+  els['#tradeSide'].value = 'short';
+  TJ.app.applyRiskPercentSizing(0.5);
+  assert.equal(els['#tradeQty'].value, '48');
+});
+
+test('macOS update check surfaces update banner and redirects to GitHub release on install', async function () {
+  const openedUrls = [];
+  const doc = fakeDocument();
+  const els = {
+    '#updateBanner': { hidden: true },
+    '#updateBannerTitle': { textContent: '' },
+    '#updateBannerText': { textContent: '' },
+    '#installUpdateBtn': { textContent: '', disabled: false },
+    '#downloadUpdateBtn': { hidden: true, disabled: false, textContent: '' },
+    '#checkUpdateBtn': { disabled: false, textContent: '' },
+    '#updateStatus': { textContent: '', className: '' },
+    '#desktopVersion': { textContent: '' },
+    '#appVersion': { textContent: '' },
+    '#toasts': { appendChild: function () {} }
+  };
+  const origQS = doc.querySelector;
+  doc.querySelector = function (sel) {
+    return Object.prototype.hasOwnProperty.call(els, sel) ? els[sel] : origQS.call(doc, sel);
+  };
+  doc.createElement = function () {
+    return {
+      className: '',
+      innerHTML: '',
+      textContent: '',
+      classList: { add: function () {}, remove: function () {}, toggle: function () {} },
+      style: {},
+      setAttribute: function () {},
+      remove: function () {}
+    };
+  };
+
+  const { TJ } = loadTradeJournal([
+    'js/desktop-bridge.js',
+    'js/utils.js',
+    'js/blobstore.js',
+    'js/store.js',
+    'js/charts.js',
+    'js/app.js'
+  ], {
+    globals: {
+      document: doc,
+      navigator: { userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)' },
+      __TAURI__: {
+        core: {
+          invoke: async function (cmd, args) {
+            if (cmd === 'data_info') return { platform: 'macos', version: '2.6.1' };
+            if (cmd === 'update_check') {
+              return {
+                available: true,
+                currentVersion: '2.6.1',
+                version: '2.6.2',
+                releaseUrl: 'https://github.com/FamaSALO/tradejournal/releases/tag/v2.6.2',
+                manual: true
+              };
+            }
+            if (cmd === 'open_release_page') {
+              openedUrls.push(args && args.url ? args.url : '');
+              return { ok: true };
+            }
+            return {};
+          }
+        }
+      }
+    }
+  });
+
+  await TJ.app.checkDesktopUpdate(true);
+  assert.equal(els['#updateBanner'].hidden, false);
+  assert.equal(els['#downloadUpdateBtn'].hidden, false);
+  assert.match(els['#updateStatus'].textContent, /2\.6\.2/);
+
+  await TJ.app.installDesktopUpdate();
+  assert.deepEqual(openedUrls, ['https://github.com/FamaSALO/tradejournal/releases/tag/v2.6.2']);
+  assert.equal(els['#updateBanner'].hidden, true);
+});

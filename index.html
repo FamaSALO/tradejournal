@@ -861,7 +861,7 @@
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17.5 8.5 12l4 3L21 6"/><path d="M15 6h6v6"/></svg>
             </div>
             <div>
-              <h3>TradeJournal <span class="version" id="appVersion">v2.6.1</span></h3>
+              <h3>TradeJournal <span class="version" id="appVersion">v2.6.2</span></h3>
               <p>Локальный дневник трейдера без серверов и регистрации. Сделки, календарь P&L, аналитика по сетапам и эмоциям, журнал наблюдений и калькулятор риска — всё в одном приложении. <span class="kbd">N</span> — новая сделка, <span class="kbd">Esc</span> — закрыть окно.</p>
             </div>
           </article>
@@ -928,10 +928,14 @@
             <span>Тейк-профит</span>
             <input type="number" id="tradeTarget" step="any" inputmode="decimal" placeholder="Для планового R:R">
           </label>
-          <label class="field">
-            <span>Количество * <em class="field-auto hidden" id="tradeQtyAuto">сумма</em></span>
+          <div class="field">
+            <div class="field-head">
+              <label for="tradeQty">Количество * <em class="field-auto hidden" id="tradeQtyAuto">сумма</em></label>
+              <span class="risk-cap-meta" id="tradeCapitalMeta"></span>
+            </div>
             <input type="number" id="tradeQty" step="any" min="0" inputmode="decimal" placeholder="100" required>
-          </label>
+            <div class="fee-presets risk-presets" id="riskPresetsBar" role="group" aria-label="Быстрый расчёт объёма по риску"></div>
+          </div>
           <label class="field">
             <span>Множитель контракта</span>
             <input type="number" id="tradeMultiplier" step="any" min="0" inputmode="decimal" placeholder="1">
@@ -1022,6 +1026,7 @@
         </div>
 
         <div class="calc-strip">
+          <div class="cs-item"><span>Риск от капитала</span><strong id="previewRisk">—</strong></div>
           <div class="cs-item"><span>P&L</span><strong id="previewPnl">—</strong></div>
           <div class="cs-item"><span>Результат в R</span><strong id="previewR">—</strong></div>
           <div class="cs-item"><span>Плановый R:R</span><strong id="previewRR">—</strong></div>

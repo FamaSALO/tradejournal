@@ -1,5 +1,5 @@
 use base64::Engine as _;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, OpenOptions};
 use std::io::{BufWriter, ErrorKind, Write};
@@ -135,6 +135,8 @@ struct UpdateInfo {
     version: Option<String>,
     notes: Option<String>,
     date: Option<String>,
+    release_url: Option<String>,
+    manual: bool,
 }
 
 #[derive(Serialize)]
@@ -1372,58 +1374,246 @@ async fn save_download_abort(
     Ok(OkResult { ok: true })
 }
 
+const GITHUB_RELEASES_BASE: &str = "https://github.com/FamaSALO/tradejournal/releases";
+#[cfg(any(target_os = "macos", test))]
+const MACOS_LATEST_MANIFEST_URL: &str =
+    "https://github.com/FamaSALO/tradejournal/releases/latest/download/latest.json";
+
+fn is_allowed_release_url(url: &str) -> bool {
+    let trimmed = url.trim();
+    if trimmed.len() > 256
+        || !trimmed
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, ':' | '/' | '.' | '_' | '-'))
+    {
+        return false;
+    }
+    trimmed == format!("{GITHUB_RELEASES_BASE}/latest")
+        || (trimmed.starts_with(&format!("{GITHUB_RELEASES_BASE}/tag/"))
+            && trimmed.len() > format!("{GITHUB_RELEASES_BASE}/tag/").len())
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn parse_semver(value: &str) -> Option<(u64, u64, u64)> {
+    let clean = value.trim().trim_start_matches(['v', 'V']);
+    let core = clean.split(['-', '+']).next()?;
+    let mut parts = core.split('.');
+    let major = parts.next()?.parse::<u64>().ok()?;
+    let minor = parts.next()?.parse::<u64>().ok()?;
+    let patch = parts.next()?.parse::<u64>().ok()?;
+    if parts.next().is_some() {
+        return None;
+    }
+    Some((major, minor, patch))
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn is_newer_version(remote: &str, current: &str) -> Option<bool> {
+    Some(parse_semver(remote)? > parse_semver(current)?)
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn release_url_for_version(version: &str) -> String {
+    if let Some((major, minor, patch)) = parse_semver(version) {
+        format!("{GITHUB_RELEASES_BASE}/tag/v{major}.{minor}.{patch}")
+    } else {
+        format!("{GITHUB_RELEASES_BASE}/latest")
+    }
+}
+
+#[cfg(any(target_os = "macos", test))]
+#[derive(Deserialize)]
+struct LatestManifest {
+    version: String,
+    #[serde(default)]
+    notes: Option<String>,
+    #[serde(default)]
+    pub_date: Option<String>,
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn parse_latest_manifest_for_current(
+    raw: &str,
+    current_version: &str,
+) -> Result<UpdateInfo, String> {
+    let manifest: LatestManifest = serde_json::from_str(raw)
+        .map_err(|error| format!("Некорректный формат latest.json: {error}"))?;
+    let Some((major, minor, patch)) = parse_semver(&manifest.version) else {
+        return Err("В манифесте указана некорректная версия.".to_string());
+    };
+    let normalized_remote = format!("{major}.{minor}.{patch}");
+    let available = is_newer_version(&normalized_remote, current_version)
+        .ok_or_else(|| "Не удалось сравнить версии приложения.".to_string())?;
+    Ok(UpdateInfo {
+        available,
+        current_version: current_version.to_string(),
+        version: if available {
+            Some(normalized_remote.clone())
+        } else {
+            None
+        },
+        notes: if available { manifest.notes } else { None },
+        date: if available { manifest.pub_date } else { None },
+        release_url: Some(if available {
+            release_url_for_version(&normalized_remote)
+        } else {
+            format!("{GITHUB_RELEASES_BASE}/latest")
+        }),
+        manual: true,
+    })
+}
+
+#[cfg(target_os = "macos")]
+async fn check_macos_update(current_version: String) -> Result<UpdateInfo, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let output = Command::new("/usr/bin/curl")
+            .args([
+                "--proto",
+                "=https",
+                "--proto-redir",
+                "=https",
+                "--tlsv1.2",
+                "-fsSL",
+                "--max-time",
+                "10",
+                MACOS_LATEST_MANIFEST_URL,
+            ])
+            .output()
+            .map_err(|error| format!("Не удалось запустить проверку обновлений: {error}"))?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let detail = stderr.trim();
+            return Err(if detail.is_empty() {
+                format!("Сервер обновлений вернул код {}", output.status)
+            } else {
+                format!("Не удалось проверить обновления: {detail}")
+            });
+        }
+        let body = String::from_utf8(output.stdout)
+            .map_err(|_| "Ответ сервера обновлений не является UTF-8.".to_string())?;
+        parse_latest_manifest_for_current(&body, &current_version)
+    })
+    .await
+    .map_err(|error| format!("Сбой фоновой проверки обновлений: {error}"))?
+}
+
+fn open_external_url(url: &str) -> Result<(), String> {
+    if !is_allowed_release_url(url) {
+        return Err(
+            "Разрешены только ссылки на страницу релизов TradeJournal на GitHub.".to_string(),
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    let result = Command::new("cmd").args(["/C", "start", "", url]).spawn();
+
+    #[cfg(target_os = "macos")]
+    let result = Command::new("open").arg(url).spawn();
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let result = Command::new("xdg-open").arg(url).spawn();
+
+    result
+        .map(|_| ())
+        .map_err(|error| format!("Не удалось открыть страницу релиза: {error}"))
+}
+
+#[tauri::command]
+fn open_release_page(url: Option<String>) -> Result<OkResult, String> {
+    let target = url
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| format!("{GITHUB_RELEASES_BASE}/latest"));
+    open_external_url(&target)?;
+    Ok(OkResult { ok: true })
+}
+
 #[tauri::command]
 async fn update_check(app: tauri::AppHandle) -> Result<UpdateInfo, String> {
-    use tauri_plugin_updater::UpdaterExt;
-
     let current_version = app.package_info().version.to_string();
-    let updater = app
-        .updater()
-        .map_err(|error| format!("Не удалось подготовить проверку обновлений: {error}"))?;
-    let update = updater
-        .check()
-        .await
-        .map_err(|error| format!("Не удалось проверить обновления: {error}"))?;
 
-    match update {
-        Some(update) => Ok(UpdateInfo {
-            available: true,
-            current_version: update.current_version,
-            version: Some(update.version),
-            notes: update.body,
-            date: update.date.map(|date| date.to_string()),
-        }),
-        None => Ok(UpdateInfo {
-            available: false,
-            current_version,
-            version: None,
-            notes: None,
-            date: None,
-        }),
+    #[cfg(target_os = "macos")]
+    {
+        check_macos_update(current_version).await
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        use tauri_plugin_updater::UpdaterExt;
+
+        let updater = app
+            .updater()
+            .map_err(|error| format!("Не удалось подготовить проверку обновлений: {error}"))?;
+        let update = updater
+            .check()
+            .await
+            .map_err(|error| format!("Не удалось проверить обновления: {error}"))?;
+
+        match update {
+            Some(update) => Ok(UpdateInfo {
+                available: true,
+                current_version: update.current_version,
+                version: Some(update.version),
+                notes: update.body,
+                date: update.date.map(|date| date.to_string()),
+                release_url: None,
+                manual: false,
+            }),
+            None => Ok(UpdateInfo {
+                available: false,
+                current_version,
+                version: None,
+                notes: None,
+                date: None,
+                release_url: None,
+                manual: false,
+            }),
+        }
     }
 }
 
 #[tauri::command]
 async fn update_install(app: tauri::AppHandle) -> Result<OkResult, String> {
-    use tauri_plugin_updater::UpdaterExt;
+    #[cfg(target_os = "macos")]
+    {
+        let current_version = app.package_info().version.to_string();
+        let info = check_macos_update(current_version).await?;
+        if !info.available {
+            return Err(
+                "Обновление не найдено. Возможно, установлена последняя версия.".to_string(),
+            );
+        }
+        let target = info
+            .release_url
+            .unwrap_or_else(|| format!("{GITHUB_RELEASES_BASE}/latest"));
+        open_external_url(&target)?;
+        Ok(OkResult { ok: true })
+    }
 
-    let updater = app
-        .updater()
-        .map_err(|error| format!("Не удалось подготовить установку обновления: {error}"))?;
-    let update = updater
-        .check()
-        .await
-        .map_err(|error| format!("Не удалось проверить обновления: {error}"))?;
-    let Some(update) = update else {
-        return Err("Обновление не найдено. Возможно, установлена последняя версия.".to_string());
-    };
+    #[cfg(not(target_os = "macos"))]
+    {
+        use tauri_plugin_updater::UpdaterExt;
 
-    update
-        .download_and_install(|_chunk_length, _content_length| {}, || {})
-        .await
-        .map_err(|error| format!("Не удалось установить обновление: {error}"))?;
+        let updater = app
+            .updater()
+            .map_err(|error| format!("Не удалось подготовить установку обновления: {error}"))?;
+        let update = updater
+            .check()
+            .await
+            .map_err(|error| format!("Не удалось проверить обновления: {error}"))?;
+        let Some(update) = update else {
+            return Err(
+                "Обновление не найдено. Возможно, установлена последняя версия.".to_string(),
+            );
+        };
 
-    Ok(OkResult { ok: true })
+        update
+            .download_and_install(|_chunk_length, _content_length| {}, || {})
+            .await
+            .map_err(|error| format!("Не удалось установить обновление: {error}"))?;
+
+        Ok(OkResult { ok: true })
+    }
 }
 
 pub fn run() {
@@ -1470,6 +1660,7 @@ pub fn run() {
             save_download_chunk,
             save_download_finish,
             save_download_abort,
+            open_release_page,
             update_check,
             update_install
         ])
@@ -1836,5 +2027,54 @@ mod tests {
         append_staged_download_chunk(&store.state, &abort_token, &b64(b"partial")).unwrap();
         abort_staged_download(&store.state, &abort_token);
         assert!(!aborted_target.exists());
+    }
+
+    #[test]
+    fn macos_update_manifest_parses_semver_and_builds_release_url() {
+        let newer = parse_latest_manifest_for_current(
+            r#"{"version":"2.6.2","notes":"Bug fixes","pub_date":"2026-11-28T13:00:00Z"}"#,
+            "2.6.1",
+        )
+        .unwrap();
+        assert!(newer.available);
+        assert!(newer.manual);
+        assert_eq!(newer.current_version, "2.6.1");
+        assert_eq!(newer.version.as_deref(), Some("2.6.2"));
+        assert_eq!(
+            newer.release_url.as_deref(),
+            Some("https://github.com/FamaSALO/tradejournal/releases/tag/v2.6.2")
+        );
+
+        let same = parse_latest_manifest_for_current(r#"{"version":"v2.6.1"}"#, "2.6.1").unwrap();
+        assert!(!same.available);
+        assert_eq!(same.version, None);
+        assert_eq!(
+            same.release_url.as_deref(),
+            Some("https://github.com/FamaSALO/tradejournal/releases/latest")
+        );
+
+        let older = parse_latest_manifest_for_current(r#"{"version":"2.6.0"}"#, "2.6.1").unwrap();
+        assert!(!older.available);
+        assert!(parse_latest_manifest_for_current(r#"{"version":"not-semver"}"#, "2.6.1").is_err());
+    }
+
+    #[test]
+    fn release_url_validation_rejects_untrusted_or_unsafe_urls() {
+        assert!(is_allowed_release_url(
+            "https://github.com/FamaSALO/tradejournal/releases/latest"
+        ));
+        assert!(is_allowed_release_url(
+            "https://github.com/FamaSALO/tradejournal/releases/tag/v2.6.2"
+        ));
+        assert!(!is_allowed_release_url("https://evil.example.com/releases"));
+        assert!(!is_allowed_release_url(
+            "https://github.com/FamaSALO/tradejournal/releases/tag/v2.6.2 & calc"
+        ));
+        assert!(!is_allowed_release_url(
+            "https://github.com/FamaSALO/tradejournal/releases/tag/"
+        ));
+        assert!(!is_allowed_release_url(
+            "http://github.com/FamaSALO/tradejournal/releases/latest"
+        ));
     }
 }

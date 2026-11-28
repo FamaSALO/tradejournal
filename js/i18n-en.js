@@ -1258,5 +1258,22 @@ window.TJ_I18N_EN = {
   "Не удалось записать данные экспорта:": "Failed to write export data:",
   "Не удалось отменить экспорт:": "Failed to cancel export:",
   "Журнал и скриншоты хранятся в IndexedDB. Браузер не сообщает точный размер хранилища.": "Journal and screenshots are stored in IndexedDB. The browser does not report the exact storage size.",
-  "Оценка браузера: {used} из {quota} ({pct}). Журнал и скриншоты хранятся в IndexedDB.": "Browser estimate: {used} of {quota} ({pct}). Journal and screenshots are stored in IndexedDB."
+  "Оценка браузера: {used} из {quota} ({pct}). Журнал и скриншоты хранятся в IndexedDB.": "Browser estimate: {used} of {quota} ({pct}). Journal and screenshots are stored in IndexedDB.",
+  "Доступна версия {version}. Нажмите, чтобы открыть страницу релиза на GitHub и скачать DMG.": "Version {version} is available. Click to open the GitHub release page and download the DMG.",
+  "Открыть релиз на GitHub": "Open GitHub release",
+  "Версия {version} вышла на GitHub. Нажмите «Установить», чтобы открыть страницу нового релиза.": "Version {version} is out on GitHub. Click “Install” to open the latest release page.",
+  "Страница свежего релиза открыта в браузере. Скачайте DMG и замените приложение в Applications.": "The latest release page opened in your browser. Download the DMG and replace the app in Applications.",
+  "Открыта страница свежего релиза на GitHub": "Opened the latest release page on GitHub",
+  "Не удалось открыть страницу релиза: {error}": "Failed to open release page: {error}",
+  "Капитал": "Capital",
+  "Риск от капитала": "Capital risk",
+  "Быстрый расчёт объёма по риску": "Quick position sizing by risk %",
+  "При нескольких входах объём считается по строкам входов": "With multiple entries, size is summed from entry rows",
+  "При нескольких входах объём считается по строкам входов.": "With multiple entries, size is summed from entry rows.",
+  "Рассчитать объём: риск {pct} от капитала ({amount})": "Calculate size: {pct} risk of capital ({amount})",
+  "Не удалось рассчитать объём позиции.": "Failed to calculate position size.",
+  "Объём: {qty} (риск {pct}% = {risk})": "Size: {qty} (risk {pct}% = {risk})",
+  "Текущий капитал должен быть больше нуля.": "Current capital must be greater than zero.",
+  "Процент риска должен быть больше 0 и не выше 100%.": "Risk percent must be greater than 0 and at most 100%.",
+  "Укажите цену входа и стоп при входе для расчёта объёма.": "Enter both entry price and initial stop to calculate size."
 };

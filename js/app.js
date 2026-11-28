@@ -4,7 +4,7 @@
   const U = NS.utils;
   const store = NS.store;
   const desktop = window.tradeJournalDesktop || null;
-  const APP_VERSION = '2.6.1';
+  const APP_VERSION = '2.6.2';
   const DRAFT_PREFIX = 'tradejournal.draft.v1.';
   const META_KEY = store.META_KEY;
   // Drafts live in localStorage even on desktop, so a full screenshot data URL
@@ -2101,16 +2101,21 @@
      Calculator
      ============================================================ */
 
+  let calcBalanceCustom = false;
+
   function ensureCalcDefaults() {
     const balanceField = $('#calcBalance');
     const riskField = $('#calcRisk');
-    if (!balanceField.value) balanceField.value = round2(store.balanceAll());
-    if (!riskField.value) riskField.value = store.state.settings.riskPercent;
-    if (!$('#calcPointValue').value) $('#calcPointValue').value = '1';
+    if (balanceField && (!balanceField.value || !calcBalanceCustom)) {
+      balanceField.value = round2(store.balanceAll());
+    }
+    if (riskField && !riskField.value) riskField.value = store.state.settings.riskPercent;
+    if ($('#calcPointValue') && !$('#calcPointValue').value) $('#calcPointValue').value = '1';
     calcUpdate();
   }
 
   function resetCalculator() {
+    calcBalanceCustom = false;
     $('#calcBalance').value = round2(store.balanceAll());
     $('#calcRisk').value = store.state.settings.riskPercent;
     $('#calcPointValue').value = '1';
@@ -2664,22 +2669,25 @@
     window.setTimeout(function () { checkDesktopUpdate(false); }, 2500);
   }
 
-  const desktopUpdate = { checking: false, installing: false, available: false, version: '' };
+  const desktopUpdate = {
+    checking: false,
+    installing: false,
+    available: false,
+    version: '',
+    manual: false,
+    releaseUrl: ''
+  };
 
-  function setDownloadUpdateButton(visible) {
+  function setDownloadUpdateButton(visible, label) {
     const button = $('#downloadUpdateBtn');
     if (!button) return;
     button.hidden = !visible;
     button.disabled = false;
-    button.textContent = T('Скачать и установить');
+    button.textContent = label || T('Скачать и установить');
   }
 
   async function checkDesktopUpdate(manual) {
     if (!desktop || typeof desktop.checkUpdate !== 'function' || desktopUpdate.checking || desktopUpdate.installing) return;
-    if (desktop.platform === 'darwin') {
-      setDesktopUpdateStatus(T('Для macOS обновления устанавливаются вручную: скачайте новый DMG со страницы релизов.'));
-      return;
-    }
     desktopUpdate.checking = true;
     const button = $('#checkUpdateBtn');
     if (button) {
@@ -2693,14 +2701,29 @@
       setDesktopVersionLabel(current);
       desktopUpdate.available = !!(info && info.available);
       desktopUpdate.version = info && info.version ? String(info.version) : '';
+      desktopUpdate.manual = !!(info && info.manual) || desktop.platform === 'darwin';
+      desktopUpdate.releaseUrl = info && info.releaseUrl ? String(info.releaseUrl) : '';
       if (desktopUpdate.available) {
-        setDesktopUpdateStatus(T('Доступна версия {version}. Можно скачать и установить её здесь.').replace('{version}', desktopUpdate.version || '—'), 'pos');
-        setDownloadUpdateButton(true);
-        showUpdateBanner(
-          T('Доступно обновление TradeJournal'),
-          T('Версия {version} готова к установке. Приложение скачает обновление и перезапустится.').replace('{version}', desktopUpdate.version || ''),
-          T('Установить')
-        );
+        if (desktopUpdate.manual) {
+          setDesktopUpdateStatus(
+            T('Доступна версия {version}. Нажмите, чтобы открыть страницу релиза на GitHub и скачать DMG.').replace('{version}', desktopUpdate.version || '—'),
+            'pos'
+          );
+          setDownloadUpdateButton(true, T('Открыть релиз на GitHub'));
+          showUpdateBanner(
+            T('Доступно обновление TradeJournal'),
+            T('Версия {version} вышла на GitHub. Нажмите «Установить», чтобы открыть страницу нового релиза.').replace('{version}', desktopUpdate.version || ''),
+            T('Установить')
+          );
+        } else {
+          setDesktopUpdateStatus(T('Доступна версия {version}. Можно скачать и установить её здесь.').replace('{version}', desktopUpdate.version || '—'), 'pos');
+          setDownloadUpdateButton(true);
+          showUpdateBanner(
+            T('Доступно обновление TradeJournal'),
+            T('Версия {version} готова к установке. Приложение скачает обновление и перезапустится.').replace('{version}', desktopUpdate.version || ''),
+            T('Установить')
+          );
+        }
       } else {
         setDesktopUpdateStatus(T('Установлена последняя версия ({version}).').replace('{version}', current), 'pos');
         setDownloadUpdateButton(false);
@@ -2721,6 +2744,24 @@
     if (!desktop || typeof desktop.installUpdate !== 'function' || desktopUpdate.installing) return;
     if (!desktopUpdate.available) {
       checkDesktopUpdate(true);
+      return;
+    }
+    if (desktopUpdate.manual || desktop.platform === 'darwin') {
+      try {
+        if (typeof desktop.openReleasePage === 'function') {
+          await desktop.openReleasePage(desktopUpdate.releaseUrl);
+        } else {
+          await desktop.installUpdate();
+        }
+        setDesktopUpdateStatus(T('Страница свежего релиза открыта в браузере. Скачайте DMG и замените приложение в Applications.'), 'pos');
+        const banner = $('#updateBanner');
+        if (banner) banner.hidden = true;
+        toast('Открыта страница свежего релиза на GitHub');
+      } catch (err) {
+        const message = err && err.message ? err.message : T('неизвестная ошибка');
+        setDesktopUpdateStatus(T('Не удалось открыть страницу релиза: {error}').replace('{error}', message), 'neg');
+        toast(T('Не удалось открыть страницу релиза: {error}').replace('{error}', message), 'error', null, { skip: true });
+      }
       return;
     }
     desktopUpdate.installing = true;
@@ -4346,6 +4387,104 @@
     }).join('');
   }
 
+  function formatRiskPctNumber(pct) {
+    if (pct === null || pct === undefined || !Number.isFinite(pct)) return '';
+    const decimals = pct >= 10 ? 1 : 2;
+    const rounded = Number(pct.toFixed(decimals));
+    const locale = U.locale ? U.locale() : 'ru-RU';
+    try {
+      return new Intl.NumberFormat(locale, { maximumFractionDigits: decimals }).format(rounded);
+    } catch (err) {
+      return String(rounded);
+    }
+  }
+
+  function formatRiskPctLabel(pct) {
+    const num = formatRiskPctNumber(pct);
+    return num ? num + '%' : '';
+  }
+
+  function collectRiskSuggestions() {
+    const base = [0.5, 1, 2];
+    const configured = U.parseNum(store.state.settings && store.state.settings.riskPercent);
+    if (configured !== null && configured > 0 && configured <= 100) {
+      const rounded = Math.round(configured * 100) / 100;
+      if (!base.some(function (v) { return Math.abs(v - rounded) < 1e-6; })) {
+        base.push(rounded);
+      }
+    }
+    return base.sort(function (a, b) { return a - b; });
+  }
+
+  function renderRiskPresets() {
+    const capital = store.balanceAll();
+    const capEl = $('#tradeCapitalMeta');
+    if (capEl) {
+      capEl.textContent = T('Капитал') + ': ' + U.money(capital);
+    }
+    const bar = $('#riskPresetsBar');
+    if (!bar) return;
+    const entry = U.parseNum($('#tradeEntry') ? $('#tradeEntry').value : null);
+    const stop = U.parseNum($('#tradeStop') ? $('#tradeStop').value : null);
+    const qty = U.parseNum($('#tradeQty') ? $('#tradeQty').value : null);
+    const mult = store.normalizeMultiplier($('#tradeMultiplier') ? $('#tradeMultiplier').value : 1);
+    const curRisk = (entry !== null && stop !== null && qty !== null && qty > 0)
+      ? Math.abs(entry - stop) * qty * mult
+      : null;
+    const curPct = (curRisk !== null && capital > 0) ? (curRisk / capital) * 100 : null;
+    const multiEntry = state.tradeEntries.length > 1;
+    bar.innerHTML = collectRiskSuggestions().map(function (pct) {
+      const active = !multiEntry && curPct !== null && Math.abs(curPct - pct) <= Math.max(0.015, pct * 0.015);
+      const amount = capital > 0 ? U.money((capital * pct) / 100) : '—';
+      const pctText = formatRiskPctLabel(pct);
+      const title = multiEntry
+        ? T('При нескольких входах объём считается по строкам входов')
+        : T('Рассчитать объём: риск {pct} от капитала ({amount})').replace('{pct}', pctText).replace('{amount}', amount);
+      return '<button type="button" class="fee-chip risk-chip' + (active ? ' active' : '') + '"' +
+        ' data-risk-pct="' + pct + '"' + (multiEntry ? ' disabled' : '') +
+        ' title="' + U.escapeHtml(title) + '">' + U.escapeHtml(pctText) + '</button>';
+    }).join('');
+  }
+
+  function applyRiskPercentSizing(pct) {
+    if (state.tradeEntries.length > 1) {
+      toast('При нескольких входах объём считается по строкам входов.', 'warn');
+      return;
+    }
+    const side = $('#tradeSide') ? $('#tradeSide').value : 'long';
+    const entry = $('#tradeEntry') ? $('#tradeEntry').value : '';
+    const stop = $('#tradeStop') ? $('#tradeStop').value : '';
+    const multiplier = $('#tradeMultiplier') ? $('#tradeMultiplier').value : 1;
+    const capital = store.balanceAll();
+    const res = store.positionQtyForRisk({
+      balance: capital,
+      riskPercent: pct,
+      entry: entry,
+      stop: stop,
+      multiplier: multiplier,
+      side: side
+    });
+    if (!res || res.error) {
+      const msg = res && res.error ? res.error : T('Не удалось рассчитать объём позиции.');
+      toast(msg, 'warn', null, { skip: true });
+      if (U.parseNum(entry) === null && $('#tradeEntry')) $('#tradeEntry').focus();
+      else if ($('#tradeStop')) $('#tradeStop').focus();
+      return;
+    }
+    $('#tradeQty').value = String(res.qty);
+    updateTradePreview();
+    syncTradeDirty();
+    toast(
+      T('Объём: {qty} (риск {pct}% = {risk})')
+        .replace('{qty}', U.qty(res.qty))
+        .replace('{pct}', formatRiskPctNumber(pct))
+        .replace('{risk}', U.money(res.riskAmount)),
+      'success',
+      null,
+      { skip: true }
+    );
+  }
+
   function moveStopToBreakeven() {
     const entry = U.parseNum($('#tradeEntry') ? $('#tradeEntry').value : null);
     if (entry === null) {
@@ -5211,9 +5350,26 @@
       else remainingEl.textContent = U.qty(remaining) + ' ' + T('остаток');
       remainingEl.className = remaining !== null && remaining > epsilon && exits.length ? 'neutral' : '';
     }
+    const riskEl = $('#previewRisk');
+    if (riskEl) {
+      const capital = store.balanceAll();
+      const riskPct = risk !== null && capital > 0 ? (risk / capital) * 100 : null;
+      const planRisk = (store.state.settings && store.state.settings.riskPercent) || 1;
+      if (risk !== null && qty !== null && qty > 0) {
+        const pctLabel = riskPct !== null ? ' (' + formatRiskPctLabel(riskPct) + ')' : '';
+        riskEl.textContent = U.money(risk) + pctLabel;
+        if (riskPct !== null && riskPct > planRisk * 1.5) riskEl.className = 'neg';
+        else if (riskPct !== null && riskPct > planRisk + 0.05) riskEl.className = 'warn';
+        else riskEl.className = 'neutral';
+      } else {
+        riskEl.textContent = '—';
+        riskEl.className = '';
+      }
+    }
     updateExitsSummary();
     renderPositionHistory();
     renderFeePresets();
+    renderRiskPresets();
   }
 
   function collectLegRows(rows, tradeDate, kind) {
@@ -5974,6 +6130,9 @@
     });
 
     $('#calcForm').addEventListener('input', calcUpdate);
+    if ($('#calcBalance')) {
+      $('#calcBalance').addEventListener('input', function () { calcBalanceCustom = true; });
+    }
     $('#calcReset').addEventListener('click', resetCalculator);
 
     $('#settingsForm').addEventListener('submit', saveSettings);
@@ -6108,6 +6267,14 @@
       syncTradeDirty();
     });
     $('#stopToBeBtn').addEventListener('click', moveStopToBreakeven);
+    if ($('#riskPresetsBar')) {
+      $('#riskPresetsBar').addEventListener('click', function (event) {
+        const button = event.target.closest('button[data-risk-pct]');
+        if (!button || button.disabled) return;
+        const pct = Number(button.dataset.riskPct);
+        if (Number.isFinite(pct) && pct > 0) applyRiskPercentSizing(pct);
+      });
+    }
     $('#saveFeePresetBtn').addEventListener('click', saveFeePreset);
     $('#feePresetsBar').addEventListener('click', function (event) {
       const removeBtn = event.target.closest('[data-remove-fee-preset]');
@@ -6435,6 +6602,11 @@
     collectExitRows: collectExitRows,
     collectEntryRows: collectEntryRows,
     moveStopToBreakeven: moveStopToBreakeven,
+    applyRiskPercentSizing: applyRiskPercentSizing,
+    renderRiskPresets: renderRiskPresets,
+    updateTradePreview: updateTradePreview,
+    checkDesktopUpdate: checkDesktopUpdate,
+    installDesktopUpdate: installDesktopUpdate,
     calcUpdate: calcUpdate,
     openModal: openModal,
     closeModal: closeModal,

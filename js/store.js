@@ -1465,6 +1465,52 @@
     return risk > 0 ? risk : null;
   }
 
+  function tradeRiskPct(trade, balance) {
+    const risk = tradeRisk(trade);
+    const capital = U.parseNum(balance);
+    if (risk === null || capital === null || capital <= 0) return null;
+    return (risk / capital) * 100;
+  }
+
+  function positionQtyForRisk(options) {
+    options = options || {};
+    const balance = U.parseNum(options.balance);
+    const riskPercent = U.parseNum(options.riskPercent);
+    const entry = U.parseNum(options.entry);
+    const stop = U.parseNum(options.stop);
+    const multiplier = normalizeMultiplier(options.multiplier);
+    const side = options.side === 'short' ? 'short' : (options.side === 'long' ? 'long' : '');
+    if (balance === null || balance <= 0) {
+      return { error: tr('Текущий капитал должен быть больше нуля.') };
+    }
+    if (riskPercent === null || riskPercent <= 0 || riskPercent > 100) {
+      return { error: tr('Процент риска должен быть больше 0 и не выше 100%.') };
+    }
+    if (entry === null || entry <= 0 || stop === null || stop < 0) {
+      return { error: tr('Укажите цену входа и стоп при входе для расчёта объёма.') };
+    }
+    const distance = Math.abs(entry - stop);
+    if (distance < 1e-12) {
+      return { error: tr('Стоп при входе не может совпадать с ценой входа.') };
+    }
+    if (side === 'long' && stop >= entry) {
+      return { error: tr('Для Long стоп при входе должен быть ниже цены входа.') };
+    }
+    if (side === 'short' && stop <= entry) {
+      return { error: tr('Для Short стоп при входе должен быть выше цены входа.') };
+    }
+    const riskAmount = (balance * riskPercent) / 100;
+    const rawQty = riskAmount / (distance * multiplier);
+    const digits = rawQty >= 100 ? 2 : (rawQty >= 1 ? 4 : 6);
+    const rounded = Number(rawQty.toFixed(digits));
+    return {
+      qty: rounded > 0 ? rounded : rawQty,
+      riskAmount: riskAmount,
+      riskPercent: riskPercent,
+      balance: balance
+    };
+  }
+
   function openRisk(trade) {
     if (!trade) return null;
     const remaining = remainingQty(trade);
@@ -1886,6 +1932,8 @@
     invalidateCache: invalidateCache,
     tradeFees: tradeFees,
     tradeRisk: tradeRisk,
+    tradeRiskPct: tradeRiskPct,
+    positionQtyForRisk: positionQtyForRisk,
     openRisk: openRisk,
     openPortfolioRisk: openPortfolioRisk,
     tradeStatus: tradeStatus,

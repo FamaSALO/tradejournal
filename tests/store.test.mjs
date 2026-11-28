@@ -826,3 +826,36 @@ test('normalizes settings pre-trade checklist and trade checklist items (FEAT-05
     { text: 'Стоп выставлен', done: false }
   ]);
 });
+
+test('positionQtyForRisk and tradeRiskPct compute sizes and % against current capital', function () {
+  const s = store;
+  const longSize = s.positionQtyForRisk({
+    balance: 12000,
+    riskPercent: 1,
+    entry: 100,
+    stop: 95,
+    multiplier: 1,
+    side: 'long'
+  });
+  assert.equal(longSize.qty, 24);
+  assert.equal(longSize.riskAmount, 120);
+
+  const shortMult = s.positionQtyForRisk({
+    balance: 10000,
+    riskPercent: 0.5,
+    entry: 200,
+    stop: 210,
+    multiplier: 2,
+    side: 'short'
+  });
+  assert.equal(shortMult.qty, 2.5);
+  assert.equal(shortMult.riskAmount, 50);
+
+  assert.match(s.positionQtyForRisk({ balance: 0, riskPercent: 1, entry: 100, stop: 95 }).error, /капитал/);
+  assert.match(s.positionQtyForRisk({ balance: 10000, riskPercent: 1, entry: 100, stop: 105, side: 'long' }).error, /Long/);
+  assert.match(s.positionQtyForRisk({ balance: 10000, riskPercent: 1, entry: 100, stop: 95, side: 'short' }).error, /Short/);
+
+  const pct = s.tradeRiskPct({ entry: 100, stop: 95, qty: 24, multiplier: 1 }, 12000);
+  assert.equal(pct, 1);
+  assert.equal(s.tradeRiskPct({ entry: 100, qty: 24 }, 12000), null);
+});
